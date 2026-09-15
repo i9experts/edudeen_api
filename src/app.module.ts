@@ -66,6 +66,7 @@ import { CommissionRulesModule } from './commission-rules/commission-rules.modul
 import { ManualPaymentsModule } from './manual-payments/manual-payments.module';
 import { ExchangeRateModule } from './exchange-rate/exchange-rate.module';
 import { OnboardingSlidesModule } from './onboarding-slides/onboarding-slides.module';
+import { AttributesModule } from './attributes/attributes.module';
 
 @Module({
   imports: [
@@ -83,6 +84,7 @@ import { OnboardingSlidesModule } from './onboarding-slides/onboarding-slides.mo
     ActivityLogModule,
     AuthModule,
     categoryModule,
+    AttributesModule,
     ProductsModule,
     ProductVariantsModule,
     CartModule,

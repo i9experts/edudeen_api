@@ -35,6 +35,7 @@ export class productController {
     @Query('maxPrice') maxPriceQuery?: string,
     @Query('minRating') minRatingQuery?: string,
     @Query('sortBy') sortByQuery?: string,
+    @Query('attributes') attributesQuery?: string,
   ) {
     const page = Math.max(1, parseInt(pageQuery as string) || 1);
     const limit = Math.min(
@@ -62,6 +63,23 @@ export class productController {
           | 'popularity')
       : undefined;
 
+    // Shareable-URL friendly: ?attributes={"subject":["phonics"],"format":["pdf","google_slides"]}
+    // A malformed value is treated as "no attribute filter" rather than a 400 —
+    // a stale/hand-edited URL shouldn't break browsing.
+    let attributesFilter: Record<string, string[]> | undefined;
+    if (attributesQuery) {
+      try {
+        const parsed = JSON.parse(attributesQuery);
+        if (parsed && typeof parsed === 'object') {
+          attributesFilter = Object.fromEntries(
+            Object.entries(parsed).filter(([, v]) => Array.isArray(v)),
+          ) as Record<string, string[]>;
+        }
+      } catch {
+        attributesFilter = undefined;
+      }
+    }
+
     return this.ProductsService.getProductsByCategoryId(
       id,
       page,
@@ -75,6 +93,7 @@ export class productController {
       parseNum(maxPriceQuery),
       parseNum(minRatingQuery),
       sortBy,
+      attributesFilter,
     );
   }
 

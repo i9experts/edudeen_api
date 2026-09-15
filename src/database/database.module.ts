@@ -200,6 +200,8 @@ import { DatabaseService } from './databaseservice';
       { name: schema.StripeWebhookEvent.name, schema: schema.StripeWebhookEventSchema },
       { name: schema.RefundRequest.name, schema: schema.RefundRequestSchema },
       { name: schema.ReconciliationRun.name, schema: schema.ReconciliationRunSchema },
+      { name: schema.AttributeDefinition.name, schema: schema.AttributeDefinitionSchema },
+      { name: schema.ProductAttributeValue.name, schema: schema.ProductAttributeValueSchema },
     ]),
   ],
   exports: [MongooseModule, DatabaseService],

@@ -26,6 +26,7 @@ import {
   PREVIEW_RATE_LIMIT_WINDOW_SECONDS,
 } from './constants/preview.constants';
 import { optionNameSet, optionsKey, validateOptions } from './variant-options.util';
+import { AttributesService } from 'src/attributes/attributes.service';
 
 const EDUCATION_LEVEL_VALUES: string[] = Object.values(EducationLevel);
 
@@ -40,6 +41,7 @@ export class ProductsService {
     private marketingService: MarketingService,
     private uploadService: UploadService,
     private redisService: RedisService,
+    private attributesService: AttributesService,
   ) {}
 
   /** Attaches an `activeCampaign` badge summary (or null) to each product,
@@ -367,6 +369,7 @@ export class ProductsService {
     maxPrice?: number,
     minRating?: number,
     sortBy?: 'newest' | 'price_asc' | 'price_desc' | 'rating' | 'popularity',
+    attributesFilter?: Record<string, string[]>,
   ): Promise<any> {
     const productModel = this.databaseService.repositories.productModel;
     const productVariantModel =
@@ -445,6 +448,19 @@ export class ProductsService {
         query.subCategoryId = parentCategoryId;
       } else {
         query.categoryId = parentCategoryId;
+      }
+    }
+
+    // 1️⃣.5 Category-scoped structured attributes (subject/resource-type/
+    // format/etc, defined per category via AttributesModule) — AND across
+    // distinct attribute keys, OR within a single key's selected values.
+    // `null` means no attribute filter was requested; an empty array is a
+    // real "nothing matches" result, so only skip the query.
+    if (attributesFilter && Object.keys(attributesFilter).length) {
+      const matchingIds =
+        await this.attributesService.filterProductIdsByAttributes(attributesFilter);
+      if (matchingIds) {
+        query._id = { $in: matchingIds };
       }
     }
 

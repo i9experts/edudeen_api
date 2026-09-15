@@ -306,6 +306,12 @@ export class DatabaseService {
     @InjectModel(schema.ReconciliationRun.name)
     private reconciliationRunModel: Model<schema.ReconciliationRunDocument>,
 
+    @InjectModel(schema.AttributeDefinition.name)
+    private attributeDefinitionModel: Model<schema.AttributeDefinitionDocument>,
+
+    @InjectModel(schema.ProductAttributeValue.name)
+    private productAttributeValueModel: Model<schema.ProductAttributeValueDocument>,
+
   ) { }
 
   get repositories() {
@@ -413,6 +419,8 @@ export class DatabaseService {
       stripeWebhookEventModel: this.stripeWebhookEventModel,
       refundRequestModel: this.refundRequestModel,
       reconciliationRunModel: this.reconciliationRunModel,
+      attributeDefinitionModel: this.attributeDefinitionModel,
+      productAttributeValueModel: this.productAttributeValueModel,
     };
   }
 }

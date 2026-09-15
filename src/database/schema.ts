@@ -122,3 +122,5 @@ export { BlogPost, BlogPostDocument, BlogPostSchema } from '../store-blog/schema
 export { PromotionRequest, PromotionRequestDocument, PromotionRequestSchema } from '../promotions/schemas/promotion-request.schema';
 export { PromotionDailyStats, PromotionDailyStatsDocument, PromotionDailyStatsSchema } from '../promotions/schemas/promotion-daily-stats.schema';
 export { PromotionClickEvent, PromotionClickEventDocument, PromotionClickEventSchema } from '../promotions/schemas/promotion-click-event.schema';
+export { AttributeDefinition, AttributeDefinitionDocument, AttributeDefinitionSchema } from '../attributes/schemas/attribute-definition.schema';
+export { ProductAttributeValue, ProductAttributeValueDocument, ProductAttributeValueSchema } from '../attributes/schemas/product-attribute-value.schema';
