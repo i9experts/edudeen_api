@@ -348,7 +348,7 @@ export class SellerPlatformSubscriptionsService {
   }
 
   /**
-   * Admin-only refund for a platform-plan invoice (seller-to-Solvexo billing
+   * Admin-only refund for a platform-plan invoice (seller-to-Edudeen billing
    * — there is no seller-balance credit to reverse here, unlike buyer-VIP-plan
    * invoices, since platform-plan revenue never touches SellerBalance).
    */

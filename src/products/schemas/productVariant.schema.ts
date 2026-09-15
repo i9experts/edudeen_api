@@ -27,7 +27,7 @@ export class ProductVariant {
   // schema level only so pre-existing variants created before this field
   // existed remain readable/writable without a forced migration; the
   // one-time backfill sets them all to 'PKR' (see migration script —
-  // Solvexo was Pakistan-only until this field was introduced, so this is a
+  // Edudeen was Pakistan-only until this field was introduced, so this is a
   // label, never a numeric reinterpretation of `price`).
   @Prop({ type: String, default: null })
   currency: string | null;

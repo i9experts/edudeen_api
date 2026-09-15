@@ -63,7 +63,7 @@ export class Seller {
     @Prop({ default: false })
     isOnboarded!: boolean;
 
-    // Stripe Customer for PLATFORM-PLAN billing (seller paying Solvexo) — a
+    // Stripe Customer for PLATFORM-PLAN billing (seller paying Edudeen) — a
     // completely separate Stripe customer from any `User.stripeCustomerId`
     // the same person might also have as a buyer of someone else's VIP plan.
     @Prop({ type: String, default: null })
@@ -80,8 +80,8 @@ export class Seller {
 
     // Stripe Connect (Express) account for RECEIVING buyer payments directly
     // — a seller's "own payment gateway", completely separate from
-    // `stripeCustomerId` above (that one is the seller PAYING Solvexo for
-    // their platform plan; this one is Solvexo routing a BUYER's payment
+    // `stripeCustomerId` above (that one is the seller PAYING Edudeen for
+    // their platform plan; this one is Edudeen routing a BUYER's payment
     // straight to the seller). See StripeConnectService.
     @Prop({ type: String, default: null })
     stripeConnectedAccountId: string | null;

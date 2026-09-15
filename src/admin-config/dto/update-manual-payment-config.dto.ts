@@ -10,7 +10,7 @@ export class UpdateManualPaymentConfigDto {
   @ApiProperty({ required: false, example: 'Meezan Bank' })
   @IsOptional() @IsString() bankName?: string;
 
-  @ApiProperty({ required: false, example: 'Solvexo Marketplace Pvt Ltd' })
+  @ApiProperty({ required: false, example: 'Edudeen Marketplace Pvt Ltd' })
   @IsOptional() @IsString() accountTitle?: string;
 
   @ApiProperty({ required: false, example: '01234567890123' })

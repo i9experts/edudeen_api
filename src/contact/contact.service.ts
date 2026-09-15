@@ -8,7 +8,7 @@ import {
 import { CreateContactSubmissionDto, UpdateContactStatusDto } from './dto/contact.dto';
 import { EmailService } from '../otp/services/email.service';
 
-const APP_NAME = process.env.APP_NAME || 'Solvexo';
+const APP_NAME = process.env.APP_NAME || 'Edudeen';
 
 function acknowledgementEmailHtml(name: string): string {
   return `

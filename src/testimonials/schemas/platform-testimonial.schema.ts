@@ -3,7 +3,7 @@ import { HydratedDocument } from 'mongoose';
 
 export type PlatformTestimonialDocument = HydratedDocument<PlatformTestimonial>;
 
-// A seller's review of the Solvexo platform itself (not a buyer's review of a
+// A seller's review of the Edudeen platform itself (not a buyer's review of a
 // store/product — that's the separate `Rating` collection, seller-managed on
 // their own storefront). Admin-curated only, like a Shopify/BigCommerce
 // "customer stories" section — no self-serve seller submission form exists.

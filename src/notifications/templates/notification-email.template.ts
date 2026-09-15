@@ -1,4 +1,4 @@
-const APP_NAME = process.env.APP_NAME || 'Solvexo';
+const APP_NAME = process.env.APP_NAME || 'Edudeen';
 const BRAND_COLOR = '#d97757';
 
 /**

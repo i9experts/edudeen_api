@@ -1,7 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { Injectable } from '@nestjs/common';
 
-const PLATFORM_ORIGIN = 'https://solvexo.store';
+const PLATFORM_ORIGIN = 'https://edudeen.com';
 
 /**
  * Pure, stateless JSON-LD builder — no DB access, no caching, just data-in/
@@ -72,7 +72,7 @@ export class SeoSchemaGeneratorService {
     return overrides ?? {
       '@context': 'https://schema.org',
       '@type': 'Organization',
-      name: 'Solvexo',
+      name: 'Edudeen',
       url: PLATFORM_ORIGIN,
     };
   }
@@ -81,7 +81,7 @@ export class SeoSchemaGeneratorService {
     return overrides ?? {
       '@context': 'https://schema.org',
       '@type': 'WebSite',
-      name: 'Solvexo',
+      name: 'Edudeen',
       url: PLATFORM_ORIGIN,
     };
   }

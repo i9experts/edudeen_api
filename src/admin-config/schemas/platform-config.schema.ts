@@ -113,7 +113,7 @@ export const FxConfigSchema = SchemaFactory.createForClass(FxConfig);
 
 @Schema({ _id: false })
 export class EmailConfig {
-  @Prop({ type: String, default: 'Solvexo' }) fromName: string;
+  @Prop({ type: String, default: 'Edudeen' }) fromName: string;
   @Prop({ type: String, default: null }) fromEmail: string | null;
   @Prop({ type: String, default: null }) replyToEmail: string | null;
   @Prop({ type: String, default: 'SendGrid' }) provider: string;

@@ -8,7 +8,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CreatePlatformPlanDto } from './dto/create-platform-plan.dto';
 import { UpdatePlatformPlanDto } from './dto/update-platform-plan.dto';
 
-@ApiTags('Platform Plans (Seller-to-Solvexo billing)')
+@ApiTags('Platform Plans (Seller-to-Edudeen billing)')
 @Controller('api/platform-plans')
 export class PlatformPlansController {
   constructor(private readonly platformPlansService: PlatformPlansService) {}

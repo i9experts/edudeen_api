@@ -6,7 +6,7 @@ export type PlatformPlanDocument = PlatformPlan & Document;
 
 /**
  * Admin-managed platform access tier (Starter/Professional/Business/Enterprise
- * on the pricing page) — what a SELLER pays SOLVEXO for platform access,
+ * on the pricing page) — what a SELLER pays EDUDEEN for platform access,
  * scoped per STORE (not per seller account: a seller with multiple stores can
  * put each on a different tier — see SellerPlatformSubscription).
  *

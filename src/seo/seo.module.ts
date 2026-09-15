@@ -52,7 +52,7 @@ import { SellerSeoAnalyticsController } from './seller/seller-seo-analytics.cont
 /**
  * Root module for the entire SEO capability (Admin/Platform SEO + Seller/
  * Store SEO). Built incrementally phase-by-phase per
- * docs/SOLVEXO_BACKEND_MASTER.md and the SEO architecture plan — controllers
+ * docs/EDUDEEN_BACKEND_MASTER.md and the SEO architecture plan — controllers
  * and additional providers are added to this file as each phase lands, not
  * split into many small NestJS modules, since everything here shares the
  * same DatabaseService repository access and the same guard imports.

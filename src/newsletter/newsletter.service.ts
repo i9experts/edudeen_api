@@ -8,7 +8,7 @@ import {
 } from './schemas/newsletter-subscriber.schema';
 import { EmailService } from '../otp/services/email.service';
 
-const APP_NAME = process.env.APP_NAME || 'Solvexo';
+const APP_NAME = process.env.APP_NAME || 'Edudeen';
 
 function confirmationEmailHtml(unsubscribeUrl: string): string {
   return `

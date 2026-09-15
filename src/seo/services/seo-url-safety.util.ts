@@ -4,7 +4,7 @@ import { BadRequestException } from '@nestjs/common';
 // Same production hosts CORS already trusts in main.ts — reused here as the
 // allow-list for absolute redirect/canonical destinations so this doesn't
 // become a second, drifting source of truth for "which hosts are ours."
-const ALLOWED_ABSOLUTE_HOSTS = ['solvexo.store', 'staging.solvexo.store', 'api.edudeen.com'];
+const ALLOWED_ABSOLUTE_HOSTS = ['edudeen.com', 'staging.edudeen.com', 'api.edudeen.com'];
 
 /**
  * Guards against open-redirect abuse in SeoRedirect/SeoCanonicalRule: a
@@ -27,6 +27,6 @@ export function assertSafeSeoDestination(value: string): void {
     throw new BadRequestException('Absolute destination URLs must use https.');
   }
   if (!ALLOWED_ABSOLUTE_HOSTS.includes(url.hostname)) {
-    throw new BadRequestException(`Absolute destination URLs must point to a Solvexo domain (got "${url.hostname}").`);
+    throw new BadRequestException(`Absolute destination URLs must point to a Edudeen domain (got "${url.hostname}").`);
   }
 }

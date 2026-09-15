@@ -232,7 +232,7 @@ export class SchedulerService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // PLATFORM PLANS (seller-to-Solvexo billing) — mirrors the buyer-billing
+  // PLATFORM PLANS (seller-to-Edudeen billing) — mirrors the buyer-billing
   // cron jobs above exactly, same locking, same manual-vs-Stripe split.
   // ═══════════════════════════════════════════════════════════════════════
 

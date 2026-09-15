@@ -22,7 +22,7 @@ export interface ResolvedSeoMeta {
   jsonLd: Record<string, any>[];
 }
 
-const PLATFORM_ORIGIN = 'https://solvexo.store';
+const PLATFORM_ORIGIN = 'https://edudeen.com';
 const CACHE_TTL_SECONDS = 600; // 10 min — same order of magnitude as analytics-cache.util's convention
 
 /**
@@ -103,7 +103,7 @@ export class SeoResolutionService {
       ?? categorySeo.metaTitle
       ?? storeSeo.metaTitle
       ?? renderTemplate(template?.titleTemplate, { productName: product.name, storeName, categoryName: (category as any)?.name })
-      ?? `${product.name} | ${storeName || 'Solvexo'}`;
+      ?? `${product.name} | ${storeName || 'Edudeen'}`;
 
     const description = seo.metaDescription
       ?? categorySeo.metaDescription
@@ -161,10 +161,10 @@ export class SeoResolutionService {
 
     const title = seo.metaTitle
       ?? renderTemplate(template?.titleTemplate, { categoryName: (category as any).name })
-      ?? `${(category as any).name} | Solvexo Marketplace`;
+      ?? `${(category as any).name} | Edudeen Marketplace`;
     const description = seo.metaDescription
       ?? renderTemplate(template?.descriptionTemplate, { categoryName: (category as any).name })
-      ?? `Shop ${(category as any).name} on Solvexo.`;
+      ?? `Shop ${(category as any).name} on Edudeen.`;
     const canonicalUrl = seo.canonicalUrlOverride ?? `${PLATFORM_ORIGIN}/marketplace?category=${(category as any)._id}`;
 
     return {
@@ -197,10 +197,10 @@ export class SeoResolutionService {
 
     const title = seo.metaTitle
       ?? renderTemplate(template?.titleTemplate, { storeName: store.name })
-      ?? `${store.name} | Solvexo`;
+      ?? `${store.name} | Edudeen`;
     const description = seo.metaDescription
       ?? renderTemplate(template?.descriptionTemplate, { storeName: store.name })
-      ?? truncate(store.description ?? `Shop ${store.name} on Solvexo.`, 160);
+      ?? truncate(store.description ?? `Shop ${store.name} on Edudeen.`, 160);
     const canonicalUrl = seo.canonicalUrlOverride ?? `${PLATFORM_ORIGIN}/${store.slug}`;
 
     return {

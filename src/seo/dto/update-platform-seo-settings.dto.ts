@@ -7,7 +7,7 @@ import {
 
 class SeoMetaTemplateDto {
   @ApiProperty({ example: 'product' }) @IsString() key: string;
-  @ApiProperty({ example: '{{productName}} — {{storeName}} | Solvexo' }) @IsString() titleTemplate: string;
+  @ApiProperty({ example: '{{productName}} — {{storeName}} | Edudeen' }) @IsString() titleTemplate: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() descriptionTemplate?: string;
 }
 

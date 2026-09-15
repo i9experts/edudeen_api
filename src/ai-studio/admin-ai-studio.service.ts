@@ -25,13 +25,13 @@ import {
  *     needed for this half.
  *
  *  2. PLATFORM GENERATION — lets an admin run the SEO Booster / Email
- *     Campaigns / Image Enhancer tools for Solvexo's OWN marketplace content
+ *     Campaigns / Image Enhancer tools for Edudeen's OWN marketplace content
  *     (landing pages, platform announcements, banners), NOT a seller's. These
  *     write `AiGeneration` rows with `scope: 'platform'` and `adminId` set,
  *     `storeId`/`sellerId` null, and never touch a seller's AiCreditsWallet —
  *     there is no per-generation charge for the platform's own usage. Only
  *     Listing Writer / Worksheet Builder / Price Optimizer are excluded here:
- *     they're inherently about a seller's product, which Solvexo itself
+ *     they're inherently about a seller's product, which Edudeen itself
  *     doesn't have.
  */
 @Injectable()
@@ -276,7 +276,7 @@ export class AdminAiStudioService {
       inputPayload: { campaignGoal: dto.campaignGoal, tone: dto.tone },
       execute: async () => {
         const { system, prompt } = buildEmailCampaignPrompt({
-          campaignGoal: dto.campaignGoal, tone: dto.tone, storeName: 'Solvexo', products: [],
+          campaignGoal: dto.campaignGoal, tone: dto.tone, storeName: 'Edudeen', products: [],
         });
         const result = await this.textGeneration.generate({ system, prompt, tier: 'standard', schema: EMAIL_CAMPAIGN_SCHEMA });
         return {
@@ -353,7 +353,7 @@ export class AdminAiStudioService {
     });
   }
 
-  /** Same success/failure lifecycle as the seller side's `runGeneration`, minus any wallet hold/capture/refund — Solvexo's own usage is never charged. */
+  /** Same success/failure lifecycle as the seller side's `runGeneration`, minus any wallet hold/capture/refund — Edudeen's own usage is never charged. */
   private async runPlatformGeneration(params: {
     adminId: string; tool: AiToolType; regenerateFromId?: string; inputPayload: Record<string, any>;
     execute: () => Promise<{ output: Record<string, any>; provider: string; model: string }>;

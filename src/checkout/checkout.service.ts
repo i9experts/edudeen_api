@@ -96,7 +96,7 @@ export class CheckoutService {
   /**
    * Resolves the buyer's checkout currency: an explicit request-time
    * preference wins, then the buyer's saved account preference (see
-   * User.currencyPreference), then 'PKR' as the last resort (Solvexo is
+   * User.currencyPreference), then 'PKR' as the last resort (Edudeen is
    * Pakistan-origin, so this matches historical behavior most closely for
    * any caller that hasn't been updated to send a preference yet). Always
    * validated against the supported-currency allow-list — never trusted

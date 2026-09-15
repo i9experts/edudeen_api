@@ -6,7 +6,7 @@ import { DatabaseService } from 'src/database/databaseservice';
 import { QUEUE_NAMES, SEO_SITEMAP_REGENERATE_JOB } from 'src/queues/queue.constants';
 import { SITEMAP_URL_LIMIT_PER_CHUNK, SitemapType } from '../schemas/seo-sitemap-cache.schema';
 
-const PLATFORM_ORIGIN = 'https://solvexo.store';
+const PLATFORM_ORIGIN = 'https://edudeen.com';
 
 /**
  * Chunked sitemap generation — see architecture plan Refinement #7. Each

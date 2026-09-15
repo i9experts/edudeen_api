@@ -10,15 +10,15 @@ const SINGLETON_KEY = 'global';
 const DEFAULT_ORGANIZATION_SCHEMA = {
   '@context': 'https://schema.org',
   '@type': 'Organization',
-  name: 'Solvexo',
-  url: 'https://solvexo.store',
+  name: 'Edudeen',
+  url: 'https://edudeen.com',
 };
 
 const DEFAULT_WEBSITE_SCHEMA = {
   '@context': 'https://schema.org',
   '@type': 'WebSite',
-  name: 'Solvexo',
-  url: 'https://solvexo.store',
+  name: 'Edudeen',
+  url: 'https://edudeen.com',
 };
 
 /**
@@ -130,6 +130,6 @@ export class PlatformSeoService {
   /** Resolved robots.txt including sitemap directives — sitemap URLs stay in sync automatically since they're appended here, not stored in the settings body itself. */
   async getResolvedRobotsTxt(): Promise<string> {
     const settings = await this.getOrCreate();
-    return `${settings.robotsTxtBody}\nSitemap: https://solvexo.store/sitemap.xml\n`;
+    return `${settings.robotsTxtBody}\nSitemap: https://edudeen.com/sitemap.xml\n`;
   }
 }

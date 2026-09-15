@@ -24,7 +24,7 @@ export type AiGenerationScope = (typeof AI_GENERATION_SCOPES)[number];
  * async job record: the endpoint returns `_id` as the `jobId` and the client
  * polls until `status` leaves 'processing'.
  *
- * `scope: 'platform'` rows are admin-triggered generations for Solvexo's own
+ * `scope: 'platform'` rows are admin-triggered generations for Edudeen's own
  * marketplace content (landing pages, platform announcements, banners) —
  * `sellerId`/`storeId` are null and `adminId` is set instead; these never
  * charge a seller's AiCreditsWallet (see AdminAiStudioService).

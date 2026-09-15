@@ -569,7 +569,7 @@ export class AuthService {
 
       // Same response whether or not the account exists — an "email not
       // found" error here would let anyone enumerate which emails are
-      // actually registered on Solvexo. Only genuinely sends an OTP when
+      // actually registered on Edudeen. Only genuinely sends an OTP when
       // there's a real account to send it to; a non-existent email silently
       // no-ops but still reports success, exactly as a real user's request
       // would look from the outside.

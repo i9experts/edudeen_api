@@ -27,7 +27,7 @@ const BASIC_REQUIRED_DOCS: VerificationDocumentType[] = ['owner_id', 'address_pr
 const BUSINESS_EXTRA_DOCS: VerificationDocumentType[] = ['business_registration', 'tax_registration'];
 const OPTIONAL_DOCS: VerificationDocumentType[] = ['authorization_proof'];
 
-// Per-country overrides — none are configured yet. Solvexo doesn't have a
+// Per-country overrides — none are configured yet. Edudeen doesn't have a
 // confirmed, real legal requirement that differs by country beyond the ID
 // document type a seller already picks (CNIC/passport/national ID), so
 // every country currently resolves to the same base rule set below rather
@@ -38,7 +38,7 @@ const COUNTRY_OVERRIDES: Record<string, Partial<Pick<VerificationRequirementSet,
 
 /** Pure function of (country, businessType) — `enhanced` level is
  *  architecturally supported by the type system and this function's
- *  signature, but nothing in Solvexo's real business rules assigns it yet,
+ *  signature, but nothing in Edudeen's real business rules assigns it yet,
  *  so it's never returned here (see determineVerificationLevel). */
 export function getVerificationRequirements(country: string, businessType: BusinessType | null, level: VerificationLevel): VerificationRequirementSet {
   const requiredFields = [...BASIC_REQUIRED_FIELDS];

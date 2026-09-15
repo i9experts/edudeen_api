@@ -215,7 +215,7 @@ export function assertValidVerificationTransition(from: VerificationStatus, to: 
 
 // businessType determines the applicable level today — 'enhanced' is
 // architecturally supported (see verification-requirements.config.ts) but
-// nothing in Solvexo's real business rules assigns it yet, so it's never
+// nothing in Edudeen's real business rules assigns it yet, so it's never
 // auto-selected. This is a pure function of server-known data, never a
 // client-supplied value, per the "backend is the source of truth" rule.
 export function determineVerificationLevel(businessType: BusinessType | null): VerificationLevel {
@@ -316,7 +316,7 @@ export class Store {
   // prevent a price number silently being reinterpreted under a different
   // currency later. Nullable at the schema level only so pre-existing
   // stores (created before this field existed) remain readable/writable —
-  // the one-time backfill sets them all to 'PKR' (Solvexo was Pakistan-only
+  // the one-time backfill sets them all to 'PKR' (Edudeen was Pakistan-only
   // until this field was introduced).
   @Prop({ type: String, default: null })
   baseCurrency: string | null;
@@ -413,7 +413,7 @@ export class Store {
   // (a Lead) and an admin must approve them via
   // AdminMarketplaceService.approveLead before they flip to 'active'; today
   // that admin action happens to move both this field and
-  // `verificationStatus` together (Solvexo has one review action, not two),
+  // `verificationStatus` together (Edudeen has one review action, not two),
   // but they remain separate fields so that's a business-process fact, not
   // a schema constraint. Every public/browse route already filters
   // `status: 'active'` (see StoreService.getStoreBySlug/discoverStores/
@@ -439,7 +439,7 @@ export class Store {
   // sensitive `verification` blob below. ──
 
   // Where the seller says they operate — drives requirement calculation
-  // (see verification-requirements.config.ts). Defaults to Solvexo's home
+  // (see verification-requirements.config.ts). Defaults to Edudeen's home
   // market; genuinely different per-country legal rules can be added to
   // that config later without touching this field.
   @Prop({ type: String, default: 'PK' })

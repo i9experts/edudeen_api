@@ -204,8 +204,8 @@ export class SeoMonitoringService implements OnModuleInit, OnModuleDestroy {
       this.db.repositories.storeModel.find({ status: 'active', isDelete: false }).sort({ followersCount: -1 }).limit(limit * 0.3).select('slug').lean(),
     ]);
     return [
-      ...(topProducts as any[]).map((p) => `https://solvexo.store/product/${p.slug}`),
-      ...(topStores as any[]).map((s) => `https://solvexo.store/${s.slug}`),
+      ...(topProducts as any[]).map((p) => `https://edudeen.com/product/${p.slug}`),
+      ...(topStores as any[]).map((s) => `https://edudeen.com/${s.slug}`),
     ];
   }
 

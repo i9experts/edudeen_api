@@ -8,7 +8,7 @@ export class CreateCanonicalRuleDto {
   @IsNotEmpty()
   pathPattern: string;
 
-  @ApiProperty({ example: 'https://solvexo.store/marketplace/category/electronics' })
+  @ApiProperty({ example: 'https://edudeen.com/marketplace/category/electronics' })
   @IsString()
   @IsNotEmpty()
   canonicalUrl: string;

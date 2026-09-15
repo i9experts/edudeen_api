@@ -20,7 +20,7 @@ import { ImageEnhanceService } from './providers/image-enhance.service';
  * an admin-only counterpart (`AdminAiStudioController`/`AdminAiStudioService`):
  * cross-store oversight of every seller's generations/wallets/transactions,
  * and platform-scope generation (SEO Booster / Email Campaigns / Image
- * Enhancer only) for Solvexo's own marketplace content — never charged
+ * Enhancer only) for Edudeen's own marketplace content — never charged
  * against a seller's wallet.
  *
  * Depends on the @Global PlatformPlansModule for AiCreditsService (the wallet

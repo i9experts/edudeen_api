@@ -26,7 +26,7 @@ export class CreateTestimonialDto {
   @Max(5)
   rating: number;
 
-  @ApiProperty({ example: 'Solvexo made it so easy to launch my store...', description: 'The testimonial quote' })
+  @ApiProperty({ example: 'Edudeen made it so easy to launch my store...', description: 'The testimonial quote' })
   @IsString()
   @IsNotEmpty({ message: 'Testimonial text is required' })
   text: string;

@@ -616,7 +616,7 @@ export class AdminFinanceService {
     ]);
 
     const rangeLabel = `${from.toISOString().split('T')[0]} to ${to.toISOString().split('T')[0]}`;
-    const pdf = await PdfReportBuilder.create('Solvexo — Platform Finance Report', `Period: ${rangeLabel}`);
+    const pdf = await PdfReportBuilder.create('Edudeen — Platform Finance Report', `Period: ${rangeLabel}`);
 
     pdf.addSectionHeading('Overview');
     // One key-value grid per settlement currency — PKR and USD figures are

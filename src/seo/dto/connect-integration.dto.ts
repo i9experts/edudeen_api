@@ -9,7 +9,7 @@ export class ConnectIntegrationDto {
   @IsString() @IsNotEmpty()
   code: string;
 
-  @ApiProperty({ example: 'https://solvexo.store/seo/integrations/callback' })
+  @ApiProperty({ example: 'https://edudeen.com/seo/integrations/callback' })
   @IsString() @IsNotEmpty()
   redirectUri: string;
 
@@ -19,7 +19,7 @@ export class ConnectIntegrationDto {
 }
 
 export class GetAuthUrlDto {
-  @ApiProperty({ example: 'https://solvexo.store/seo/integrations/callback' })
+  @ApiProperty({ example: 'https://edudeen.com/seo/integrations/callback' })
   @IsString() @IsNotEmpty()
   redirectUri: string;
 }

@@ -225,7 +225,7 @@ export class PlatformPlansService {
           revenueUSD: this.round(r.total), invoiceCount: r.count,
           currentActiveStores: activeCountMap[r._id] ?? 0,
         })),
-        note: 'This is platform-plan (seller-to-Solvexo) revenue — a separate line item from buyer-VIP-plan subscription revenue (SubscriptionInvoice) and order commission (FinanceService).',
+        note: 'This is platform-plan (seller-to-Edudeen) revenue — a separate line item from buyer-VIP-plan subscription revenue (SubscriptionInvoice) and order commission (FinanceService).',
       },
     };
   }

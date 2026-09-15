@@ -32,7 +32,7 @@ import { StoreThemeService } from '../store-theme/store-theme.service';
 import { StorePagesService } from '../store-pages/store-pages.service';
 import { CollectionsService } from '../collections/collections.service';
 
-// Store slugs render at the site root (`solvexo.store/:slug`) — these are the
+// Store slugs render at the site root (`edudeen.com/:slug`) — these are the
 // frontend's top-level static route segments (router/index.tsx), reserved so
 // a store can never claim a URL that collides with a real app page.
 const RESERVED_STORE_SLUGS = new Set([
@@ -49,7 +49,7 @@ const RESERVED_STORE_SLUGS = new Set([
 // `verifyCustomDomain`. Changing this value requires actually re-pointing
 // the platform's real infrastructure at it too (see that method's docblock
 // for the ops step this does NOT automate).
-export const CUSTOM_DOMAIN_CNAME_TARGET = 'stores.solvexo.store';
+export const CUSTOM_DOMAIN_CNAME_TARGET = 'stores.edudeen.com';
 
 @Injectable()
 export class StoreService {
@@ -103,7 +103,7 @@ export class StoreService {
     // reinterpreted under a different currency later. The frontend
     // onboarding flow suggests a default from the seller's detected
     // country, but never forces it — this validation only enforces that
-    // whatever was chosen is one of the currencies Solvexo actually
+    // whatever was chosen is one of the currencies Edudeen actually
     // supports today.
     if (!baseCurrency || !SUPPORTED_CURRENCIES.includes(baseCurrency)) {
       throw new BadRequestException(
@@ -197,7 +197,7 @@ export class StoreService {
   // review) are deliberately separate fields — see store.schema.ts. Every
   // method below reads/writes `verificationStatus`, never `status`, except
   // where a comment explicitly says otherwise (only admin approve/reject
-  // ever touches both, because Solvexo has one review action, not two).
+  // ever touches both, because Edudeen has one review action, not two).
 
   private async findOwnedStoreOrThrow(sellerId: string, storeId: string, opts?: { withVerification?: boolean }) {
     const query = this.databaseService.repositories.storeModel.findOne({ _id: storeId, isDelete: false });
@@ -555,7 +555,7 @@ export class StoreService {
     };
   }
 
-  /** Platform-plan-gated: only stores on a plan with `whiteLabelAllowed` may hide Solvexo branding. */
+  /** Platform-plan-gated: only stores on a plan with `whiteLabelAllowed` may hide Edudeen branding. */
   async setWhiteLabel(sellerId: string, storeId: string, enabled: boolean) {
     const store = await this.databaseService.repositories.storeModel.findOne({ _id: storeId, isDelete: false });
     if (!store) throw new NotFoundException('Store not found');
@@ -802,7 +802,7 @@ export class StoreService {
     const updateData: any = {};
 
     // Store.slug is the seller's live subdomain/custom-domain identity
-    // (hello.solvexo.store) — unlike a Product's slug, breaking it takes
+    // (hello.edudeen.com) — unlike a Product's slug, breaking it takes
     // down the seller's entire storefront, not just one shared link.
     // Deliberately NOT regenerated when the display name changes any more;
     // it's only ever assigned once, at store creation (see createStore
@@ -908,7 +908,7 @@ export class StoreService {
   }
 
   /** Same public shape as `getPublicStore`, resolved by a seller's VERIFIED
-   *  custom domain instead of their `solvexo.store` subdomain slug — this is
+   *  custom domain instead of their `edudeen.com` subdomain slug — this is
    *  what lets a request arriving on an arbitrary hostname (once the
    *  platform's edge is actually routing it here — see `verifyCustomDomain`'s
    *  docblock) still load the right store. An unverified domain never

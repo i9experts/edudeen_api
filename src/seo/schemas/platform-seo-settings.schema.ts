@@ -15,7 +15,7 @@ export type PlatformSeoSettingsDocument = PlatformSeoSettings & Document;
 @Schema({ _id: false })
 export class SeoMetaTemplate {
   @Prop({ required: true }) key: string; // e.g. 'product', 'category', 'store'
-  // Token-templated string, e.g. "{{productName}} — {{storeName}} | Solvexo".
+  // Token-templated string, e.g. "{{productName}} — {{storeName}} | Edudeen".
   // Tokens are resolved by SeoResolutionService against the entity's own
   // fields; unresolved tokens fall back to an empty string, never left raw.
   @Prop({ required: true }) titleTemplate: string;

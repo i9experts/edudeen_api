@@ -41,7 +41,7 @@ export class SubscriptionsService {
   // was 100% retained by the platform with no seller payout at all (a
   // business-model gap, not a deliberate policy) — this brings it in line
   // with how order revenue already works (see FinanceService.recordSale's
-  // PLATFORM_FEE_RATE), just at a higher rate to reflect that Solvexo runs
+  // PLATFORM_FEE_RATE), just at a higher rate to reflect that Edudeen runs
   // the entire billing/dunning/hosting engine for this revenue stream.
   private readonly platformCommissionRate: number;
 

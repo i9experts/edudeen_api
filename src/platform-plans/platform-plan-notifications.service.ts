@@ -2,7 +2,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EmailService } from '../otp/services/email.service';
 
-const APP_NAME = process.env.APP_NAME || 'Solvexo';
+const APP_NAME = process.env.APP_NAME || 'Edudeen';
 
 // Identical shell to SubscriptionNotificationsService's — kept as its own
 // copy (not a shared import) so the two billing systems' notification
@@ -35,7 +35,7 @@ function shell(title: string, bodyHtml: string): string {
     ${bodyHtml}
     <div class="footer">
       <p>© ${new Date().getFullYear()} ${APP_NAME}. All rights reserved.</p>
-      <p>This is an automated email regarding your Solvexo platform plan. Please do not reply.</p>
+      <p>This is an automated email regarding your Edudeen platform plan. Please do not reply.</p>
     </div>
   </div>
 </body>
@@ -44,7 +44,7 @@ function shell(title: string, bodyHtml: string): string {
 
 const money = (n: number) => `$${Math.abs(n).toFixed(2)}`;
 
-/** Seller-facing emails for platform-plan (seller-to-Solvexo) billing — same visual style/shell as SubscriptionNotificationsService, different audience (sellers, not buyers). */
+/** Seller-facing emails for platform-plan (seller-to-Edudeen) billing — same visual style/shell as SubscriptionNotificationsService, different audience (sellers, not buyers). */
 @Injectable()
 export class PlatformPlanNotificationsService {
   private readonly logger = new Logger(PlatformPlanNotificationsService.name);
@@ -66,7 +66,7 @@ export class PlatformPlanNotificationsService {
   }) {
     const html = shell('Your platform plan was changed', `
       <p>Hi ${data.sellerName},</p>
-      <p>Your store <strong>${data.storeName}</strong>'s Solvexo platform plan has been updated.</p>
+      <p>Your store <strong>${data.storeName}</strong>'s Edudeen platform plan has been updated.</p>
       <div class="box">
         <div class="row"><span class="label">Previous plan</span><span class="value">${data.fromPlanName}</span></div>
         <div class="row"><span class="label">New plan</span><span class="value">${data.toPlanName}</span></div>
@@ -82,7 +82,7 @@ export class PlatformPlanNotificationsService {
   }) {
     const html = shell('Your platform plan was changed', `
       <p>Hi ${data.sellerName},</p>
-      <p>Your store <strong>${data.storeName}</strong>'s Solvexo platform plan has been updated.</p>
+      <p>Your store <strong>${data.storeName}</strong>'s Edudeen platform plan has been updated.</p>
       <div class="box">
         <div class="row"><span class="label">Previous plan</span><span class="value">${data.fromPlanName}</span></div>
         <div class="row"><span class="label">New plan</span><span class="value">${data.toPlanName}</span></div>

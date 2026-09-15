@@ -345,7 +345,7 @@ export class AdminMarketplaceService {
 
   /** Approval moves BOTH fields together — Store.status → 'active' (goes
    *  live on the marketplace) and verificationStatus → 'verified' — because
-   *  Solvexo has exactly one admin review action today, not two independent
+   *  Edudeen has exactly one admin review action today, not two independent
    *  ones. They remain separate schema fields regardless (see
    *  store.schema.ts), and this is gated by `evaluateVerification` — an
    *  incomplete submission physically cannot be approved. */

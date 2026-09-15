@@ -177,7 +177,7 @@ export class AdminAnalyticsService {
         totalRefunds: current.refundAmount,
         refundRatePercent,
         cancelledOrders: current.cancelledCount,
-        note: '"totalRevenue" is net order revenue platform-wide (GMV minus refunds) — it is the money that flowed through the marketplace. "platformEarnings" is Solvexo\'s own cut of that (commission + subscription revenue) and is a separate figure, not a component already subtracted from totalRevenue.',
+        note: '"totalRevenue" is net order revenue platform-wide (GMV minus refunds) — it is the money that flowed through the marketplace. "platformEarnings" is Edudeen\'s own cut of that (commission + subscription revenue) and is a separate figure, not a component already subtracted from totalRevenue.',
       };
 
       if (compare) {
@@ -256,7 +256,7 @@ export class AdminAnalyticsService {
         paymentProcessingFees: platformEarnings.processingFees,
         totalPlatformRevenue: round(platformEarnings.commission + platformEarnings.subscriptionRevenue),
         totalMarketplaceRevenue: round(orderTotals.netRevenue + platformEarnings.subscriptionRevenue),
-        note: 'oneTimeOrderRevenue is net seller order revenue (does not belong to the platform); platformCommissionRevenue + recurringSubscriptionRevenue is what Solvexo itself earns. Commission is recognized at sale time regardless of payout-clearing status.',
+        note: 'oneTimeOrderRevenue is net seller order revenue (does not belong to the platform); platformCommissionRevenue + recurringSubscriptionRevenue is what Edudeen itself earns. Commission is recognized at sale time regardless of payout-clearing status.',
       };
 
       if (compare && previousOrderTotals && previousPlatformEarnings) {
@@ -976,7 +976,7 @@ export class AdminAnalyticsService {
     ]);
 
     const rangeLabel = `${from.toISOString().split('T')[0]} to ${to.toISOString().split('T')[0]}`;
-    const pdf = await PdfReportBuilder.create('Solvexo — Platform Analytics Report', `Period: ${rangeLabel}`);
+    const pdf = await PdfReportBuilder.create('Edudeen — Platform Analytics Report', `Period: ${rangeLabel}`);
 
     pdf.addSectionHeading('Overview');
     pdf.addKeyValueGrid([

@@ -17,7 +17,7 @@ import { AdminGenerateSeoDto, AdminGenerateEmailDto, AdminGenerateImageEnhanceDt
  *  - Oversight (read-only): cross-store visibility into every seller's AI
  *    Studio usage — generations, credit transactions, wallet balances.
  *  - Platform generation: SEO Booster / Email Campaigns / Image Enhancer run
- *    for Solvexo's OWN marketplace content, never charged against a seller's
+ *    for Edudeen's OWN marketplace content, never charged against a seller's
  *    wallet. Listing Writer / Worksheet Builder / Price Optimizer are
  *    seller-product-specific and intentionally excluded here.
  */
@@ -66,7 +66,7 @@ export class AdminAiStudioController {
     return this.adminAiStudio.listTransactions(query);
   }
 
-  // ---- platform generation (Solvexo's own content) ----
+  // ---- platform generation (Edudeen's own content) ----
 
   @Throttle({ default: { limit: 15, ttl: 60_000 } })
   @UseInterceptors(IdempotencyInterceptor)

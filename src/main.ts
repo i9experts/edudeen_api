@@ -10,8 +10,8 @@ async function bootstrap() {
   app.use(cookieParser());
 
   const config = new DocumentBuilder()
-    .setTitle('Solvexo API')
-    .setDescription('Solvexo Marketplace API')
+    .setTitle('Edudeen API')
+    .setDescription('Edudeen Marketplace API')
     .addBearerAuth(
       {
         in: 'Header',
@@ -28,14 +28,14 @@ async function bootstrap() {
     'http://localhost:3000',
     'http://localhost:5173',
     'http://127.0.0.1:3000',
-    'https://solvexo.store',
-    'https://www.solvexo.store',
+    'https://edudeen.com',
+    'https://www.edudeen.com',
     'https://solvexo-web.vercel.app',
     'https://api.edudeen.com',
   ];
 
   // Every seller store is served from its OWN subdomain
-  // (`<slug>.solvexo.store`) or, in dev, `<slug>.localhost:<port>` — there's
+  // (`<slug>.edudeen.com`) or, in dev, `<slug>.localhost:<port>` — there's
   // no way to enumerate those individually in a static whitelist, so any
   // origin under either base domain is allowed regardless of subdomain.
   // (A seller's own connected Custom Domain is a separate, still-open gap —
@@ -50,8 +50,8 @@ async function bootstrap() {
       return false;
     }
     return (
-      hostname === 'solvexo.store' ||
-      hostname.endsWith('.solvexo.store') ||
+      hostname === 'edudeen.com' ||
+      hostname.endsWith('.edudeen.com') ||
       hostname === 'localhost' ||
       hostname.endsWith('.localhost')
     );

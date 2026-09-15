@@ -91,7 +91,7 @@ export class PaymentService {
     // seller's own account — a plain refund would try to pull it back out of
     // the PLATFORM's balance instead (which never received it), so it must
     // explicitly reverse the original transfer. `refund_application_fee`
-    // likewise gives back Solvexo's own commission cut on the refunded
+    // likewise gives back Edudeen's own commission cut on the refunded
     // portion, matching real-world refund expectations.
     const transaction = await this.databaseService.repositories.paymentTransactionModel
       .findOne({ stripePaymentIntentId, isDelete: false })

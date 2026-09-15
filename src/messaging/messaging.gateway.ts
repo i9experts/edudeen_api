@@ -19,9 +19,9 @@ const WHITELIST = [
   'http://localhost:5174',
   'http://127.0.0.1:3000',
   'http://127.0.0.1:5173',
-  'https://staging.solvexo.store',
-  'https://solvexo.store',
-  'https://www.solvexo.store',
+  'https://staging.edudeen.com',
+  'https://edudeen.com',
+  'https://www.edudeen.com',
   'https://api.edudeen.com',
 ];
 

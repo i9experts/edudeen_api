@@ -2,7 +2,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EmailService } from '../otp/services/email.service';
 
-const APP_NAME = process.env.APP_NAME || 'Solvexo';
+const APP_NAME = process.env.APP_NAME || 'Edudeen';
 
 // Same email chrome as SubscriptionNotificationsService — copied rather than
 // shared since that helper is a private module-level function, not exported.

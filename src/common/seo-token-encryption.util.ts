@@ -27,7 +27,7 @@ function deriveKey(): Buffer {
   // Static salt is acceptable here: the secret itself is the actual entropy
   // source (an env var, not a user password), and scrypt is only being used
   // as a KDF to normalize arbitrary-length input into a 32-byte key.
-  return scryptSync(secret, 'solvexo-seo-integration-salt', 32);
+  return scryptSync(secret, 'edudeen-seo-integration-salt', 32);
 }
 
 export function encryptSeoCredential(plaintext: string): string {
