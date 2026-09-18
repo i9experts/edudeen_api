@@ -200,7 +200,7 @@ export class Product {
   earlyAccessUntil: Date | null;
 
   @Prop({ default: false })
-  isListedOnSolvexo: boolean;
+  isListedOnEdudeen: boolean;
 
   // admin marketplace-management toggle — highlights the listing on the
   // marketplace homepage, separate from seller-controlled fields above

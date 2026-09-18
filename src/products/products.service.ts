@@ -1031,7 +1031,7 @@ export class ProductsService {
       subCategoryId,
       images,
       tags,
-      isListedOnSolvexo,
+      isListedOnEdudeen,
       status,
       scheduledAt,
       variants,
@@ -1113,7 +1113,7 @@ export class ProductsService {
       images: images ?? [],
       tags: tags ?? [],
       digital: null,
-      isListedOnSolvexo: isListedOnSolvexo ?? false,
+      isListedOnEdudeen: isListedOnEdudeen ?? false,
       status: status ?? 'draft',
       scheduledAt: status === 'scheduled' ? new Date(scheduledAt) : null,
     });
@@ -1169,7 +1169,7 @@ export class ProductsService {
       subCategoryId,
       images,
       tags,
-      isListedOnSolvexo,
+      isListedOnEdudeen,
       status,
       scheduledAt,
       price,
@@ -1268,7 +1268,7 @@ export class ProductsService {
       images: images ?? [],
       tags: tags ?? [],
       digital: digital ? await this.prepareDigitalPreview(null, digital) : null,
-      isListedOnSolvexo: isListedOnSolvexo ?? false,
+      isListedOnEdudeen: isListedOnEdudeen ?? false,
       status: status ?? 'draft',
       scheduledAt: status === 'scheduled' ? new Date(scheduledAt) : null,
     });
@@ -1396,7 +1396,7 @@ export class ProductsService {
       subCategoryId,
       images,
       tags,
-      isListedOnSolvexo,
+      isListedOnEdudeen,
       status,
       scheduledAt,
       digital,
@@ -1438,8 +1438,8 @@ export class ProductsService {
       productUpdate.subCategoryId = subCategoryId;
     if (images !== undefined) productUpdate.images = images;
     if (tags !== undefined) productUpdate.tags = tags;
-    if (isListedOnSolvexo !== undefined)
-      productUpdate.isListedOnSolvexo = isListedOnSolvexo;
+    if (isListedOnEdudeen !== undefined)
+      productUpdate.isListedOnEdudeen = isListedOnEdudeen;
     if (status !== undefined) {
       if (status === 'scheduled' && !scheduledAt) {
         throw new BadRequestException(
