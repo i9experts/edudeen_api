@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import {
-  Controller, Get, Post, Param, Body, Req, UseGuards, UseInterceptors, UploadedFile,
+  Controller, Get, Post, Param, Body, Req, UseGuards, UseInterceptors, UploadedFile, UsePipes, ValidationPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -41,6 +41,7 @@ export class ManualPaymentsController {
   @Post('submit')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @UseInterceptors(FileInterceptor('file', PROOF_UPLOAD_OPTIONS), IdempotencyInterceptor)
+  @UsePipes(new ValidationPipe({ transform: true }))
   async submitPayment(@Req() req: any, @Body() dto: SubmitManualPaymentDto, @UploadedFile() file: Express.Multer.File) {
     const result = await this.manualPaymentsService.submitPayment(req.user.userId, dto, file);
     return { success: true, message: result.message, data: { proof: result.proof, orders: result.orders } };
@@ -61,6 +62,7 @@ export class ManualPaymentsController {
   @Post(':proofId/reupload')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @UseInterceptors(FileInterceptor('file', PROOF_UPLOAD_OPTIONS))
+  @UsePipes(new ValidationPipe({ transform: true }))
   async reuploadPayment(
     @Req() req: any,
     @Param('proofId') proofId: string,

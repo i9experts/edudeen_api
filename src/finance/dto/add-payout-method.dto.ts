@@ -18,7 +18,9 @@ export class AddPayoutMethodDto {
   @IsOptional() @IsString() accountHolder?: string;
 
   @ApiProperty({ required: false, example: '123456789', description: 'Full account number — only last 4 digits are stored' })
-  @IsOptional() @IsString() @Length(4, 20) accountNumber?: string;
+  // Upper bound 34 = max IBAN length — Pakistani sellers commonly enter their
+  // 24-char IBAN here, which a 20-char cap would wrongly reject.
+  @IsOptional() @IsString() @Length(4, 34) accountNumber?: string;
 
   @ApiProperty({ required: false, example: '021000021' })
   @IsOptional() @IsString() routingNumber?: string;

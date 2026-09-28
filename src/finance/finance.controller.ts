@@ -1,7 +1,7 @@
 /* eslint-disable prettier/prettier */
 import {
   Controller, Get, Post, Patch, Delete,
-  Param, Body, Query, Req, Res, UseGuards, UseInterceptors,
+  Param, Body, Query, Req, Res, UseGuards, UseInterceptors, UsePipes, ValidationPipe,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
@@ -70,6 +70,7 @@ export class FinanceController {
   @Post(':storeId/payouts/request')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @UseInterceptors(IdempotencyInterceptor)
+  @UsePipes(new ValidationPipe({ transform: true }))
   requestPayout(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: RequestPayoutDto) {
     return this.financeService.requestPayout(req.user.userId, storeId, dto);
   }
@@ -89,6 +90,7 @@ export class FinanceController {
   // ═══════════════════════════════════════════════════════════════════════════
 
   @Post(':storeId/payout-methods')
+  @UsePipes(new ValidationPipe({ transform: true }))
   addPayoutMethod(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: AddPayoutMethodDto) {
     return this.financeService.addPayoutMethod(req.user.userId, storeId, dto);
   }
@@ -105,6 +107,7 @@ export class FinanceController {
   }
 
   @Patch(':storeId/payout-methods/:methodId')
+  @UsePipes(new ValidationPipe({ transform: true }))
   updatePayoutMethod(
     @Req() req: any,
     @Param('storeId') storeId: string,
@@ -129,6 +132,7 @@ export class FinanceController {
   }
 
   @Patch(':storeId/payout-schedule')
+  @UsePipes(new ValidationPipe({ transform: true }))
   updatePayoutSchedule(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: UpdatePayoutScheduleDto) {
     return this.financeService.updatePayoutSchedule(req.user.userId, storeId, dto, req.ip, req.headers['user-agent']);
   }

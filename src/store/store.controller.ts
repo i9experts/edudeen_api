@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Controller, Post, Get, Patch, Body, Req, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Body, Req, Param, Query, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -254,6 +254,7 @@ export class StoreController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Patch(':storeId/customers/:customerId')
+  @UsePipes(new ValidationPipe({ transform: true }))
   async updateStoreCustomer(
     @Req() req: any,
     @Param('storeId') storeId: string,

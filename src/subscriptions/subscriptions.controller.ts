@@ -1,7 +1,7 @@
 /* eslint-disable prettier/prettier */
 import {
   Controller, Get, Post, Patch, Delete,
-  Param, Body, Query, Req, Res, UseGuards, UseInterceptors,
+  Param, Body, Query, Req, Res, UseGuards, UseInterceptors, UsePipes, ValidationPipe,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { Response } from 'express';
@@ -43,6 +43,7 @@ export class SubscriptionsController {
   // with idempotency-key protection already in front of it.
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('subscribe')
+  @UsePipes(new ValidationPipe({ transform: true }))
   subscribe(@Req() req: any, @Body() dto: SubscribeDto) {
     return this.subscriptionsService.subscribe(req.user.userId, dto, req.headers['idempotency-key']);
   }
@@ -103,6 +104,8 @@ export class SubscriptionsController {
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @Patch('my/notification-preferences')
+  // Validate only (no transform): body is spread into a Mongo $set.
+  @UsePipes(new ValidationPipe())
   updateNotificationPreferences(@Req() req: any, @Body() dto: UpdateNotificationPreferencesDto) {
     return this.subscriptionsService.updateNotificationPreferences(req.user.userId, { ...dto });
   }
@@ -138,6 +141,7 @@ export class SubscriptionsController {
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @Patch('my/:id/cancel')
+  @UsePipes(new ValidationPipe({ transform: true }))
   selfCancel(@Req() req: any, @Param('id') id: string, @Query('atPeriodEnd') atPeriodEnd: string, @Body() body: CancelSubscriptionDto) {
     return this.subscriptionsService.selfCancelSubscription(req.user.userId, id, atPeriodEnd === 'true', body.reason);
   }
@@ -146,6 +150,7 @@ export class SubscriptionsController {
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(IdempotencyInterceptor)
   @Patch('my/:id/change-plan')
+  @UsePipes(new ValidationPipe({ transform: true }))
   changePlan(@Req() req: any, @Param('id') id: string, @Body() dto: ChangePlanDto) {
     return this.subscriptionsService.changePlan(req.user.userId, id, dto, req.headers['idempotency-key']);
   }
@@ -248,6 +253,7 @@ export class SubscriptionsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
   @Post('admin/invoices/:invoiceId/refund')
+  @UsePipes(new ValidationPipe({ transform: true }))
   adminRefundInvoice(@Req() req: any, @Param('invoiceId') invoiceId: string, @Body() dto: RefundInvoiceDto) {
     return this.subscriptionsService.adminRefundInvoice(req.user.userId, invoiceId, dto.amountUSD, dto.reason);
   }
@@ -375,6 +381,7 @@ export class SubscriptionsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Patch(':storeId/subscribers/:id/cancel')
+  @UsePipes(new ValidationPipe({ transform: true }))
   cancelSubscription(
     @Req() req: any,
     @Param('storeId') storeId: string,
@@ -389,6 +396,7 @@ export class SubscriptionsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Post(':storeId/subscribers/:id/invoices/:invoiceId/refund')
+  @UsePipes(new ValidationPipe({ transform: true }))
   sellerRefundInvoice(
     @Req() req: any,
     @Param('storeId') storeId: string,

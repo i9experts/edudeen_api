@@ -12,7 +12,7 @@ import { AddToCartDto } from './dto/add-to-cart.dto';
 export class CartService {
   constructor(private readonly databaseService: DatabaseService) {}
 
-  async addToCart(userId: string, storeId: string, dto: AddToCartDto) {
+  async addToCart(userId: string, requestedStoreId: string | undefined, dto: AddToCartDto) {
     try {
       const cartModel = this.databaseService.repositories.cartModel;
       const productModel = this.databaseService.repositories.productModel;
@@ -21,13 +21,21 @@ export class CartService {
 
       // 1️⃣ Get product
       const product = await productModel.findById(dto.productId).lean();
-      if (!product) {
+      if (!product || product.isDelete || product.status !== 'active') {
         throw new BadRequestException('Product not found');
+      }
+
+      // The cart always belongs to the product's own store — a storefront
+      // may only add its own products, and the main marketplace site
+      // (no storeId) files each item under whichever store sells it.
+      const storeId = product.storeId;
+      if (requestedStoreId && requestedStoreId !== storeId) {
+        throw new BadRequestException('This product is not sold by this store');
       }
 
       // 2️⃣ Get variant
       const variant = await variantModel.findById(dto.productVariantId).lean();
-      if (!variant) {
+      if (!variant || variant.isDelete || variant.productId !== dto.productId) {
         throw new BadRequestException('Product variant not found');
       }
 
@@ -255,6 +263,37 @@ export class CartService {
     } catch (error: any) {
       throw new BadRequestException(error.message || 'Failed to fetch cart');
     }
+  }
+
+  /** Every non-empty cart the buyer has, one per store — the main
+   *  marketplace site shows them together and checks out one store at a
+   *  time (checkout is per store). */
+  async getMyCarts(userId: string) {
+    const carts = await this.databaseService.repositories.cartModel
+      .find({ userId, isDelete: false, 'items.0': { $exists: true } })
+      .select('storeId')
+      .sort({ updatedAt: -1 })
+      .lean();
+    const storeIds = [...new Set((carts as any[]).map((c) => c.storeId).filter(Boolean))];
+    if (storeIds.length === 0) return { message: 'Cart is empty', data: [] };
+
+    const stores = await this.databaseService.repositories.storeModel
+      .find({ _id: { $in: storeIds }, isDelete: false })
+      .select('name slug logo status')
+      .lean();
+    const storeById = new Map((stores as any[]).map((s) => [s._id.toString(), s]));
+
+    const data: any[] = [];
+    for (const storeId of storeIds) {
+      const store = storeById.get(storeId);
+      if (!store) continue;
+      const { data: cart } = await this.getCart(userId, storeId);
+      data.push({
+        ...cart,
+        store: { storeId, name: store.name, slug: store.slug, logo: store.logo ?? null, isActive: store.status === 'active' },
+      });
+    }
+    return { message: 'Carts fetched successfully', data };
   }
 
   async removeCartItem(userId: string, storeId: string, requestBody: any) {

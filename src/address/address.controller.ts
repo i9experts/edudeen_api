@@ -12,7 +12,9 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AddressService } from './address.service';
 
-@Controller('address')
+// Served on both paths: the web app calls `/api/address/*` (like every other
+// module), while existing clients (mobile) already call `/address/*`.
+@Controller(['address', 'api/address'])
 export class AddressController {
   constructor(private readonly addressService: AddressService) {}
 

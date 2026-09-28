@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Controller, Get, Post, Patch, Param, Body, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, Req, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { GiftCardsService } from './gift-cards.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -28,6 +28,7 @@ export class GiftCardsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Patch(':storeId/settings')
+  @UsePipes(new ValidationPipe({ transform: true }))
   updateSettings(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: UpdateGiftCardSettingsDto) {
     return this.giftCardsService.updateSettings(req.user.userId, storeId, dto);
   }
@@ -36,6 +37,7 @@ export class GiftCardsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Post(':storeId/issue')
+  @UsePipes(new ValidationPipe({ transform: true }))
   issueManual(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: IssueManualGiftCardDto) {
     return this.giftCardsService.issueManual(req.user.userId, storeId, dto);
   }
@@ -66,6 +68,7 @@ export class GiftCardsController {
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @Post(':storeId/purchase-intent')
+  @UsePipes(new ValidationPipe({ transform: true }))
   createPurchaseIntent(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: CreatePurchaseIntentDto) {
     return this.giftCardsService.createPurchaseIntent(req.user.userId, storeId, dto);
   }

@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Controller, Get, Patch, Param, Body, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Patch, Param, Body, Query, Req, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -33,6 +33,7 @@ export class AdminManualPaymentsController {
     return { success: true, data };
   }
 
+  @UsePipes(new ValidationPipe({ transform: true }))
   @Patch(':proofId/reject')
   async reject(@Req() req: any, @Param('proofId') proofId: string, @Body() dto: RejectManualPaymentDto) {
     const data = await this.manualPaymentsService.adminReject(proofId, req.user.userId, dto.reason, req.ip, req.headers['user-agent']);

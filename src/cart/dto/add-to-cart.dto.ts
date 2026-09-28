@@ -1,11 +1,13 @@
 import { IsOptional, IsString, IsNumber, IsNotEmpty } from 'class-validator';
 
 export class AddToCartDto {
-  // Which store's storefront this cart belongs to — a buyer's cart is
-  // scoped per store, not shared across every store they've ever shopped at.
+  // Which store's cart this goes into — a buyer's cart is scoped per store.
+  // Optional: the main marketplace site omits it and the product's own
+  // store is used; a store subdomain passes its storeId, which must match.
+  @IsOptional()
   @IsNotEmpty()
   @IsString()
-  storeId: string;
+  storeId?: string;
 
   @IsOptional()
   @IsString()

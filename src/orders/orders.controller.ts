@@ -75,8 +75,9 @@ export class OrdersController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller', 'admin')
   @Put('mark-paid/:orderId')
-  async markPaid(@Param('orderId') orderId: string) {
-    return this.ordersService.markPaid(orderId);
+  async markPaid(@Req() req: any, @Param('orderId') orderId: string) {
+    const { userId, role } = req.user;
+    return this.ordersService.markPaid(orderId, { userId, role });
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

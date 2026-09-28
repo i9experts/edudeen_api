@@ -15,6 +15,7 @@ import { AuthModule } from 'src/auth/auth.module';
 import { UploadModule } from 'src/upload/upload.module';
 import { RedisModule } from 'src/redis/redis.module';
 import { FinanceModule } from 'src/finance/finance.module';
+import { PaymentModule } from 'src/payment/payment.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 
@@ -24,6 +25,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
     UploadModule,
     RedisModule,
     FinanceModule,
+    PaymentModule,
     ConfigModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

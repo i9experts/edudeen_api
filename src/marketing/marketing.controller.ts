@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Controller, Get, Post, Patch, Delete, Param, Body, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, Req, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { MarketingService } from './marketing.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -17,6 +17,7 @@ export class MarketingController {
   constructor(private readonly marketingService: MarketingService) {}
 
   @Post(':storeId/coupons')
+  @UsePipes(new ValidationPipe({ transform: true }))
   createCoupon(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: CreateCouponDto) {
     return this.marketingService.createCoupon(req.user.userId, storeId, dto, req.ip, req.headers['user-agent']);
   }
@@ -27,6 +28,7 @@ export class MarketingController {
   }
 
   @Patch(':storeId/coupons/:couponId')
+  @UsePipes(new ValidationPipe({ transform: true }))
   updateCoupon(@Req() req: any, @Param('storeId') storeId: string, @Param('couponId') couponId: string, @Body() dto: UpdateCouponDto) {
     return this.marketingService.updateCoupon(req.user.userId, storeId, couponId, dto, req.ip, req.headers['user-agent']);
   }

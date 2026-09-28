@@ -9,6 +9,8 @@ import {
   Req,
   UseGuards,
   UseInterceptors,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -29,6 +31,7 @@ export class RefundRequestController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('user', 'seller', 'admin')
   @UseInterceptors(IdempotencyInterceptor)
+  @UsePipes(new ValidationPipe({ transform: true }))
   @Post()
   async create(@Req() req: any, @Body() dto: CreateRefundRequestDto) {
     return this.refundRequestService.createRequest(req.user.userId, req.user.role, dto);
@@ -37,8 +40,8 @@ export class RefundRequestController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('user', 'seller', 'admin')
   @Get('order/:orderId')
-  async listForOrder(@Param('orderId') orderId: string) {
-    return this.refundRequestService.listForOrder(orderId);
+  async listForOrder(@Req() req: any, @Param('orderId') orderId: string) {
+    return this.refundRequestService.listForOrder(req.user.userId, req.user.role, orderId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -72,6 +75,7 @@ export class RefundRequestController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller', 'admin')
+  @UsePipes(new ValidationPipe({ transform: true }))
   @Patch(':id/reject')
   async reject(@Req() req: any, @Param('id') id: string, @Body() dto: RejectRefundRequestDto) {
     return this.refundRequestService.reject(req.user.userId, req.user.role, id, dto.notes);

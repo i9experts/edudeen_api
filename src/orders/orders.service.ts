@@ -15,6 +15,8 @@ import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-bene
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 import { round } from 'src/common/number.util';
+import { PaymentService } from 'src/payment/payment.service';
+import { orderStatusEmail } from 'src/notifications/templates/notification-email.template';
 
 /** A sellerOrder's true payout basis for FinanceService.recordSale, in the
  *  SELLER'S OWN currency (so.settlementCurrency) — independent of what
@@ -46,6 +48,7 @@ export class OrdersService {
     private readonly loyaltyService: LoyaltyService,
     private readonly subscriptionBenefits: SubscriptionBenefitsService,
     private readonly notificationsService: NotificationsService,
+    private readonly paymentService: PaymentService,
   ) {}
 
   /** Subscribers earn points at their plan's configured multiplier (default 1x). */
@@ -518,6 +521,23 @@ export class OrdersService {
     const wasAlreadyCompleted =
       order.sellerOrders[sellerOrderIndex].status === 'completed';
 
+    // Forward-only lifecycle. Skipping ahead is fine (a digital order has
+    // nothing to ship), but going backwards or touching a cancelled order
+    // is not.
+    const RANK: Record<string, number> = { pending: 0, processing: 1, shipped: 2, delivered: 3, completed: 4 };
+    const currentStatus = order.sellerOrders[sellerOrderIndex].status;
+    if (currentStatus === 'cancelled') {
+      throw new BadRequestException('This order was cancelled');
+    }
+    if (RANK[currentStatus] !== undefined && RANK[status] < RANK[currentStatus]) {
+      throw new BadRequestException(`Order is already ${currentStatus} — it can't go back to ${status}`);
+    }
+    // Completing credits the seller's ledger, so the buyer must have paid.
+    // A COD order is completed via "Mark Paid" once the cash is collected.
+    if (status === 'completed' && !order.isPaid) {
+      throw new BadRequestException('Mark this order as paid before completing it');
+    }
+
     if (status === 'shipped' && !tracking) {
       throw new BadRequestException(
         'tracking info required when status is shipped',
@@ -635,6 +655,7 @@ export class OrdersService {
               ? `Order #${orderId} is on its way${tracking?.carrier ? ` via ${tracking.carrier}` : ''}.`
               : `Order #${orderId} has been delivered.`,
           data: { orderId, status },
+          email: orderStatusEmail(order.orderNumber ?? orderId, status, tracking),
         })
         .catch(() => {});
     }
@@ -642,12 +663,35 @@ export class OrdersService {
     return { success: true, message: `Order status updated to ${status}` };
   }
 
-  async markPaid(orderId: string) {
+  async markPaid(orderId: string, actor: { userId: string; role: string }) {
     const { orderModel } = this.databaseService.repositories;
 
     const order = await orderModel.findOne({ _id: orderId, isDelete: false });
     if (!order) throw new NotFoundException('Order not found');
     if (order.isPaid) throw new BadRequestException('Order is already paid');
+
+    // A seller may only confirm payment on an order made up entirely of their
+    // own sub-orders — marking paid credits every seller in the order's
+    // ledger, so one seller must never be able to do it for another's sale.
+    // A multi-store order has to be confirmed by an admin.
+    if (actor.role !== 'admin') {
+      const ownsAll =
+        order.sellerOrders.length > 0 &&
+        order.sellerOrders.every((so: any) => so.sellerId === actor.userId);
+      if (!ownsAll) {
+        throw new ForbiddenException('You can only mark your own orders as paid');
+      }
+    }
+
+    // Only money collected offline is confirmed by hand — a Stripe charge is
+    // confirmed by Stripe itself, and a bank transfer goes through the admin
+    // proof-review flow (manual-payments), so a seller only confirms COD.
+    if (order.paymentType === 'stripe') {
+      throw new BadRequestException('Card payments are confirmed automatically');
+    }
+    if (actor.role !== 'admin' && order.paymentType !== 'cash_on_delivery') {
+      throw new ForbiddenException('Bank transfers are confirmed by the Edudeen team after reviewing the payment proof');
+    }
 
     const now = new Date();
     const updateData: any = {
@@ -666,7 +710,13 @@ export class OrdersService {
       });
     });
 
-    await orderModel.findByIdAndUpdate(orderId, { $set: updateData });
+    // Atomic isPaid:false guard — two concurrent calls (double-click, retry)
+    // must not both get past the check above and double-credit the ledger.
+    const claimed = await orderModel.findOneAndUpdate(
+      { _id: orderId, isPaid: { $ne: true }, isDelete: false },
+      { $set: updateData },
+    );
+    if (!claimed) throw new BadRequestException('Order is already paid');
 
     // Record sale in finance ledger for each store's sub-order — skipping
     // any that settled directly via Stripe Connect (see the same guard/
@@ -940,6 +990,55 @@ export class OrdersService {
     if (targetItems.length === 0)
       throw new BadRequestException('No items to cancel');
 
+    // A paid digital item was delivered the moment it was paid for (the
+    // download link is live), so it goes through a refund request instead.
+    if (order.isPaid) {
+      const digital = targetItems.find(({ item }) => item.type === 'digital');
+      if (digital) {
+        throw new BadRequestException(
+          `"${digital.item.name}" has already been delivered — please request a refund instead`,
+        );
+      }
+    }
+
+    // Money back BEFORE anything is written: if the Stripe refund fails the
+    // order stays exactly as it was, instead of claiming "refunded" in the
+    // DB while the buyer never gets their money.
+    const cancelsWholeOrder = targetItems.length === allItems.filter(({ item }) => item.status !== 'cancelled').length;
+    let refundedViaStripe = false;
+    let manualRefundNeeded = false;
+    if (order.isPaid) {
+      const refundAmount = round(
+        targetItems.reduce((s, { item }) => s + (item.totalPrice ?? 0), 0) +
+          (cancelsWholeOrder ? (order.shippingFee ?? 0) : 0),
+      );
+      if (order.paymentType === 'stripe') {
+        const { paymentTransactionModel } = this.databaseService.repositories;
+        const tx = await paymentTransactionModel.findOne({
+          orderIds: orderId,
+          status: 'completed',
+          stripePaymentIntentId: { $ne: null },
+          isDelete: false,
+        });
+        if (!tx) throw new BadRequestException('Payment record not found — please contact support to cancel this order');
+        const refundable = round((tx.amount ?? 0) - (tx.amountRefunded ?? 0));
+        const amount = Math.min(refundAmount, refundable);
+        if (amount > 0) {
+          const itemKey = targetItems.map(({ item }) => item._id.toString()).sort().join(',');
+          const refund = await this.paymentService.refundStripePaymentIntent(
+            tx.stripePaymentIntentId!,
+            amount,
+            `cancel-${orderId}-${itemKey}`,
+          );
+          if (!refund) throw new BadRequestException('Online refunds are not available right now — please contact support');
+        }
+        refundedViaStripe = true;
+      } else {
+        // Bank transfer: there's no API to send the money back — flag it.
+        manualRefundNeeded = true;
+      }
+    }
+
     const updateData: any = {};
 
     for (const { soIndex, itemIndex, item } of targetItems) {
@@ -988,12 +1087,26 @@ export class OrdersService {
       updateData.orderStatus = 'cancelled';
     }
 
-    // refund status — sirf DB update, no real Stripe call (stripePaymentIntentId null hai)
-    if (order.isPaid) {
+    // Only claim 'refunded' once the money actually went back (whole order).
+    if (refundedViaStripe && updateData.orderStatus === 'cancelled') {
       updateData.paymentStatus = 'refunded';
     }
 
     await orderModel.findByIdAndUpdate(orderId, { $set: updateData });
+
+    if (manualRefundNeeded) {
+      this.activityLogService.log({
+        storeId: order.sellerOrders[targetItems[0].soIndex].storeId,
+        category: 'finance',
+        action: 'manual_refund_required',
+        description: `Buyer cancelled paid bank-transfer order #${orderId} — refund must be sent manually`,
+        actorId: userId,
+        actorRole: 'user',
+        isSecurityAlert: true,
+        targetId: orderId,
+        targetType: 'order',
+      });
+    }
 
     const affectedSellerIds = [
       ...new Set(
@@ -1022,7 +1135,8 @@ export class OrdersService {
       data: {
         orderId,
         cancelledItems: targetItems.length,
-        refundProcessed: order.isPaid,
+        refundProcessed: refundedViaStripe,
+        refundPendingManual: manualRefundNeeded,
       },
     };
   }
@@ -1366,7 +1480,67 @@ export class OrdersService {
       updateData.hasReturnApproved = true;
     }
 
+    // Send the buyer's money back BEFORE recording the approval, so a failed
+    // Stripe refund leaves the return still pending instead of "approved"
+    // with nothing refunded.
+    let manualRefundNeeded = false;
+    if (action === 'approve' && order.isPaid) {
+      const buyerRefund = round(
+        targetItems.reduce((sum, t) => sum + (t.item.totalPrice || 0), 0),
+      );
+      if (order.paymentType === 'stripe' && buyerRefund > 0) {
+        const { paymentTransactionModel } = this.databaseService.repositories;
+        const tx = await paymentTransactionModel.findOne({
+          orderIds: orderId,
+          status: 'completed',
+          stripePaymentIntentId: { $ne: null },
+          isDelete: false,
+        });
+        if (!tx) throw new BadRequestException('Payment record not found — contact support to refund this return');
+        const amount = Math.min(buyerRefund, round((tx.amount ?? 0) - (tx.amountRefunded ?? 0)));
+        if (amount > 0) {
+          const itemKey = targetItems.map((t) => t.item._id.toString()).sort().join(',');
+          const refund = await this.paymentService.refundStripePaymentIntent(
+            tx.stripePaymentIntentId!,
+            amount,
+            `return-${orderId}-${itemKey}`,
+          );
+          if (!refund) throw new BadRequestException('Online refunds are not available right now — try again later');
+        }
+      } else if (buyerRefund > 0) {
+        // COD / bank transfer: the cash has to be returned by hand.
+        manualRefundNeeded = true;
+      }
+    }
+
     await orderModel.findByIdAndUpdate(orderId, { $set: updateData });
+
+    // Returned goods go back on the shelf.
+    if (action === 'approve') {
+      const { productVariantModel } = this.databaseService.repositories;
+      for (const { item } of targetItems) {
+        if (item.type === 'physical' && item.variantId) {
+          await productVariantModel.updateOne(
+            { _id: item.variantId, unlimitedStock: { $ne: true } },
+            { $inc: { stock: item.quantity } },
+          );
+        }
+      }
+    }
+
+    if (manualRefundNeeded) {
+      this.activityLogService.log({
+        storeId,
+        category: 'finance',
+        action: 'manual_refund_required',
+        description: `Return approved on ${order.paymentType} order #${orderId} — refund the buyer manually`,
+        actorId: sellerId,
+        actorRole: 'seller',
+        isSecurityAlert: true,
+        targetId: orderId,
+        targetType: 'order',
+      });
+    }
 
     let refundProcessed = false;
     if (action === 'approve' && order.isPaid) {

@@ -116,8 +116,27 @@ export class RefundRequestService {
     return { success: true, message: 'Refund request submitted', data: created };
   }
 
-  async listForOrder(orderId: string) {
-    const items = await this.model.find({ orderId, isDelete: false }).sort({ createdAt: -1 }).lean();
+  /** Buyer sees their own order's requests; a seller sees only the requests
+   *  against their own sub-orders of it; an admin sees all. */
+  async listForOrder(userId: string, role: 'user' | 'seller' | 'admin', orderId: string) {
+    const order = await this.databaseService.repositories.orderModel
+      .findOne({ _id: orderId, isDelete: false })
+      .select('userId sellerOrders.sellerId sellerOrders.storeId')
+      .lean();
+    if (!order) throw new NotFoundException('Order not found');
+
+    const filter: Record<string, unknown> = { orderId, isDelete: false };
+    if (role === 'user') {
+      if ((order as any).userId !== userId) throw new ForbiddenException('This order does not belong to you');
+    } else if (role === 'seller') {
+      const storeIds = ((order as any).sellerOrders as any[])
+        .filter((so) => so.sellerId === userId)
+        .map((so) => so.storeId);
+      if (storeIds.length === 0) throw new ForbiddenException('This order does not belong to your store');
+      filter.storeId = { $in: storeIds };
+    }
+
+    const items = await this.model.find(filter).sort({ createdAt: -1 }).lean();
     return { success: true, data: items };
   }
 
@@ -260,6 +279,17 @@ export class RefundRequestService {
           }
         }
         await liveOrder.save();
+      }
+    }
+
+    // Refunds here are physical-only (see createRequest) — the returned
+    // goods go back into stock.
+    for (const item of items) {
+      if (item.type === 'physical' && item.variantId) {
+        await this.databaseService.repositories.productVariantModel.updateOne(
+          { _id: item.variantId, unlimitedStock: { $ne: true } },
+          { $inc: { stock: item.quantity } },
+        );
       }
     }
 

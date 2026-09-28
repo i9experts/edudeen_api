@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Controller, Get, Post, Patch, Param, Body, Req, Query, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Req, Query, UseGuards, UseInterceptors, UsePipes, ValidationPipe } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { SellerPlatformSubscriptionsService } from './seller-platform-subscriptions.service';
 import { EntitlementsService } from './entitlements.service';
@@ -22,6 +22,7 @@ export class SellerPlatformSubscriptionsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
   @Post('admin/invoices/:invoiceId/refund')
+  @UsePipes(new ValidationPipe({ transform: true }))
   adminRefundInvoice(@Req() req: any, @Param('invoiceId') invoiceId: string, @Body() dto: RefundInvoiceDto) {
     return this.sellerPlatformSubscriptionsService.adminRefundInvoice(req.user.userId, invoiceId, dto.amountUSD, dto.reason);
   }
@@ -51,6 +52,7 @@ export class SellerPlatformSubscriptionsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Post('onboarding/confirm-payment-method')
+  @UsePipes(new ValidationPipe({ transform: true }))
   confirmOnboardingPaymentMethod(@Req() req: any, @Body() dto: ConfirmOnboardingPaymentMethodDto) {
     return this.sellerPlatformSubscriptionsService.confirmOnboardingPaymentMethod(req.user.userId, dto.setupIntentId);
   }
@@ -122,6 +124,7 @@ export class SellerPlatformSubscriptionsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Post(':storeId/cancel')
+  @UsePipes(new ValidationPipe({ transform: true }))
   cancelSubscription(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: CancelPlatformPlanDto) {
     return this.sellerPlatformSubscriptionsService.cancelSubscription(req.user.userId, storeId, dto.reason);
   }
@@ -138,6 +141,7 @@ export class SellerPlatformSubscriptionsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Post(':storeId/billing-portal')
+  @UsePipes(new ValidationPipe({ transform: true }))
   createBillingPortalSession(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: BillingPortalDto) {
     return this.sellerPlatformSubscriptionsService.createBillingPortalSession(req.user.userId, storeId, dto.returnUrl);
   }

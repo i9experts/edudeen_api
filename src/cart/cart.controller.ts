@@ -23,6 +23,14 @@ export class CartController {
 
     return this.cartService.addToCart(userId, dto.storeId, dto);
   }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('my-carts')
+  async getMyCarts(@Req() req: any) {
+    const { userId } = req.user;
+    return this.cartService.getMyCarts(userId);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('get-cart')
   async getCart(@Req() req: any, @Query('storeId') storeId: string) {

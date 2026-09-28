@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Controller, Get, Post, Delete, Param, Body, Query, Req, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Param, Body, Query, Req, UseGuards, UseInterceptors, UsePipes, ValidationPipe } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { PlatformAddonsService } from './platform-addons.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -28,6 +28,7 @@ export class PlatformAddonsController {
   @Roles('seller')
   @UseInterceptors(IdempotencyInterceptor)
   @Post(':storeId/addons')
+  @UsePipes(new ValidationPipe({ transform: true }))
   purchaseAddon(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: PurchaseAddonDto) {
     return this.addonsService.purchaseAddon(req.user.userId, storeId, dto);
   }

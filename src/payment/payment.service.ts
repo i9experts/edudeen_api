@@ -16,6 +16,7 @@ import { GiftCardsService } from 'src/gift-cards/gift-cards.service';
 import { StripeConnectService } from 'src/stripe-connect/stripe-connect.service';
 import { CommissionRulesService } from 'src/commission-rules/commission-rules.service';
 import Stripe from 'stripe';
+import { orderPlacedEmail } from 'src/notifications/templates/notification-email.template';
 
 @Injectable()
 export class PaymentService {
@@ -678,6 +679,18 @@ export class PaymentService {
     try {
       orders = await this.createOrder(transaction.userId, checkout, orderModel, addressModel, physicalPayment, digitalPayment, undefined, connectInfo);
     } catch (err: any) {
+      // Stock ran out between checkout and the charge landing — retrying
+      // can never succeed, and the buyer's money has already been captured.
+      // Refund the whole charge right away instead of leaving it stuck in a
+      // 'pending' retry loop with no order.
+      if (typeof err?.message === 'string' && err.message.startsWith('Stock not available')) {
+        const refunded = await this.refundUnfulfillablePayment(transaction, checkout, err.message);
+        throw new BadRequestException(
+          refunded
+            ? `${err.message}. Your payment has been refunded in full.`
+            : `${err.message}. Our team has been alerted and will refund your payment.`,
+        );
+      }
       await paymentTransactionModel.findByIdAndUpdate(transaction._id, {
         status: 'pending',
         paidAt: null,
@@ -708,6 +721,64 @@ export class PaymentService {
     // Seller notifications are already sent inside `createOrder()` above —
     // no need to duplicate that here.
     return { orderIds: orders.map((o: any) => o._id.toString()) };
+  }
+
+  /** Full refund for a captured charge that can't become an order (e.g. stock
+   *  sold out after the buyer paid). Marks the transaction 'failed' with
+   *  `amountRefunded` already bumped, so the `charge.refunded` webhook this
+   *  refund triggers computes a ~0 delta and reverses nothing (no ledger was
+   *  ever credited — no order exists). */
+  private async refundUnfulfillablePayment(transaction: any, checkout: any, reason: string): Promise<boolean> {
+    const { paymentTransactionModel, checkoutModel } = this.databaseService.repositories;
+    let refundId: string | null = null;
+    try {
+      if (this.stripe && transaction.stripePaymentIntentId) {
+        const refund = await this.stripe.refunds.create(
+          {
+            payment_intent: transaction.stripePaymentIntentId,
+            ...(transaction.settledViaConnect
+              ? { reverse_transfer: true, refund_application_fee: true }
+              : {}),
+          },
+          { idempotencyKey: `unfulfillable-refund-${transaction.stripePaymentIntentId}` },
+        );
+        refundId = refund.id;
+      }
+    } catch (refundErr: any) {
+      // Leave the transaction 'completed' + orderless so it's visible for a
+      // manual refund, and raise it loudly rather than swallowing it.
+      await this.activityLogService.log({
+        storeId: 'platform',
+        category: 'finance',
+        action: 'unfulfillable_payment_refund_failed',
+        description: `Checkout ${checkout._id} could not be fulfilled (${reason}) and the automatic Stripe refund FAILED: ${refundErr?.message} — refund manually`,
+        actorId: 'system',
+        actorRole: 'system',
+        isSecurityAlert: true,
+        targetId: checkout._id.toString(),
+        targetType: 'checkout',
+      });
+      return false;
+    }
+    if (!refundId) return false;
+
+    await paymentTransactionModel.findByIdAndUpdate(transaction._id, {
+      status: 'failed',
+      amountRefunded: transaction.amount,
+    });
+    await checkoutModel.findByIdAndUpdate(checkout._id, { status: 'cancelled' });
+    await this.activityLogService.log({
+      storeId: 'platform',
+      category: 'finance',
+      action: 'unfulfillable_payment_refunded',
+      description: `Checkout ${checkout._id} could not be fulfilled (${reason}); charge refunded in full (${refundId})`,
+      actorId: 'system',
+      actorRole: 'system',
+      isSecurityAlert: false,
+      targetId: checkout._id.toString(),
+      targetType: 'checkout',
+    });
+    return true;
   }
 
   /** Lets the app poll after `stripe.confirmPayment()` resolves client-side,
@@ -1404,12 +1475,34 @@ export class PaymentService {
           { status: 'used', usedAt: new Date(), checkoutId: String(checkout._id), orderId: String(createdOrders[0]?._id ?? '') },
         );
       } else {
-        await this.databaseService.repositories.couponModel.updateOne(
-          checkout.couponStoreId
-            ? { storeId: checkout.couponStoreId, code: checkout.couponCode, scope: 'seller' }
-            : { code: checkout.couponCode, scope: 'platform' },
+        const couponFilter = checkout.couponStoreId
+          ? { storeId: checkout.couponStoreId, code: checkout.couponCode, scope: 'seller' }
+          : { code: checkout.couponCode, scope: 'platform' };
+        // Increment only while still under the limit, in one atomic step, so
+        // concurrent orders can't all read "1 use left" and all consume it.
+        // The order is already paid for by this point, so an overrun is
+        // honoured for this buyer and flagged rather than failing the order.
+        const res = await this.databaseService.repositories.couponModel.updateOne(
+          {
+            ...couponFilter,
+            $or: [{ usageLimit: null }, { $expr: { $lt: ['$usageCount', '$usageLimit'] } }],
+          },
           { $inc: { usageCount: 1 } },
         );
+        if (res.modifiedCount === 0) {
+          await this.databaseService.repositories.couponModel.updateOne(couponFilter, { $inc: { usageCount: 1 } });
+          await this.activityLogService.log({
+            storeId: checkout.couponStoreId ?? 'platform',
+            category: 'marketing',
+            action: 'coupon_usage_limit_exceeded',
+            description: `Coupon ${checkout.couponCode} was used past its usage limit by concurrent checkout ${checkout._id}`,
+            actorId: 'system',
+            actorRole: 'system',
+            isSecurityAlert: false,
+            targetId: String(checkout._id),
+            targetType: 'checkout',
+          });
+        }
       }
     }
 
@@ -1442,6 +1535,22 @@ export class PaymentService {
           })
           .catch(() => {});
       }
+    }
+
+    // Buyer confirmation + emailed receipt, one per order (a mixed cart
+    // becomes a physical and a digital order).
+    for (const createdOrder of createdOrders) {
+      this.notificationsService
+        .notify({
+          recipientId: userId,
+          recipientRole: 'user',
+          type: NOTIFICATION_TYPES.ORDER_PLACED,
+          title: 'Order confirmed',
+          body: `Your order #${createdOrder.orderNumber} has been placed.`,
+          data: { orderId: createdOrder._id.toString() },
+          email: orderPlacedEmail(createdOrder),
+        })
+        .catch(() => {});
     }
 
     return createdOrders;

@@ -5,7 +5,10 @@ import cookieParser from 'cookie-parser';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody: Stripe webhook signature verification (payment + subscriptions
+  // webhook controllers) needs the exact unparsed request bytes on
+  // `req.rawBody` — without it every webhook is rejected with a 400.
+  const app = await NestFactory.create(AppModule, { rawBody: true });
 
   app.use(cookieParser());
 
