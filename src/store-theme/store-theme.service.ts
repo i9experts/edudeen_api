@@ -64,6 +64,9 @@ export class StoreThemeService {
           },
         },
       ],
+      // Mongoose 9 rejects aggregation-pipeline updates without this flag —
+      // without it every store creation 500'd after the store was inserted.
+      { updatePipeline: true },
     );
     return this.storeThemeModel.findOne({ storeId });
   }
@@ -115,7 +118,7 @@ export class StoreThemeService {
           },
         },
       ],
-      { new: true },
+      { new: true, updatePipeline: true },
     );
     return { success: true, message: 'Theme published', data: updated };
   }
@@ -139,7 +142,7 @@ export class StoreThemeService {
           },
         },
       ],
-      { new: true },
+      { new: true, updatePipeline: true },
     );
     return { success: true, message: 'Draft reverted to the published theme', data: updated };
   }
