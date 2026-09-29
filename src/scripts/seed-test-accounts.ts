@@ -7,7 +7,10 @@
  * Re-running is safe: an existing account with the same email just gets its
  * password reset and is marked verified/active again.
  *
- * Credentials default to the values below; override any of them via env:
+ * Passwords are never hardcoded: set them via env, otherwise a random one is
+ * generated and printed ONCE. Refuses to run with NODE_ENV=production unless
+ * SEED_ALLOW_PRODUCTION=true (it resets existing accounts' passwords).
+ * Override via env:
  *   SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD
  *   SEED_SELLER_EMAIL / SEED_SELLER_PASSWORD
  *   SEED_BUYER_EMAIL / SEED_BUYER_PASSWORD
@@ -16,6 +19,14 @@
  */
 import mongoose from 'mongoose';
 import * as bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
+
+const generated = new Set<string>();
+function passwordFrom(envValue: string | undefined, role: string): string {
+  if (envValue) return envValue;
+  generated.add(role);
+  return randomBytes(12).toString('base64url');
+}
 
 const ACCOUNTS = [
   {
@@ -23,25 +34,29 @@ const ACCOUNTS = [
     role: 'admin',
     name: 'Test Admin',
     email: process.env.SEED_ADMIN_EMAIL ?? 'admin@edudeen.test',
-    password: process.env.SEED_ADMIN_PASSWORD ?? 'Admin@12345',
+    password: passwordFrom(process.env.SEED_ADMIN_PASSWORD, 'admin'),
   },
   {
     collection: 'sellers',
     role: 'seller',
     name: 'Test Seller',
     email: process.env.SEED_SELLER_EMAIL ?? 'seller@edudeen.test',
-    password: process.env.SEED_SELLER_PASSWORD ?? 'Seller@12345',
+    password: passwordFrom(process.env.SEED_SELLER_PASSWORD, 'seller'),
   },
   {
     collection: 'users',
     role: 'user',
     name: 'Test Buyer',
     email: process.env.SEED_BUYER_EMAIL ?? 'buyer@edudeen.test',
-    password: process.env.SEED_BUYER_PASSWORD ?? 'Buyer@12345',
+    password: passwordFrom(process.env.SEED_BUYER_PASSWORD, 'user'),
   },
 ];
 
 async function run() {
+  if (process.env.NODE_ENV === 'production' && process.env.SEED_ALLOW_PRODUCTION !== 'true') {
+    console.error('Refusing to seed test accounts with NODE_ENV=production (set SEED_ALLOW_PRODUCTION=true to override).');
+    process.exit(1);
+  }
   const uri = process.env.MONGO_URI;
   if (!uri) {
     console.error('MONGO_URI is not set');
@@ -96,7 +111,7 @@ async function run() {
     );
 
     const action = res.upsertedCount ? 'created' : 'reset';
-    console.log(`${acc.role.padEnd(6)} ${action.padEnd(7)} ${email} / ${acc.password}`);
+    console.log(`${acc.role.padEnd(6)} ${action.padEnd(7)} ${email} / ${generated.has(acc.role) ? acc.password : '(password from env)'}`);
   }
 
   await mongoose.disconnect();

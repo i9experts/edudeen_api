@@ -149,8 +149,16 @@ export class StoreService {
     // to `active` instead of the pending/admin-review Leads queue. A store
     // created any other way (e.g. a future non-onboarding path with no
     // payment method on file) still starts `pending`, same as before.
+    //
+    // Edudeen is a curated education-only marketplace, so by default EVERY
+    // new store starts `pending` and goes live only when an admin approves it
+    // through the Leads review (AdminMarketplaceService.approveLead) — that
+    // review is the only point where a human confirms the store actually
+    // sells educational resources. Set STORE_SELF_SERVE_ACTIVATION=true to
+    // restore the previous "card on file ⇒ live immediately" behaviour.
     const seller = await this.databaseService.repositories.sellerModel.findById(sellerId).lean();
-    const selfServeActivation = !!(seller as any)?.hasPlatformPaymentMethod;
+    const selfServeAllowed = process.env.STORE_SELF_SERVE_ACTIVATION === 'true';
+    const selfServeActivation = selfServeAllowed && !!(seller as any)?.hasPlatformPaymentMethod;
 
     const store = await this.databaseService.repositories.storeModel.create({
       sellerId,

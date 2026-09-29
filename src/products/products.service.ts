@@ -1057,7 +1057,10 @@ export class ProductsService {
       isDelete: false,
     });
     if (!store) throw new BadRequestException('Store not found');
-    if (store.status !== 'active')
+    // A store under admin review may prepare its catalogue; nothing is
+    // publicly visible or purchasable until the store is approved (public
+    // browse and checkout both require store.status === 'active').
+    if (!['active', 'pending'].includes(store.status))
       throw new BadRequestException('Your store is not active');
 
     const allowsPhysical =
@@ -1201,7 +1204,10 @@ export class ProductsService {
       isDelete: false,
     });
     if (!store) throw new BadRequestException('Store not found');
-    if (store.status !== 'active')
+    // A store under admin review may prepare its catalogue; nothing is
+    // publicly visible or purchasable until the store is approved (public
+    // browse and checkout both require store.status === 'active').
+    if (!['active', 'pending'].includes(store.status))
       throw new BadRequestException('Your store is not active');
 
     const allowsDigital =
