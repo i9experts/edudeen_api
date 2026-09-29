@@ -104,11 +104,16 @@ export class FinanceService {
   private async getOrCreateSchedule(storeId: string, sellerId: string, currency = 'USD') {
     let schedule = await this.scheduleModel.findOne({ storeId, currency });
     if (!schedule) {
-      // Compute next Monday as default nextPayoutAt
-      const nextMonday = new Date();
-      nextMonday.setDate(nextMonday.getDate() + ((1 + 7 - nextMonday.getDay()) % 7 || 7));
-      nextMonday.setHours(9, 0, 0, 0);
-      schedule = await this.scheduleModel.create({ storeId, sellerId, currency, nextPayoutAt: nextMonday });
+      // New schedules follow the platform payout policy (AdminConfig
+      // payoutConfig.payoutFrequency — 'monthly' on the 1st by default: the
+      // platform collects every payment and settles sellers once a month).
+      // Existing schedule documents keep whatever they already have.
+      const frequency = await this.adminConfigService.getPayoutFrequency();
+      const defaults = { frequency, dayOfWeek: 1, dayOfMonth: 1 };
+      schedule = await this.scheduleModel.create({
+        storeId, sellerId, currency, ...defaults,
+        nextPayoutAt: this.computeNextPayoutDate(defaults),
+      });
     }
     return schedule;
   }
@@ -178,8 +183,13 @@ export class FinanceService {
     } else if (schedule.frequency === 'biweekly') {
       next.setDate(now.getDate() + 14);
     } else if (schedule.frequency === 'monthly') {
-      next.setMonth(now.getMonth() + 1);
-      next.setDate(Math.min(schedule.dayOfMonth, 28));
+      // Next occurrence of `dayOfMonth` (1–28, so it exists in every month)
+      // at 09:00 — this month's if still ahead, otherwise next month's. Built
+      // with the (year, month, day) constructor so a late-month "now" (e.g.
+      // Jan 31) can never overflow setMonth() into skipping a whole month.
+      const day = Math.min(Math.max(schedule.dayOfMonth ?? 1, 1), 28);
+      const thisMonth = new Date(now.getFullYear(), now.getMonth(), day, 9, 0, 0, 0);
+      return thisMonth > now ? thisMonth : new Date(now.getFullYear(), now.getMonth() + 1, day, 9, 0, 0, 0);
     } else if (schedule.frequency === 'daily') {
       next.setDate(now.getDate() + 1);
     } else {
@@ -229,12 +239,13 @@ export class FinanceService {
     const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const lastMonthEnd   = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
 
-    const [rawBalances, rawSchedules, rawMethods, rawPendingPayouts, commissionRate] = await Promise.all([
+    const [rawBalances, rawSchedules, rawMethods, rawPendingPayouts, commissionRate, defaultFrequency] = await Promise.all([
       this.balanceModel.find({ storeId }).lean(),
       this.scheduleModel.find({ storeId }).lean(),
       this.methodModel.find({ storeId }).lean(),
       this.payoutModel.find({ storeId, status: { $in: ['pending', 'processing'] } }).sort({ createdAt: -1 }).lean(),
       this.commissionRulesService.resolveRate(storeId),
+      this.adminConfigService.getPayoutFrequency(),
     ]);
 
     // `.lean()` bypasses Mongoose schema defaults, so a document saved before
@@ -259,7 +270,7 @@ export class FinanceService {
         isFlaggedForReview: false, flaggedReason: null,
       };
       const schedule = (schedules as any[]).find((s) => s.currency === currency) ?? {
-        frequency: 'weekly', isEnabled: true, minimumAmount: currency === 'PKR' ? 1500 : 5, nextPayoutAt: null,
+        frequency: defaultFrequency, isEnabled: true, minimumAmount: currency === 'PKR' ? 1500 : 5, nextPayoutAt: null,
       };
       const defaultMethod = (methods as any[]).find((m) => m.currency === currency && m.isDefault) ?? null;
       const pendingPayout = (pendingPayouts as any[]).find((p) => p.currency === currency) ?? null;
@@ -843,6 +854,336 @@ export class FinanceService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // MONTHLY STATEMENT / SETTLEMENT — the platform collects every buyer payment
+  // and settles each seller once a month, net of commission. Computed from the
+  // Transaction ledger for one store+currency within a calendar month (UTC).
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /** Parses `YYYY-MM` (defaults to the current UTC month) into a [from, to) UTC range. */
+  private resolveMonth(month?: string): { month: string; from: Date; to: Date } {
+    let y: number;
+    let m: number;
+    if (month) {
+      const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(month);
+      if (!match) throw new BadRequestException('month must be in YYYY-MM format');
+      y = Number(match[1]);
+      m = Number(match[2]) - 1;
+    } else {
+      const now = new Date();
+      y = now.getUTCFullYear();
+      m = now.getUTCMonth();
+    }
+    return {
+      month: `${y}-${String(m + 1).padStart(2, '0')}`,
+      from: new Date(Date.UTC(y, m, 1)),
+      to: new Date(Date.UTC(y, m + 1, 1)),
+    };
+  }
+
+  /** The label of the calendar month before the current one (UTC) — what a settlement run on the 1st is paying out. */
+  private previousMonthLabel(): string {
+    const now = new Date();
+    const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+    return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
+
+  private settlementNote(month: string) {
+    return `Monthly settlement ${month}`;
+  }
+
+  /**
+   * Per-store ledger summary for a month, one row per storeId matching
+   * `match`. `net` is what the month's activity actually moved in the
+   * seller's wallet: card/bank-transfer sales net of commission + processing
+   * fees and wallet-debited refunds, minus commission owed on cash (COD)
+   * orders (whose cash the seller already holds), plus reversed COD
+   * commission and platform-sponsored discounts credited on cash orders.
+   * Payouts and admin adjustments are not earnings and are excluded.
+   */
+  private async summarizeMonthlyLedger(match: Record<string, any>) {
+    const isCash = { $eq: ['$metadata.collectedBy', 'seller'] };
+    const isType = (t: string) => ({ $eq: ['$type', t] });
+    const feeCommission = { $ifNull: ['$metadata.platformFee', { $abs: '$amount' }] };
+
+    const rows = await this.txModel.aggregate([
+      { $match: { status: { $ne: 'failed' }, ...match } },
+      {
+        $group: {
+          _id: '$storeId',
+          sellerId: { $first: '$sellerId' },
+          grossSales: { $sum: { $cond: [isType('sale'), '$amount', 0] } },
+          cashGross: { $sum: { $cond: [{ $and: [isType('sale'), isCash] }, '$amount', 0] } },
+          orderIds: { $addToSet: { $cond: [{ $and: [isType('sale'), { $eq: ['$referenceType', 'order'] }] }, '$referenceId', null] } },
+          commission: { $sum: { $cond: [isType('fee'), feeCommission, 0] } },
+          processingFees: { $sum: { $cond: [isType('fee'), { $ifNull: ['$metadata.processingFee', 0] }, 0] } },
+          cashCommission: { $sum: { $cond: [{ $and: [isType('fee'), isCash] }, feeCommission, 0] } },
+          refunds: { $sum: { $cond: [isType('refund'), { $abs: '$amount' }, 0] } },
+          cashRefunds: { $sum: { $cond: [{ $and: [isType('refund'), isCash] }, { $abs: '$amount' }, 0] } },
+          cashCommissionReversed: { $sum: { $cond: [{ $and: [isType('adjustment'), { $eq: ['$metadata.codCommissionReversal', true] }] }, '$amount', 0] } },
+          subsidyCredited: { $sum: { $cond: [{ $and: [isType('platform_subsidy'), { $eq: ['$metadata.creditedToWallet', true] }] }, '$amount', 0] } },
+        },
+      },
+    ]);
+
+    return (rows as any[]).map((r) => {
+      const net = (r.grossSales - r.cashGross) - r.commission - r.processingFees - (r.refunds - r.cashRefunds)
+        + r.cashCommissionReversed + r.subsidyCredited;
+      return {
+        storeId: r._id as string,
+        sellerId: r.sellerId as string,
+        orderCount: (r.orderIds as any[]).filter((id) => id !== null).length,
+        grossSales: this.round(r.grossSales),
+        commission: this.round(r.commission),
+        processingFees: this.round(r.processingFees),
+        refunds: this.round(r.refunds),
+        codCommissionOwed: this.round(r.cashCommission - r.cashCommissionReversed),
+        net: this.round(net),
+      };
+    });
+  }
+
+  /**
+   * The payout that settles a given month: the one tagged by the admin
+   * monthly-settlement run (`notes` = "Monthly settlement YYYY-MM"), otherwise
+   * the earliest payout created in the FOLLOWING month (a monthly schedule on
+   * the 1st pays out the month just ended). `payouts` must be sorted oldest-first.
+   */
+  private pickSettlementPayout(payouts: any[], month: string, to: Date, nextTo: Date) {
+    const note = this.settlementNote(month);
+    return payouts.find((p) => p.notes === note)
+      ?? payouts.find((p) => new Date(p.createdAt) >= to && new Date(p.createdAt) < nextTo)
+      ?? null;
+  }
+
+  private settlementPayoutQuery(storeIds: string[], currency: string, month: string, to: Date, nextTo: Date) {
+    return this.payoutModel.find({
+      storeId: { $in: storeIds },
+      currency,
+      $or: [{ notes: this.settlementNote(month) }, { createdAt: { $gte: to, $lt: nextTo } }],
+    }).sort({ createdAt: 1 }).lean();
+  }
+
+  async getMonthlyStatement(sellerId: string, storeId: string, query: { month?: string; currency?: string }) {
+    const store = await this.verifyStoreOwnership(sellerId, storeId);
+    const { month, from, to } = this.resolveMonth(query.month);
+    const nextTo = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth() + 1, 1));
+
+    let currency = query.currency?.trim().toUpperCase() || (store as any).baseCurrency || null;
+    if (!currency) {
+      const anyBalance = await this.balanceModel.findOne({ storeId }).select('currency').lean();
+      currency = (anyBalance as any)?.currency || 'USD';
+    }
+
+    const match = { storeId, currency, createdAt: { $gte: from, $lt: to } };
+    const [summaries, txs, balance, schedule, commissionRate, payouts, defaultFrequency] = await Promise.all([
+      this.summarizeMonthlyLedger(match),
+      this.txModel.find(match).sort({ createdAt: -1 }).limit(200).lean(),
+      this.balanceModel.findOne({ storeId, currency }).lean(),
+      this.scheduleModel.findOne({ storeId, currency }).lean(),
+      this.commissionRulesService.resolveRate(storeId),
+      this.settlementPayoutQuery([storeId], currency, month, to, nextTo),
+      this.adminConfigService.getPayoutFrequency(),
+    ]);
+
+    const s = summaries[0] ?? {
+      orderCount: 0, grossSales: 0, commission: 0, processingFees: 0, refunds: 0, codCommissionOwed: 0, net: 0,
+    };
+    const payout: any = this.pickSettlementPayout(payouts as any[], month, to, nextTo);
+    const nextPayoutAt = (schedule as any)?.nextPayoutAt ?? null;
+
+    return {
+      month,
+      currency,
+      commissionRate: commissionRate.rate,
+      orderCount: s.orderCount,
+      grossSales: s.grossSales,
+      commission: s.commission,
+      processingFees: s.processingFees,
+      refunds: s.refunds,
+      codCommissionOwed: s.codCommissionOwed,
+      netEarnings: s.net,
+      availableBalance: (balance as any)?.availableBalance ?? 0,
+      pendingBalance: (balance as any)?.pendingBalance ?? 0,
+      nextPayoutDate: nextPayoutAt ? new Date(nextPayoutAt).toISOString() : null,
+      payoutFrequency: (schedule as any)?.frequency ?? defaultFrequency,
+      payout: payout
+        ? { id: payout._id.toString(), status: payout.status, amount: payout.amount, createdAt: payout.createdAt, processedAt: payout.processedAt ?? null }
+        : null,
+      transactions: (txs as any[]).map((t) => ({
+        id: t._id.toString(),
+        type: t.type,
+        amount: t.amount,
+        description: t.description,
+        referenceId: t.referenceId ?? null,
+        createdAt: t.createdAt,
+        status: t.status,
+      })),
+    };
+  }
+
+  /**
+   * Admin monthly settlement sheet — one row per store with ledger activity
+   * in `month` (for `currency`) or a non-zero current balance in it. `net` is
+   * the month's wallet movement (see summarizeMonthlyLedger); balances are
+   * current snapshots, and `payout` is the payout settling that month.
+   */
+  async adminGetMonthlySettlement(query: { month?: string; currency?: string }) {
+    const { month, from, to } = this.resolveMonth(query.month);
+    const nextTo = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth() + 1, 1));
+    const currency = query.currency?.trim().toUpperCase() || 'USD';
+
+    const [summaries, balances] = await Promise.all([
+      this.summarizeMonthlyLedger({ currency, createdAt: { $gte: from, $lt: to } }),
+      this.balanceModel.find({
+        currency,
+        $or: [{ availableBalance: { $ne: 0 } }, { pendingBalance: { $ne: 0 } }],
+      }).lean(),
+    ]);
+
+    const summaryByStore = new Map(summaries.map((s) => [s.storeId, s]));
+    const balanceByStore = new Map((balances as any[]).map((b) => [b.storeId, b]));
+    const storeIds = [...new Set([...summaryByStore.keys(), ...balanceByStore.keys()])];
+
+    const [stores, methods, payouts] = await Promise.all([
+      this.storeModel.find({ _id: { $in: storeIds } }).select('name sellerId').lean(),
+      this.methodModel.find({ storeId: { $in: storeIds }, currency, isDefault: true }).lean(),
+      this.settlementPayoutQuery(storeIds, currency, month, to, nextTo),
+    ]);
+    // Stores missing from the balance query above (zero balance, activity only) still need their current snapshot.
+    const missingBalanceIds = storeIds.filter((id) => !balanceByStore.has(id));
+    if (missingBalanceIds.length > 0) {
+      const extra = await this.balanceModel.find({ storeId: { $in: missingBalanceIds }, currency }).lean();
+      for (const b of extra as any[]) balanceByStore.set(b.storeId, b);
+    }
+
+    const storeMap = new Map((stores as any[]).map((s) => [s._id.toString(), s]));
+    const sellerIds = [...new Set(storeIds.map((id) =>
+      summaryByStore.get(id)?.sellerId ?? balanceByStore.get(id)?.sellerId ?? storeMap.get(id)?.sellerId?.toString(),
+    ).filter(Boolean))];
+    const sellers = await this.sellerModel.find({ _id: { $in: sellerIds } }).select('name').lean();
+    const sellerMap = new Map((sellers as any[]).map((s) => [s._id.toString(), s]));
+    const methodMap = new Map((methods as any[]).map((m) => [m.storeId, m]));
+    const payoutsByStore = new Map<string, any[]>();
+    for (const p of payouts as any[]) payoutsByStore.set(p.storeId, [...(payoutsByStore.get(p.storeId) ?? []), p]);
+
+    const rows = storeIds.map((storeId) => {
+      const s = summaryByStore.get(storeId);
+      const b = balanceByStore.get(storeId);
+      const sellerId = s?.sellerId ?? b?.sellerId ?? storeMap.get(storeId)?.sellerId?.toString() ?? null;
+      const method = methodMap.get(storeId);
+      const payout = this.pickSettlementPayout(payoutsByStore.get(storeId) ?? [], month, to, nextTo);
+      return {
+        storeId,
+        storeName: storeMap.get(storeId)?.name ?? 'Unknown store',
+        sellerId,
+        sellerName: (sellerId && sellerMap.get(sellerId)?.name) || 'Unknown seller',
+        grossSales: s?.grossSales ?? 0,
+        commission: s?.commission ?? 0,
+        net: s?.net ?? 0,
+        availableBalance: b?.availableBalance ?? 0,
+        pendingBalance: b?.pendingBalance ?? 0,
+        payoutMethod: method
+          ? { id: method._id.toString(), type: method.type, bankName: method.bankName ?? null, last4: method.accountLast4 ?? null, status: method.status }
+          : null,
+        payout: payout ? { id: payout._id.toString(), status: payout.status, amount: payout.amount } : null,
+      };
+    }).sort((a, b) => b.availableBalance - a.availableBalance);
+
+    return {
+      month,
+      currency,
+      totals: {
+        sellers: rows.length,
+        grossSales: this.round(rows.reduce((sum, r) => sum + r.grossSales, 0)),
+        commission: this.round(rows.reduce((sum, r) => sum + r.commission, 0)),
+        netOwedToSellers: this.round(rows.reduce((sum, r) => sum + r.net, 0)),
+        payoutsCreated: rows.filter((r) => r.payout !== null).length,
+      },
+      rows,
+    };
+  }
+
+  /**
+   * Admin "run monthly settlement" — for every seller balance (optionally one
+   * currency) whose availableBalance ≥ the platform minimum, with an active
+   * default payout method in that currency and no payout already
+   * pending/processing, sweeps the full available balance into a payout via
+   * the shared `debitAndCreatePayout` path (source 'scheduled_auto', note
+   * "Monthly settlement YYYY-MM"). Payouts then go through the normal admin
+   * approve/reject queue. `month` labels the settlement (defaults to the
+   * previous UTC month — a run on the 1st settles the month just ended).
+   * One store's failure never aborts the run.
+   */
+  async adminRunMonthlySettlement(
+    adminId: string, opts: { currency?: string; month?: string }, ip?: string, userAgent?: string,
+  ) {
+    const month = opts.month ? this.resolveMonth(opts.month).month : this.previousMonthLabel();
+    const note = this.settlementNote(month);
+    const filter: Record<string, any> = {};
+    if (opts.currency) filter.currency = opts.currency.trim().toUpperCase();
+    const balances = await this.balanceModel.find(filter).lean();
+
+    const minimums = new Map<string, number>();
+    const totalsByCurrency = new Map<string, number>();
+    const details: Array<{ storeId: string; currency: string; result: 'created' | 'skipped'; reason?: string; amount?: number; payoutId?: string }> = [];
+    let created = 0;
+    let totalAmount = 0;
+
+    for (const b of balances as any[]) {
+      const currency = b.currency || 'USD';
+      const skip = (reason: string) => details.push({ storeId: b.storeId, currency, result: 'skipped', reason });
+      try {
+        if (!minimums.has(currency)) minimums.set(currency, await this.adminConfigService.getPayoutMinimum(currency));
+        const amount = this.round(b.availableBalance ?? 0);
+        if (amount < minimums.get(currency)! || amount <= 0) { skip('below_minimum'); continue; }
+
+        const [method, inFlight] = await Promise.all([
+          this.methodModel.findOne({ storeId: b.storeId, currency, isDefault: true, status: 'active' }),
+          this.payoutModel.exists({ storeId: b.storeId, currency, status: { $in: ['pending', 'processing'] } }),
+        ]);
+        if (!method) { skip('no_active_default_payout_method'); continue; }
+        if (inFlight) { skip('payout_already_pending'); continue; }
+
+        const payout = await this.withTransaction((session) =>
+          this.debitAndCreatePayout(session, b.storeId, b.sellerId, currency, amount, method, note, 'scheduled_auto'),
+        );
+        created++;
+        totalAmount = this.round(totalAmount + amount);
+        totalsByCurrency.set(currency, this.round((totalsByCurrency.get(currency) ?? 0) + amount));
+        details.push({ storeId: b.storeId, currency, result: 'created', amount, payoutId: (payout as any)._id.toString() });
+
+        this.notificationsService.notify({
+          recipientId: b.sellerId,
+          recipientRole: 'seller',
+          type: NOTIFICATION_TYPES.PAYOUT_AUTO_INITIATED,
+          title: 'Monthly payout initiated',
+          body: `Your ${month} settlement of ${currency} ${amount.toFixed(2)} (net of platform commission) has been queued to your ${method.bankName || method.type} account.`,
+          data: { payoutId: (payout as any)._id.toString(), storeId: b.storeId },
+        }).catch(() => {});
+      } catch (err: any) {
+        skip(err?.message || 'error');
+      }
+    }
+
+    const skipped = details.length - created;
+    const byCurrency = [...totalsByCurrency.entries()].map(([c, amount]) => ({ currency: c, amount }));
+
+    this.activityLogService.log({
+      storeId: 'platform',
+      category: 'finance',
+      action: 'monthly_settlement_run',
+      description: `Monthly settlement ${month}${filter.currency ? ` (${filter.currency})` : ''} run — ${created} payout(s) created, ${skipped} skipped${byCurrency.length ? `; ${byCurrency.map((c) => `${c.currency} ${c.amount.toFixed(2)}`).join(', ')}` : ''}`,
+      actorId: adminId,
+      actorRole: 'admin',
+      targetType: 'payout',
+      ip, userAgent,
+      metadata: { month, currency: filter.currency ?? null, created, skipped, byCurrency },
+    });
+
+    return { month, created, skipped, totalAmount, byCurrency, details };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // ADMIN — platform-wide drill-down + payout lifecycle management.
   // Admins act on any store, so these skip seller-ownership checks (existence
   // only, via `verifyStoreExistsForAdmin`) and skip storeId-scoping on ledger
@@ -1291,6 +1632,17 @@ export class FinanceService {
     const chargesProcessingFee = paymentMethodType === 'stripe';
     const { rate: platformFeeRate, source: feeRateSource } = await this.commissionRulesService.resolveRate(storeId);
     const platformFee   = this.round(saleAmount * platformFeeRate);
+
+    // Cash on delivery: the seller/courier physically holds the buyer's cash,
+    // so nothing is credited to the wallet — only the platform's commission
+    // is recorded, as a debt netted from the next payout.
+    if (paymentMethodType === 'cash_on_delivery') {
+      return this.recordCashCollectedSale(
+        storeId, sellerId, orderId, saleAmount, description, platformSponsoredUSD, campaignId ?? null,
+        currency, platformFee, platformFeeRate, feeRateSource,
+      );
+    }
+
     const processingFee = chargesProcessingFee ? this.round(saleAmount * PAYMENT_PROCESSING_RATE + PAYMENT_PROCESSING_FIXED) : 0;
     const netAmount     = this.round(saleAmount - platformFee - processingFee);
 
@@ -1358,6 +1710,95 @@ export class FinanceService {
           metadata: { campaignId: campaignId ?? null },
         });
         await subsidyTx.save({ session });
+
+        if (campaignId) {
+          await this.db.repositories.campaignModel.findByIdAndUpdate(
+            campaignId,
+            { $inc: { totalPlatformSubsidyUSD: platformSponsoredUSD } },
+            { session },
+          );
+        }
+      }
+    });
+  }
+
+  /**
+   * COD branch of `recordSale`. The buyer's cash never reaches the platform —
+   * the seller (or their courier) keeps it — so crediting the net sale to the
+   * wallet would pay the seller twice. Instead:
+   *  - the 'sale' row is recorded for stats only (metadata.collectedBy='seller',
+   *    status 'completed' — there is nothing to clear, netAmount 0),
+   *  - the platform commission is DEBITED from availableBalance as a debt
+   *    (may go negative → flagged via reevaluateDebtFlag), which the next
+   *    payout nets off automatically since payouts sweep availableBalance,
+   *  - a platform-sponsored discount (folded into `saleAmount`, but never
+   *    collected from the buyer) IS owed to the seller, so it's credited.
+   * totalRevenue/totalFees stay consistent with the card/bank-transfer rails.
+   */
+  private async recordCashCollectedSale(
+    storeId: string, sellerId: string, orderId: string, saleAmount: number, description: string,
+    platformSponsoredUSD: number, campaignId: string | null, currency: string,
+    platformFee: number, platformFeeRate: number, feeRateSource: string,
+  ) {
+    await this.withTransaction(async (session) => {
+      const balance = await this.getOrCreateBalance(storeId, sellerId, currency, session);
+      const balanceBefore = balance.availableBalance;
+
+      balance.availableBalance = this.round(balance.availableBalance - platformFee);
+      balance.totalRevenue     = this.round(balance.totalRevenue + saleAmount);
+      balance.totalFees        = this.round(balance.totalFees + platformFee);
+      const afterCommission = balance.availableBalance;
+      if (platformSponsoredUSD > 0) {
+        balance.availableBalance = this.round(balance.availableBalance + platformSponsoredUSD);
+      }
+      this.reevaluateDebtFlag(balance, 'Platform commission owed on cash-on-delivery orders exceeds the seller\'s available balance');
+      await balance.save({ session });
+
+      // Ledger: sale entry — informational, the cash is with the seller.
+      await new this.txModel({
+        storeId, sellerId, currency,
+        type: 'sale',
+        amount: saleAmount,
+        balanceBefore,
+        balanceAfter: balanceBefore,
+        description: description ? `${description} (cash collected by seller)` : `Sale — Order #${orderId} (cash collected by seller)`,
+        referenceId: orderId,
+        referenceType: 'order',
+        status: 'completed',
+        metadata: {
+          platformFee, processingFee: 0, netAmount: 0, clearingDays: 0,
+          feeRate: platformFeeRate, feeRateSource,
+          paymentMethodType: 'cash_on_delivery', collectedBy: 'seller', commissionOwed: platformFee,
+        },
+      }).save({ session });
+
+      // Ledger: commission debt entry — this one actually moves the balance.
+      await new this.txModel({
+        storeId, sellerId, currency,
+        type: 'fee',
+        amount: -platformFee,
+        balanceBefore,
+        balanceAfter: afterCommission,
+        description: `Platform commission owed on cash order #${orderId} (${(platformFeeRate * 100).toFixed(1)}%)`,
+        referenceId: orderId,
+        referenceType: 'order',
+        status: 'completed',
+        metadata: { platformFee, processingFee: 0, paymentMethodType: 'cash_on_delivery', collectedBy: 'seller' },
+      }).save({ session });
+
+      if (platformSponsoredUSD > 0) {
+        await new this.txModel({
+          storeId, sellerId, currency,
+          type: 'platform_subsidy',
+          amount: platformSponsoredUSD,
+          balanceBefore: afterCommission,
+          balanceAfter: balance.availableBalance,
+          description: `Platform-sponsored sale discount credited (cash order) — Order #${orderId}`,
+          referenceId: orderId,
+          referenceType: 'order',
+          status: 'completed',
+          metadata: { campaignId, collectedBy: 'seller', creditedToWallet: true },
+        }).save({ session });
 
         if (campaignId) {
           await this.db.repositories.campaignModel.findByIdAndUpdate(
@@ -1444,6 +1885,65 @@ export class FinanceService {
     const { balanceAfter, justFlagged } = await this.withTransaction(async (session) => {
       const balance = await this.getOrCreateBalance(storeId, sellerId, currency, session);
       const balanceBefore = balance.availableBalance;
+
+      // COD symmetry: a cash order never credited the wallet (see
+      // recordCashCollectedSale) — the seller hands the cash back by hand —
+      // so the wallet is NOT debited the refund. Instead the commission debt
+      // recorded at sale time is reversed pro-rata to the refunded share
+      // (never more than was originally owed across repeated partial refunds).
+      const cashSale = referenceType === 'order'
+        ? await this.txModel.findOne(
+            { storeId, currency, referenceId, referenceType: 'order', type: 'sale', 'metadata.collectedBy': 'seller' },
+            null, { session },
+          )
+        : null;
+      if (cashSale) {
+        const commissionOwed = Number(cashSale.metadata?.platformFee ?? 0);
+        const priorReversals = await this.txModel
+          .find({ storeId, currency, referenceId, type: 'adjustment', 'metadata.codCommissionReversal': true }, null, { session })
+          .lean();
+        const alreadyReversed = (priorReversals as any[]).reduce((s, t) => s + (t.amount ?? 0), 0);
+        const share = cashSale.amount > 0 ? Math.min(1, refundAmount / cashSale.amount) : 1;
+        const reversal = this.round(Math.max(0, Math.min(commissionOwed * share, commissionOwed - alreadyReversed)));
+
+        balance.availableBalance = this.round(balance.availableBalance + reversal);
+        balance.totalRefunds = this.round(balance.totalRefunds + refundAmount);
+        balance.totalFees = this.round(balance.totalFees - reversal);
+        this.reevaluateDebtFlag(balance);
+        await balance.save({ session });
+
+        await new this.txModel({
+          storeId, sellerId, currency,
+          type: 'refund',
+          amount: -refundAmount,
+          balanceBefore,
+          balanceAfter: balanceBefore,
+          description: opts?.description
+            ? `${opts.description} (cash order — returned by seller, wallet not debited)`
+            : `Refund — Order #${referenceId} (cash order — returned by seller, wallet not debited)`,
+          referenceId,
+          referenceType,
+          status: 'completed',
+          metadata: { collectedBy: 'seller', walletDebit: 0 },
+        }).save({ session });
+
+        if (reversal > 0) {
+          await new this.txModel({
+            storeId, sellerId, currency,
+            type: 'adjustment',
+            amount: reversal,
+            balanceBefore,
+            balanceAfter: balance.availableBalance,
+            description: `Platform commission reversed on refunded cash order #${referenceId}`,
+            referenceId,
+            referenceType,
+            status: 'completed',
+            metadata: { codCommissionReversal: true, collectedBy: 'seller', refundAmount },
+          }).save({ session });
+        }
+
+        return { balanceAfter: balance.availableBalance, justFlagged: false };
+      }
 
       // Deduct from available first, then pending if not enough — allowed to
       // go negative (that negative number IS the seller's debt against

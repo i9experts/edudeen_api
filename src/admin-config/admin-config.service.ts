@@ -89,6 +89,12 @@ export class AdminConfigService {
     return currency === 'PKR' ? config.payoutConfig?.minPayoutPKR ?? 1500 : config.payoutConfig?.minPayoutUSD ?? 5;
   }
 
+  /** Platform payout policy — the frequency new seller payout schedules start on ('monthly' unless an admin changed it). */
+  async getPayoutFrequency(): Promise<string> {
+    const config = await this.getRawConfig();
+    return config.payoutConfig?.payoutFrequency ?? 'monthly';
+  }
+
   /** Used by checkout (to decide whether to offer the option) and by the manual-payments module (bank details + FX rate shown to the buyer). */
   async getManualPaymentConfig() {
     const config = await this.getRawConfig();

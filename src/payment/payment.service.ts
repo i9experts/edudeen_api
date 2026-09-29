@@ -62,6 +62,18 @@ export class PaymentService {
   }
 
   /**
+   * Stripe Connect destination-charge routing switch — env
+   * `STRIPE_CONNECT_DIRECT_CHARGES`, off unless explicitly 'true'. When off
+   * the platform collects every payment and pays sellers from the internal
+   * ledger (see FinanceService.processScheduledPayouts); the Connect path in
+   * `initiatePayment` is kept intact behind this flag.
+   */
+  private get connectDirectChargesEnabled(): boolean {
+    const raw = this.configService.get<string>('STRIPE_CONNECT_DIRECT_CHARGES');
+    return String(raw ?? '').trim().toLowerCase() === 'true';
+  }
+
+  /**
    * Issues a real Stripe refund for a specific amount against an already-
    * completed PaymentTransaction — used by the admin/seller-initiated
    * refund-request flow (RefundRequestService), which needs a targeted,
@@ -284,10 +296,15 @@ export class PaymentService {
     // would be a confusing mix, so Connect only ever applies to a 'full'
     // charge). See StripeConnectService/OrdersService.recordSale's gate on
     // SellerOrder.settledViaConnect for the other half of this feature.
+    //
+    // OFF by default (platform-collects-all marketplace model): unless
+    // STRIPE_CONNECT_DIRECT_CHARGES=true, every charge settles to the
+    // platform's own Stripe account, `settledViaConnect` stays false, and the
+    // sale flows through the internal ledger → monthly payout like any other.
     const checkoutStoreIds = [...new Set(checkout.items.map((i: any) => i.storeId))];
     let connectAccountId: string | null = null;
     let applicationFeeAmountCents = 0;
-    if (!useSplit && checkoutStoreIds.length === 1) {
+    if (this.connectDirectChargesEnabled && !useSplit && checkoutStoreIds.length === 1) {
       connectAccountId = await this.stripeConnectService.getEligibleConnectAccountForStore(checkoutStoreIds[0]);
       if (connectAccountId) {
         const { rate } = await this.commissionRulesService.resolveRate(checkoutStoreIds[0]);

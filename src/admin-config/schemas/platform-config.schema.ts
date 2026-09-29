@@ -42,6 +42,8 @@ export class AiConfig {
 }
 export const AiConfigSchema = SchemaFactory.createForClass(AiConfig);
 
+export const PAYOUT_FREQUENCIES = ['daily', 'weekly', 'biweekly', 'monthly', 'manual'] as const;
+
 @Schema({ _id: false })
 export class PayoutConfig {
   // Minimum available-balance amount required to gate both an on-demand
@@ -51,6 +53,11 @@ export class PayoutConfig {
   // SellerBalance.currency) with very different order-of-magnitude minimums.
   @Prop({ type: Number, default: 5 }) minPayoutUSD: number;
   @Prop({ type: Number, default: 1500 }) minPayoutPKR: number;
+  // Platform payout policy — the frequency every NEW seller payout schedule
+  // starts on (see FinanceService.getOrCreateSchedule). The platform collects
+  // all buyer payments and settles sellers monthly by default; existing
+  // schedules are never rewritten by changing this.
+  @Prop({ type: String, enum: PAYOUT_FREQUENCIES, default: 'monthly' }) payoutFrequency: string;
 }
 export const PayoutConfigSchema = SchemaFactory.createForClass(PayoutConfig);
 

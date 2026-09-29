@@ -8,7 +8,14 @@ async function bootstrap() {
   // rawBody: Stripe webhook signature verification (payment + subscriptions
   // webhook controllers) needs the exact unparsed request bytes on
   // `req.rawBody` — without it every webhook is rejected with a 400.
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  // In production only errors/warnings are logged — the per-route
+  // "Mapped {...} route" startup lines (700+) otherwise blow through
+  // Railway's 500 logs/sec limit and real messages get dropped.
+  const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT;
+  const app = await NestFactory.create(AppModule, {
+    rawBody: true,
+    logger: isProduction ? ['error', 'warn'] : ['error', 'warn', 'log', 'debug', 'verbose'],
+  });
 
   app.use(cookieParser());
 
