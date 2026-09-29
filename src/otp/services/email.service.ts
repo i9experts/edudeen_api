@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
+import { sendMail as sendMailUtil } from 'src/common/mailer.util';
 
 @Injectable()
 export class EmailService {
@@ -31,17 +32,13 @@ export class EmailService {
   /** Generic transactional email — used by any module (e.g. subscription notifications). */
   async sendMail(to: string, subject: string, html: string): Promise<boolean> {
     try {
-      const info = await this.transporter.sendMail({
-        from: `"${process.env.APP_NAME || 'Your App'}" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
-        to,
-        subject,
-        html,
-      });
-
-      console.log('✅ Email sent:', info.messageId);
+      // Shared outbound path (Brevo HTTPS API when BREVO_API_KEY is set,
+      // SMTP otherwise) — see common/mailer.util.ts.
+      const id = await sendMailUtil({ to, subject, html });
+      console.log('✅ Email sent:', id);
       return true;
-    } catch (error) {
-      console.error('❌ Error sending email:', error);
+    } catch (error: any) {
+      console.error('❌ Error sending email:', error?.code ?? '', error?.message ?? error);
       return false;
     }
   }
