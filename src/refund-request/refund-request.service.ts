@@ -70,14 +70,28 @@ export class RefundRequestService {
     // refund can't be requested for an undelivered order, a digital item
     // (non-returnable by nature), or an already-cancelled item.
     for (const item of items) {
+      if (item.status === 'cancelled') {
+        throw new BadRequestException(`Cancelled item "${item.name}" cannot be refunded`);
+      }
       if (item.type === 'digital') {
-        throw new BadRequestException(`"${item.name}" is a digital product — cannot be returned`);
+        // Digital goods: delivered at payment, so there is no "delivered"
+        // gate. A buyer may request a refund only if they never downloaded
+        // the file (downloads are always counted — see
+        // OrdersService.consumeDownload); a seller or admin can refund at
+        // any time, e.g. for a broken or misdescribed resource. Approval
+        // marks the item 'refunded', which revokes download access.
+        if (!order.isPaid) {
+          throw new BadRequestException(`"${item.name}" has not been paid for`);
+        }
+        if (role === 'user' && (item.downloadCount ?? 0) > 0) {
+          throw new BadRequestException(
+            `"${item.name}" has already been downloaded — please contact the seller or support for help`,
+          );
+        }
+        continue;
       }
       if (!['delivered', 'completed'].includes(sellerOrder.status)) {
         throw new BadRequestException(`"${item.name}" is not yet delivered`);
-      }
-      if (item.status === 'cancelled') {
-        throw new BadRequestException(`Cancelled item "${item.name}" cannot be returned`);
       }
     }
 
@@ -282,8 +296,8 @@ export class RefundRequestService {
       }
     }
 
-    // Refunds here are physical-only (see createRequest) — the returned
-    // goods go back into stock.
+    // Returned physical goods go back into stock; digital items have no
+    // stock (their access is revoked by the 'refunded' status above).
     for (const item of items) {
       if (item.type === 'physical' && item.variantId) {
         await this.databaseService.repositories.productVariantModel.updateOne(

@@ -1,34 +1,3 @@
-// import { Controller, Get, Put, Param, Req, UseGuards } from '@nestjs/common';
-// import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-// import { RolesGuard } from '../auth/guards/roles.guard';
-// import { OrdersService } from './orders.service';
-
-// @Controller('api/orders')
-// export class OrdersController {
-//   constructor(private readonly ordersService: OrdersService) {}
-
-//   @UseGuards(JwtAuthGuard, RolesGuard)
-//   @Get('myOrders')
-//   async getMyOrders(@Req() req: any) {
-//     const { userId } = req.user;
-//     return this.ordersService.getMyOrders(userId);
-//   }
-
-//   @UseGuards(JwtAuthGuard, RolesGuard)
-//   @Get(':orderId')
-//   async getOrderById(@Req() req: any, @Param('orderId') orderId: string) {
-//     const { userId } = req.user;
-//     return this.ordersService.getOrderById(userId, orderId);
-//   }
-
-//   @UseGuards(JwtAuthGuard, RolesGuard)
-//   @Put('cancel/:orderId')
-//   async cancelOrder(@Req() req: any, @Param('orderId') orderId: string) {
-//     const { userId } = req.user;
-//     return this.ordersService.cancelOrder(userId, orderId);
-//   }
-// }
-
 import {
   Controller,
   Get,
@@ -46,6 +15,15 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { OrdersService } from './orders.service';
+
+/** RFC 6266 / 5987 filename: an ASCII fallback plus a UTF-8 encoded name,
+ *  so quotes, CR/LF or non-Latin (e.g. Urdu/Arabic) file names can neither
+ *  break nor inject response headers. */
+function contentDisposition(fileName: string): string {
+  const name = String(fileName || 'download');
+  const ascii = name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
 
 @Controller('api/orders')
 export class OrdersController {
@@ -188,14 +166,16 @@ export class OrdersController {
   // Step 2: yeh URL browser mein paste karo — seedha download (no auth header)
   @Get('download-file')
   async downloadFile(@Res() res: Response, @Query('token') token: string) {
-    const { buffer, fileName, mimeType } =
+    const { stream, fileName, mimeType, contentLength } =
       await this.ordersService.downloadByToken(token);
     res.set({
       'Content-Type': mimeType,
-      'Content-Disposition': `attachment; filename="${fileName}"`,
-      'Content-Length': buffer.length,
+      'Content-Disposition': contentDisposition(fileName),
+      'X-Content-Type-Options': 'nosniff',
+      ...(contentLength ? { 'Content-Length': String(contentLength) } : {}),
     });
-    res.end(buffer);
+    stream.on('error', () => res.destroy());
+    stream.pipe(res);
   }
 
   // stamped PDF via token — browser direct download (no JWT header)
@@ -205,7 +185,7 @@ export class OrdersController {
       await this.ordersService.streamStampedPdfByToken(token);
     res.set({
       'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${fileName}"`,
+      'Content-Disposition': contentDisposition(fileName),
       'Content-Length': buffer.length,
     });
     res.end(buffer);
@@ -234,7 +214,7 @@ export class OrdersController {
 
     res.set({
       'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${fileName}"`,
+      'Content-Disposition': contentDisposition(fileName),
       'Content-Length': buffer.length,
     });
 

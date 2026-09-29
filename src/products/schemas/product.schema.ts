@@ -210,6 +210,12 @@ export class Product {
   @Prop({ default: false })
   isDelete: boolean;
 
+  // Set only by an admin takedown (policy / copyright). Distinguishes it from
+  // a seller deleting their own listing: past buyers keep download access
+  // after a seller delete, but not after an admin takedown.
+  @Prop({ default: false })
+  removedByAdmin: boolean;
+
   // SEO overrides — see seo/schemas/seo-meta.schema.ts. Absent/empty until a
   // seller edits it or SeoAiService generates a suggestion; falls back to
   // category → store → global template via SeoResolutionService.

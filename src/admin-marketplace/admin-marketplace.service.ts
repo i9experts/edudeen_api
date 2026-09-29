@@ -151,7 +151,7 @@ export class AdminMarketplaceService {
 
   async remove(id: string, meta: AuditMeta) {
     const product = await this.findProductOrThrow(id);
-    await this.r.productModel.findByIdAndUpdate(id, { $set: { isDelete: true, status: 'inactive' } });
+    await this.r.productModel.findByIdAndUpdate(id, { $set: { isDelete: true, status: 'inactive', removedByAdmin: true } });
     this.log('listing_removed', `Listing "${product.name}" removed by admin`, meta, id);
     return { success: true, message: 'Listing removed' };
   }

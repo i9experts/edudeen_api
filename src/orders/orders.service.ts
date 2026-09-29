@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
+import { Readable } from 'stream';
 import { DatabaseService } from 'src/database/databaseservice';
 import { UploadService } from 'src/upload/upload.service';
 import { JwtService } from '@nestjs/jwt';
@@ -360,124 +361,6 @@ export class OrdersService {
     };
   }
 
-  async getDownloadUrls(userId: string, orderId: string, productId: string) {
-    if (!orderId) throw new BadRequestException('orderId is required');
-    if (!productId) throw new BadRequestException('productId is required');
-
-    const { orderModel, productModel } = this.databaseService.repositories;
-
-    // 1. order fetch + ownership
-    const order = await orderModel.findOne({ _id: orderId, isDelete: false });
-    if (!order) throw new NotFoundException('Order not found');
-    if (order.userId !== userId) throw new ForbiddenException('Unauthorized');
-
-    // 2. payment check
-    if (!order.isPaid) throw new BadRequestException('Order is not paid yet');
-
-    // 3. product is in this order
-    let targetItem: any = null;
-
-    for (const so of order.sellerOrders) {
-      for (const item of so.items) {
-        if (item.productId === productId) {
-          targetItem = item;
-          break;
-        }
-      }
-    }
-
-    if (!targetItem)
-      throw new BadRequestException('Product not found in this order');
-    if (targetItem.type !== 'digital')
-      throw new BadRequestException('This is not a digital product');
-
-    // 4. product fetch
-    const product = await productModel.findOne({
-      _id: productId,
-      isDelete: false,
-    });
-    if (!product) throw new NotFoundException('Product not found');
-    if (!product.digital?.files?.length)
-      throw new BadRequestException('No digital files found for this product');
-
-    // 5. link expiry check
-    if (product.digital.linkExpiryDays) {
-      const paidAt = order.paidAt;
-      if (paidAt) {
-        const expiryDate = new Date(paidAt);
-        expiryDate.setDate(
-          expiryDate.getDate() + product.digital.linkExpiryDays,
-        );
-        if (new Date() > expiryDate) {
-          throw new BadRequestException(
-            `Download link expired on ${expiryDate.toDateString()}`,
-          );
-        }
-      }
-    }
-
-    // 6. download limit check (sirf block karo — count downloadByToken mein increment hoga)
-    const downloadLimit = product.digital.downloadLimit;
-    if (downloadLimit !== 'unlimited') {
-      const limitNum = parseInt(downloadLimit);
-      if (targetItem.downloadCount >= limitNum) {
-        throw new BadRequestException(
-          `Download limit reached (${limitNum}/${limitNum})`,
-        );
-      }
-    }
-
-    // 7. generate tokens for all files
-    const files = product.digital.files;
-    const isPdfStamping = product.digital.pdfStampingEnabled;
-
-    const result = files.map((file: any, index: number) => {
-      const resolvedMimeType = this.uploadService.resolveMimeType(
-        file.name,
-        file.mimeType ?? 'application/octet-stream',
-      );
-      const isPdf = resolvedMimeType === 'application/pdf';
-
-      const token = this.jwtService.sign(
-        { userId, orderId, productId, fileIndex: index },
-        {
-          secret: this.configService.get<string>('JWT_SECRET'),
-          expiresIn: '10m',
-        },
-      );
-
-      return {
-        index,
-        fileName: file.name,
-        mimeType: resolvedMimeType,
-        size: file.size,
-        type: isPdf && isPdfStamping ? 'stamped' : 'download',
-        endpoint:
-          isPdf && isPdfStamping
-            ? '/api/orders/stream-pdf-token'
-            : '/api/orders/download-file',
-        token,
-        expiresIn: '10 minutes',
-      };
-    });
-
-    const remaining =
-      product.digital.downloadLimit === 'unlimited'
-        ? 'unlimited'
-        : `${parseInt(product.digital.downloadLimit) - (targetItem.downloadCount + 1)} remaining`;
-
-    return {
-      success: true,
-      message: 'Download links generated',
-      data: {
-        files: result,
-        downloadCount: targetItem.downloadCount + 1,
-        downloadLimit: product.digital.downloadLimit,
-        remaining,
-      },
-    };
-  }
-
   async updateSellerOrderStatus(
     sellerId: string,
     body: any,
@@ -763,166 +646,6 @@ export class OrdersService {
       .catch(() => {});
 
     return { success: true, message: 'Order marked as paid' };
-  }
-
-  async downloadFile(
-    userId: string,
-    orderId: string,
-    productId: string,
-    fileIndex: number,
-  ) {
-    const { orderModel, productModel } = this.databaseService.repositories;
-
-    const order = await orderModel.findOne({ _id: orderId, isDelete: false });
-    if (!order) throw new NotFoundException('Order not found');
-    if (order.userId !== userId) throw new ForbiddenException('Unauthorized');
-    if (!order.isPaid) throw new BadRequestException('Order is not paid');
-
-    const product = await productModel.findOne({
-      _id: productId,
-      isDelete: false,
-    });
-    if (!product?.digital?.files?.length)
-      throw new NotFoundException('Product files not found');
-
-    const file = product.digital.files[fileIndex];
-    if (!file) throw new NotFoundException('File not found');
-
-    const mimeType = this.uploadService.resolveMimeType(
-      file.name,
-      file.mimeType ?? 'application/octet-stream',
-    );
-    const resourceType = mimeType.startsWith('video/')
-      ? 'video'
-      : mimeType.startsWith('image/')
-        ? 'image'
-        : 'raw';
-    const signedUrl = this.uploadService.generateSignedUrl(
-      file.url,
-      resourceType,
-      300,
-    );
-
-    const response = await fetch(signedUrl);
-    if (!response.ok)
-      throw new BadRequestException('Failed to fetch file from storage');
-
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    return { buffer, fileName: file.name, mimeType };
-  }
-
-  async streamStampedPdfByToken(token: string) {
-    let payload: any;
-    try {
-      payload = this.jwtService.verify(token, {
-        secret: this.configService.get<string>('JWT_SECRET'),
-      });
-    } catch {
-      throw new BadRequestException('Download link expired or invalid');
-    }
-    return this.streamStampedPdf(
-      payload.userId,
-      payload.orderId,
-      payload.productId,
-      payload.fileIndex,
-    );
-  }
-
-  async streamStampedPdf(
-    userId: string,
-    orderId: string,
-    productId: string,
-    fileIndex: number,
-  ) {
-    const { orderModel, productModel, userModel } =
-      this.databaseService.repositories;
-
-    const order = await orderModel.findOne({ _id: orderId, isDelete: false });
-    if (!order) throw new NotFoundException('Order not found');
-    if (order.userId !== userId) throw new ForbiddenException('Unauthorized');
-    if (!order.isPaid) throw new BadRequestException('Order is not paid');
-
-    const product = await productModel.findOne({
-      _id: productId,
-      isDelete: false,
-    });
-    if (!product?.digital?.files?.length)
-      throw new NotFoundException('Product files not found');
-
-    const file = product.digital.files[fileIndex];
-    if (!file) throw new NotFoundException('File not found');
-
-    const user = await userModel
-      .findOne({ _id: userId })
-      .select('email')
-      .lean();
-    const userEmail = (user as any)?.email || userId;
-
-    const stampedBuffer = await this.uploadService.stampPdf(
-      file.url,
-      userEmail,
-      order.orderNumber,
-    );
-
-    return {
-      buffer: stampedBuffer,
-      fileName: file.name,
-      mimeType: 'application/pdf',
-    };
-  }
-
-  async getDownloadLink(
-    userId: string,
-    orderId: string,
-    productId: string,
-    fileIndex: number,
-  ) {
-    const { orderModel, productModel } = this.databaseService.repositories;
-
-    const order = await orderModel.findOne({ _id: orderId, isDelete: false });
-    if (!order) throw new NotFoundException('Order not found');
-    if (order.userId !== userId) throw new ForbiddenException('Unauthorized');
-    if (!order.isPaid) throw new BadRequestException('Order is not paid yet');
-
-    const product = await productModel.findOne({
-      _id: productId,
-      isDelete: false,
-    });
-    if (!product?.digital?.files?.length)
-      throw new NotFoundException('Product files not found');
-
-    const file = product.digital.files[fileIndex];
-    if (!file) throw new NotFoundException('File not found at this index');
-
-    const token = this.jwtService.sign(
-      { userId, orderId, productId, fileIndex },
-      {
-        secret: this.configService.get<string>('JWT_SECRET'),
-        expiresIn: '10m',
-      },
-    );
-
-    const resolvedMimeType = this.uploadService.resolveMimeType(
-      file.name,
-      file.mimeType ?? 'application/octet-stream',
-    );
-    const isPdfStamped =
-      resolvedMimeType === 'application/pdf' &&
-      product.digital?.pdfStampingEnabled;
-
-    return {
-      success: true,
-      data: {
-        token,
-        endpoint: isPdfStamped
-          ? '/api/orders/stream-pdf-token'
-          : '/api/orders/download-file',
-        fileName: file.name,
-        expiresIn: '10 minutes',
-      },
-    };
   }
 
   async cancelOrder(userId: string, orderId: string, body: any) {
@@ -1597,7 +1320,117 @@ export class OrdersService {
     };
   }
 
-  async downloadByToken(token: string) {
+
+  // ───────────────────────── Digital delivery ─────────────────────────
+  //
+  // Every download path (signed-URL list, single link, token redeem, stamped
+  // PDF with or without token) goes through resolveDigitalAccess(), so the
+  // rules can't drift apart again. Previously the stamped-PDF path skipped
+  // the download limit and link expiry entirely, token redemption skipped
+  // expiry, and nothing checked whether the item had been cancelled/refunded.
+
+  private static readonly DOWNLOAD_TOKEN_TTL = '10m';
+
+  private async resolveDigitalAccess(
+    userId: string,
+    orderId: string,
+    productId: string,
+    fileIndex?: number,
+  ) {
+    if (!orderId) throw new BadRequestException('orderId is required');
+    if (!productId) throw new BadRequestException('productId is required');
+    const { orderModel, productModel } = this.databaseService.repositories;
+
+    const order = await orderModel.findOne({ _id: orderId, isDelete: false });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.userId !== userId) throw new ForbiddenException('Unauthorized');
+    if (!order.isPaid) throw new BadRequestException('Order is not paid yet');
+
+    let soIndex = -1;
+    let itemIndex = -1;
+    order.sellerOrders.forEach((so: any, si: number) => {
+      so.items.forEach((it: any, ii: number) => {
+        if (soIndex === -1 && it.productId === productId && it.type === 'digital') {
+          soIndex = si;
+          itemIndex = ii;
+        }
+      });
+    });
+    if (soIndex === -1)
+      throw new BadRequestException('Digital product not found in this order');
+    const item: any = order.sellerOrders[soIndex].items[itemIndex];
+
+    // Refund / cancel revokes access — otherwise "buy, download, refund" keeps the file.
+    if (['cancelled', 'refunded'].includes(item.status)) {
+      throw new ForbiddenException('This item was cancelled or refunded — access has been revoked');
+    }
+
+    // A purchase stays downloadable even if the seller later deletes the
+    // listing (standard on TPT/Gumroad/Udemy) — but not after an admin
+    // takedown (policy/copyright), which is recorded separately.
+    const product = await productModel.findOne({ _id: productId });
+    if (!product || (product as any).removedByAdmin)
+      throw new NotFoundException('This product is no longer available');
+    const files = product.digital?.files ?? [];
+    if (!files.length)
+      throw new BadRequestException('No digital files found for this product');
+
+    if (product.digital?.linkExpiryDays && order.paidAt) {
+      const expiry = new Date(order.paidAt);
+      expiry.setDate(expiry.getDate() + product.digital.linkExpiryDays);
+      if (new Date() > expiry) {
+        throw new BadRequestException(`Download access expired on ${expiry.toDateString()}`);
+      }
+    }
+
+    const limitRaw = product.digital?.downloadLimit;
+    const limit = limitRaw && limitRaw !== 'unlimited' ? parseInt(limitRaw, 10) : null;
+    const used = item.downloadCount ?? 0;
+    if (limit !== null && used >= limit) {
+      throw new BadRequestException(`Download limit reached (${limit}/${limit})`);
+    }
+
+    let file: any = null;
+    if (fileIndex !== undefined) {
+      if (!Number.isInteger(fileIndex) || fileIndex < 0) throw new BadRequestException('Invalid file index');
+      file = files[fileIndex];
+      if (!file) throw new NotFoundException('File not found');
+    }
+
+    return { order, product, item, soIndex, itemIndex, limit, used, file, files };
+  }
+
+  /** Atomically counts one download. Always counts (even when unlimited) so
+   *  refund eligibility can tell whether the buyer ever opened the file; the
+   *  `$lt` filter makes the limit race-free under concurrent requests. */
+  private async consumeDownload(
+    orderId: string,
+    soIndex: number,
+    itemIndex: number,
+    limit: number | null,
+  ) {
+    const path = `sellerOrders.${soIndex}.items.${itemIndex}.downloadCount`;
+    const filter: any = { _id: orderId };
+    if (limit !== null) filter[path] = { $lt: limit };
+    const res = await this.databaseService.repositories.orderModel.updateOne(filter, {
+      $inc: { [path]: 1 },
+    });
+    if (limit !== null && res.modifiedCount === 0) {
+      throw new BadRequestException(`Download limit reached (${limit}/${limit})`);
+    }
+  }
+
+  private signDownloadToken(userId: string, orderId: string, productId: string, fileIndex: number) {
+    return this.jwtService.sign(
+      { typ: 'download', userId, orderId, productId, fileIndex },
+      {
+        secret: this.configService.get<string>('JWT_SECRET'),
+        expiresIn: OrdersService.DOWNLOAD_TOKEN_TTL,
+      },
+    );
+  }
+
+  private verifyDownloadToken(token: string) {
     let payload: any;
     try {
       payload = this.jwtService.verify(token, {
@@ -1606,80 +1439,114 @@ export class OrdersService {
     } catch {
       throw new BadRequestException('Download link expired or invalid');
     }
+    // Refuse access/refresh tokens being replayed as download tokens.
+    if (payload?.typ !== 'download') {
+      throw new BadRequestException('Download link expired or invalid');
+    }
+    return payload as { userId: string; orderId: string; productId: string; fileIndex: number };
+  }
 
-    const { userId, orderId, productId, fileIndex } = payload;
-    const { orderModel, productModel } = this.databaseService.repositories;
+  private isStampedPdf(product: any, file: any): boolean {
+    const mime = this.uploadService.resolveMimeType(file.name, file.mimeType ?? 'application/octet-stream');
+    return mime === 'application/pdf' && !!product.digital?.pdfStampingEnabled;
+  }
 
-    const order = await orderModel.findOne({ _id: orderId, isDelete: false });
-    if (!order) throw new NotFoundException('Order not found');
-    if (order.userId !== userId) throw new ForbiddenException('Unauthorized');
-    if (!order.isPaid) throw new BadRequestException('Order is not paid');
+  // signed download tokens for every file of a purchased product (does not count a download)
+  async getDownloadUrls(userId: string, orderId: string, productId: string) {
+    const { product, limit, used, files } = await this.resolveDigitalAccess(userId, orderId, productId);
 
-    const product = await productModel.findOne({
-      _id: productId,
-      isDelete: false,
+    const result = files.map((file: any, index: number) => {
+      const mimeType = this.uploadService.resolveMimeType(file.name, file.mimeType ?? 'application/octet-stream');
+      const stamped = this.isStampedPdf(product, file);
+      return {
+        index,
+        fileName: file.name,
+        mimeType,
+        size: file.size,
+        type: stamped ? 'stamped' : 'download',
+        endpoint: stamped ? '/api/orders/stream-pdf-token' : '/api/orders/download-file',
+        token: this.signDownloadToken(userId, orderId, productId, index),
+        expiresIn: '10 minutes',
+      };
     });
-    if (!product?.digital?.files?.length)
-      throw new NotFoundException('Product files not found');
 
-    const file = product.digital.files[fileIndex];
-    if (!file) throw new NotFoundException('File not found');
+    return {
+      success: true,
+      message: 'Download links generated',
+      data: {
+        files: result,
+        downloadCount: used,
+        downloadLimit: product.digital?.downloadLimit ?? 'unlimited',
+        remaining: limit === null ? 'unlimited' : `${Math.max(limit - used, 0)} remaining`,
+      },
+    };
+  }
 
-    // download limit check
-    const downloadLimit = product.digital?.downloadLimit;
-    if (downloadLimit && downloadLimit !== 'unlimited') {
-      const limitNum = parseInt(downloadLimit);
+  async getDownloadLink(userId: string, orderId: string, productId: string, fileIndex: number) {
+    const { product, file } = await this.resolveDigitalAccess(userId, orderId, productId, fileIndex);
+    const stamped = this.isStampedPdf(product, file);
+    return {
+      success: true,
+      data: {
+        token: this.signDownloadToken(userId, orderId, productId, fileIndex),
+        endpoint: stamped ? '/api/orders/stream-pdf-token' : '/api/orders/download-file',
+        fileName: file.name,
+        expiresIn: '10 minutes',
+      },
+    };
+  }
 
-      // order mein is product ka downloadCount nikalo
-      let currentCount = 0;
-      let sellerOrderIndex = -1;
-      let itemIndex = -1;
-
-      for (let si = 0; si < order.sellerOrders.length; si++) {
-        const so = order.sellerOrders[si];
-        for (let ii = 0; ii < so.items.length; ii++) {
-          if (so.items[ii].productId === productId) {
-            currentCount = so.items[ii].downloadCount || 0;
-            sellerOrderIndex = si;
-            itemIndex = ii;
-            break;
-          }
-        }
-      }
-
-      if (currentCount >= limitNum) {
-        throw new BadRequestException(
-          `Download limit reached (${limitNum}/${limitNum})`,
-        );
-      }
-
-      // count increment
-      const updatePath = `sellerOrders.${sellerOrderIndex}.items.${itemIndex}.downloadCount`;
-      await orderModel.findByIdAndUpdate(orderId, {
-        $inc: { [updatePath]: 1 },
-      });
+  /** Redeems a download token for a non-stamped file. Returns a stream so
+   *  large lesson videos / zip bundles are never buffered in server memory. */
+  async downloadByToken(token: string) {
+    const { userId, orderId, productId, fileIndex } = this.verifyDownloadToken(token);
+    const access = await this.resolveDigitalAccess(userId, orderId, productId, Number(fileIndex));
+    const { product, file } = access;
+    if (this.isStampedPdf(product, file)) {
+      // Stamped PDFs must go through the stamping endpoint, never raw.
+      throw new BadRequestException('Use the stamped PDF download endpoint for this file');
     }
 
-    const mimeType = this.uploadService.resolveMimeType(
-      file.name,
-      file.mimeType ?? 'application/octet-stream',
-    );
-    const resourceType = mimeType.startsWith('video/')
-      ? 'video'
-      : mimeType.startsWith('image/')
-        ? 'image'
-        : 'raw';
-    const signedUrl = this.uploadService.generateSignedUrl(
-      file.url,
-      resourceType,
-      300,
-    );
+    const mimeType = this.uploadService.resolveMimeType(file.name, file.mimeType ?? 'application/octet-stream');
+    const resourceType = mimeType.startsWith('video/') ? 'video' : mimeType.startsWith('image/') ? 'image' : 'raw';
+    const signedUrl = this.uploadService.generateSignedUrl(file.url, resourceType, 300);
 
     const response = await fetch(signedUrl);
-    if (!response.ok)
+    if (!response.ok || !response.body)
       throw new BadRequestException('Failed to fetch file from storage');
 
-    const arrayBuffer = await response.arrayBuffer();
-    return { buffer: Buffer.from(arrayBuffer), fileName: file.name, mimeType };
+    await this.consumeDownload(orderId, access.soIndex, access.itemIndex, access.limit);
+
+    const lengthHeader = response.headers.get('content-length');
+    return {
+      stream: Readable.fromWeb(response.body as any),
+      fileName: file.name as string,
+      mimeType,
+      contentLength: lengthHeader ? Number(lengthHeader) : null,
+    };
   }
+
+  async streamStampedPdfByToken(token: string) {
+    const { userId, orderId, productId, fileIndex } = this.verifyDownloadToken(token);
+    return this.streamStampedPdf(userId, orderId, productId, Number(fileIndex));
+  }
+
+  async streamStampedPdf(userId: string, orderId: string, productId: string, fileIndex: number) {
+    const access = await this.resolveDigitalAccess(userId, orderId, productId, fileIndex);
+    const { order, file } = access;
+    const mime = this.uploadService.resolveMimeType(file.name, file.mimeType ?? 'application/octet-stream');
+    if (mime !== 'application/pdf') throw new BadRequestException('This file is not a PDF');
+
+    const user = await this.databaseService.repositories.userModel
+      .findOne({ _id: userId })
+      .select('email')
+      .lean();
+    const userEmail = (user as any)?.email || userId;
+
+    const stampedBuffer = await this.uploadService.stampPdf(file.url, userEmail, order.orderNumber);
+    await this.consumeDownload(orderId, access.soIndex, access.itemIndex, access.limit);
+
+    return { buffer: stampedBuffer, fileName: file.name as string, mimeType: 'application/pdf' };
+  }
+
 }

@@ -149,7 +149,7 @@ export class AdminModerationService {
     const report = await this.findReportOrThrow(id);
 
     if (report.targetType === 'listing') {
-      await this.r.productModel.findByIdAndUpdate(report.targetId, { $set: { isDelete: true, status: 'inactive' } });
+      await this.r.productModel.findByIdAndUpdate(report.targetId, { $set: { isDelete: true, status: 'inactive', removedByAdmin: true } });
     } else if (report.targetType === 'seller') {
       // Mirrors AdminUsersService.suspend's cascade: suspending a seller
       // here must also suspend their stores and revoke their session,
