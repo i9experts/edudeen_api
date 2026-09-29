@@ -20,11 +20,12 @@ import { PurchaseAddonDto } from './dto/purchase-addon.dto';
  */
 const ADDON_PRICING: Record<string, { priceUSD: number; recurring: boolean; unitLabel: string }> = {
   extra_ai_credits: { priceUSD: 10, recurring: false, unitLabel: '500 credits' },
-  extra_staff_seat: { priceUSD: 5, recurring: true, unitLabel: 'seat/month' },
   priority_marketplace_placement: { priceUSD: 29, recurring: true, unitLabel: 'month' },
   advanced_tax_compliance: { priceUSD: 15, recurring: true, unitLabel: 'month' },
   sms_notifications: { priceUSD: 5, recurring: true, unitLabel: 'month (base enablement fee)' },
 };
+
+const RETIRED_ADDON_TYPES = new Set(['extra_staff_seat']);
 
 @Injectable()
 export class PlatformAddonsService {
@@ -167,6 +168,14 @@ export class PlatformAddonsService {
 
     let succeeded = 0, failed = 0;
     for (const addon of due) {
+      // Retired add-on (POS staff seats): never charge again — cancel it.
+      if (RETIRED_ADDON_TYPES.has(addon.addonType)) {
+        addon.status = 'canceled';
+        addon.nextBillingDate = null;
+        await addon.save();
+        this.logger.log(`Canceled retired add-on ${addon._id} (${addon.addonType}) instead of renewing`);
+        continue;
+      }
       try {
         const sub = await this.db.repositories.sellerPlatformSubscriptionModel.findOne({ storeId: addon.storeId });
         const charge = await this.gateway.chargeSubscription(`addon_renewal_${addon._id}`, addon.priceUSD, {

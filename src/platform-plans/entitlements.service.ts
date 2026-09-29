@@ -112,44 +112,6 @@ export class EntitlementsService {
     }
   }
 
-  /** Throws if the store is already at (or over) its staff-seat limit. Call BEFORE adding a new employee. */
-  async assertCanAddStaff(storeId: string): Promise<void> {
-    const limits = await this.getLimits(storeId);
-    if (limits.maxStaffAccounts === -1) return;
-
-    // "Additional Staff Seats" add-on purchases top up the base plan limit
-    // without requiring a full plan upgrade (see PlatformAddonsService) —
-    // queried directly here rather than injecting PlatformAddonsService, to
-    // avoid a circular dependency (PlatformAddonsService → AiCreditsService → EntitlementsService).
-    const extraSeatAddons = await this.db.repositories.platformAddonPurchaseModel
-      .find({ storeId, addonType: 'extra_staff_seat', status: 'active' }).lean();
-    const extraSeats = extraSeatAddons.reduce((sum: number, a: any) => sum + (a.quantity ?? 1), 0);
-    const effectiveLimit = limits.maxStaffAccounts + extraSeats;
-
-    const count = await this.db.repositories.employeeModel.countDocuments({ storeId, isDelete: false });
-    if (count >= effectiveLimit) {
-      throw new BadRequestException(
-        effectiveLimit === 0
-          ? 'Staff accounts are not available on your current plan — upgrade your platform plan to add staff.'
-          : `Staff account limit reached (${effectiveLimit}) for your current plan — upgrade your platform plan or buy an extra staff seat add-on to add more.`,
-      );
-    }
-  }
-
-  /** Throws if the store is already at (or over) its POS-location limit. Call BEFORE creating a new StoreLocation. */
-  async assertCanAddLocation(storeId: string): Promise<void> {
-    const limits = await this.getLimits(storeId);
-    if (limits.maxPosLocations === -1) return;
-    const count = await this.db.repositories.storeLocationModel.countDocuments({ storeId, status: 'active', isDelete: false });
-    if (count >= limits.maxPosLocations) {
-      throw new BadRequestException(
-        limits.maxPosLocations <= 1
-          ? 'Multi-location POS is not available on your current plan — upgrade your platform plan to add another branch.'
-          : `POS location limit reached (${limits.maxPosLocations}) for your current plan — upgrade your platform plan to add more branches.`,
-      );
-    }
-  }
-
   /** Throws if the store already has its plan's limit of StoreBanner rows. Call BEFORE creating a new one.
    *  Deliberately counts ALL rows (not just `status:'active'`) — this is a plan-tier creation cap, distinct
    *  from `PlatformConfig.placementLimits.storeHero` which only bounds how many rotate on the storefront at once. */
@@ -204,13 +166,13 @@ export class EntitlementsService {
     const plan = await this.resolvePlan(storeId);
     const limits: PlatformPlanLimits = plan?.limits ?? FALLBACK_LIMITS;
 
-    const [productCount, staffCount, posLocationCount, aiWallet, allActivePlans] = await Promise.all([
+    // POS (staff accounts, branch locations) was removed from Edudeen — the
+    // keys stay in the summary with `used: 0` so existing dashboards that
+    // render the pricing table keep working.
+    const staffCount = 0;
+    const posLocationCount = 0;
+    const [productCount, aiWallet, allActivePlans] = await Promise.all([
       this.db.repositories.productModel.countDocuments({ storeId, isDelete: false }),
-      this.db.repositories.employeeModel.countDocuments({ storeId, isDelete: false }),
-      // Same count assertCanAddLocation() already uses to gate creation —
-      // reused here so the usage meter shows the real number instead of a
-      // hardcoded 0.
-      this.db.repositories.storeLocationModel.countDocuments({ storeId, status: 'active', isDelete: false }),
       this.db.repositories.aiCreditsWalletModel.findOne({ storeId }).lean(),
       this.planModel.find({ status: 'active', isDelete: false }).sort({ sortOrder: 1 }).lean(),
     ]);

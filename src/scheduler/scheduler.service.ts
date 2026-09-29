@@ -4,7 +4,6 @@ import { Cron } from '@nestjs/schedule';
 import { DatabaseService } from 'src/database/databaseservice';
 import { LoyaltyService } from 'src/loyalty/loyalty.service';
 import { SubscriptionsService } from 'src/subscriptions/subscriptions.service';
-import { PlatformSubscriptionsService } from 'src/platform-subscriptions/platform-subscriptions.service';
 import { FinanceService } from 'src/finance/finance.service';
 import { RedisService } from 'src/redis/redis.service';
 import { SellerPlatformSubscriptionsService } from 'src/platform-plans/seller-platform-subscriptions.service';
@@ -27,7 +26,6 @@ export class SchedulerService {
     private readonly databaseService: DatabaseService,
     private readonly loyaltyService: LoyaltyService,
     private readonly subscriptionsService: SubscriptionsService,
-    private readonly platformSubscriptionsService: PlatformSubscriptionsService,
     private readonly financeService: FinanceService,
     private readonly redis: RedisService,
     private readonly sellerPlatformSubscriptionsService: SellerPlatformSubscriptionsService,
@@ -125,43 +123,14 @@ export class SchedulerService {
     });
   }
 
-  // Runs hourly — same dunning pattern as runSubscriptionRenewals, but for
-  // sellers' own platform-tier plans (and their POS add-on) rather than
-  // buyer subscriptions to a seller's store.
-  @Cron('0 * * * *')
-  async runPlatformSubscriptionRenewals() {
-    await this.runLocked('platform-subscription-renewals', 45 * 60_000, async () => {
-      const result = await this.platformSubscriptionsService.processRenewals();
-      if (result.tiersProcessed > 0 || result.posAddonsProcessed > 0) {
-        this.logger.log(
-          `Platform billing: ${result.tiersProcessed} tier(s) processed (${result.tiersFailed} failed), ` +
-          `${result.posAddonsProcessed} POS add-on(s) processed (${result.posAddonsFailed} failed)`,
-        );
-      }
-    });
-  }
-
-  // Runs daily — finalizes platform tiers whose "downgrade at period end" date has arrived.
   // Runs daily — executes a seller's `cancelSubscription()` once the paid
   // period they scheduled it against actually ends (system ②, current).
-  // Distinct from `finalizePlatformCancellations` below, which is the legacy
-  // system ① equivalent — do not merge these, they act on different schemas.
   @Cron('40 2 * * *')
   async finalizePlatformPlanCancellations() {
     await this.runLocked('finalize-platform-plan-cancellations', 10 * 60_000, async () => {
       const result = await this.sellerPlatformSubscriptionsService.finalizeScheduledCancellations();
       if (result.downgraded > 0) {
         this.logger.log(`Finalized ${result.downgraded} scheduled platform-plan cancellation(s)`);
-      }
-    });
-  }
-
-  @Cron('30 2 * * *')
-  async finalizePlatformCancellations() {
-    await this.runLocked('finalize-platform-cancellations', 10 * 60_000, async () => {
-      const result = await this.platformSubscriptionsService.finalizeEndOfPeriodCancellations();
-      if (result.downgraded > 0) {
-        this.logger.log(`Finalized ${result.downgraded} end-of-period platform tier downgrade(s)`);
       }
     });
   }

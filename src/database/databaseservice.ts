@@ -68,21 +68,6 @@ export class DatabaseService {
     @InjectModel(schema.StoreFollower.name)
     private storeFollowerModel: Model<schema.StoreFollowerDocument>,
 
-    @InjectModel(schema.Employee.name)
-    private employeeModel: Model<schema.EmployeeDocument>,
-
-    @InjectModel(schema.RegisterSession.name)
-    private registerSessionModel: Model<schema.RegisterSessionDocument>,
-
-    @InjectModel(schema.Sale.name)
-    private saleModel: Model<schema.SaleDocument>,
-
-    @InjectModel(schema.PosAuditLog.name)
-    private posAuditLogModel: Model<schema.PosAuditLogDocument>,
-
-    @InjectModel(schema.PosSettings.name)
-    private posSettingsModel: Model<schema.PosSettingsDocument>,
-
     @InjectModel(schema.Conversation.name)
     private conversationModel: Model<schema.ConversationDocument>,
 
@@ -158,9 +143,6 @@ export class DatabaseService {
     @InjectModel(schema.PlatformAddonPurchase.name)
     private platformAddonPurchaseModel: Model<schema.PlatformAddonPurchaseDocument>,
 
-    @InjectModel(schema.StoreLocation.name)
-    private storeLocationModel: Model<schema.StoreLocationDocument>,
-
     @InjectModel(schema.ActivityLog.name)
     private activityLogModel: Model<schema.ActivityLogDocument>,
 
@@ -196,9 +178,6 @@ export class DatabaseService {
 
     @InjectModel(schema.Collection.name)
     private collectionModel: Model<schema.CollectionDocument>,
-
-    @InjectModel(schema.PlatformSubscription.name)
-    private platformSubscriptionModel: Model<schema.PlatformSubscriptionDocument>,
 
     @InjectModel(schema.PlatformSeoSettings.name)
     private platformSeoSettingsModel: Model<schema.PlatformSeoSettingsDocument>,
@@ -339,11 +318,6 @@ export class DatabaseService {
       paymentTransactionModel: this.paymentTransactionModel,
       storeModel: this.storeModel,
       storeFollowerModel: this.storeFollowerModel,
-      employeeModel: this.employeeModel,
-      registerSessionModel: this.registerSessionModel,
-      saleModel: this.saleModel,
-      posAuditLogModel: this.posAuditLogModel,
-      posSettingsModel: this.posSettingsModel,
       conversationModel: this.conversationModel,
       messageModel: this.messageModel,
       blockModel: this.blockModel,
@@ -369,7 +343,6 @@ export class DatabaseService {
       platformPlanPaymentAttemptModel: this.platformPlanPaymentAttemptModel,
       aiCreditsWalletModel: this.aiCreditsWalletModel,
       platformAddonPurchaseModel: this.platformAddonPurchaseModel,
-      storeLocationModel: this.storeLocationModel,
       activityLogModel: this.activityLogModel,
       couponModel: this.couponModel,
       loyaltyProgramModel: this.loyaltyProgramModel,
@@ -382,7 +355,6 @@ export class DatabaseService {
       giftCardSettingsModel: this.giftCardSettingsModel,
       automaticDiscountModel: this.automaticDiscountModel,
       collectionModel: this.collectionModel,
-      platformSubscriptionModel: this.platformSubscriptionModel,
       platformSeoSettingsModel: this.platformSeoSettingsModel,
       seoRedirectModel: this.seoRedirectModel,
       seoCanonicalRuleModel: this.seoCanonicalRuleModel,

@@ -28,7 +28,6 @@ import { StoreModule } from './store/store.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { RatingModule } from './rating/rating.module';
 import { SearchModule } from './search/search.module';
-import { PosModule } from './pos/pos.module';
 import { MessagingModule } from './messaging/messaging.module';
 import { FinanceModule } from './finance/finance.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
@@ -41,7 +40,6 @@ import { DiscountsModule } from './discounts/discounts.module';
 import { CollectionsModule } from './collections/collections.module';
 import { StripeConnectModule } from './stripe-connect/stripe-connect.module';
 import { AnalyticsModule } from './analytics/analytics.module';
-import { PlatformSubscriptionsModule } from './platform-subscriptions/platform-subscriptions.module';
 import { AdminAnalyticsModule } from './admin-analytics/admin-analytics.module';
 import { AdminFinanceModule } from './admin-finance/admin-finance.module';
 import { QueueModule } from './queues/queue.module';
@@ -109,7 +107,6 @@ import { AttributesModule } from './attributes/attributes.module';
     InventoryModule,
     RatingModule,
     SearchModule,
-    PosModule,
     MessagingModule,
     CommissionRulesModule,
     ManualPaymentsModule,
@@ -125,7 +122,6 @@ import { AttributesModule } from './attributes/attributes.module';
     CollectionsModule,
     StripeConnectModule,
     AnalyticsModule,
-    PlatformSubscriptionsModule,
     AdminAnalyticsModule,
     AdminFinanceModule,
     SeoModule,

@@ -49,6 +49,16 @@ export enum StoreTool {
   MARKETPLACE_LISTING = 'marketplace_listing',
 }
 
+// Types a seller may pick for a NEW choice on Edudeen. SERVICES_BOOKINGS has
+// no bookings module behind it and IN_PERSON_POS was removed with the POS
+// module — both stay in the enum only so existing store documents still load.
+export const SELECTABLE_STORE_PRODUCT_TYPES: string[] = [
+  ProductType.PHYSICAL_PRODUCTS,
+  ProductType.DIGITAL_DOWNLOADS,
+  ProductType.EDUCATIONAL_RESOURCES,
+  ProductType.SUBSCRIPTIONS,
+];
+
 // product type -> uske tools (universal yahan nahi)
 export const PRODUCT_TYPE_TOOLS: Record<ProductType, StoreTool[]> = {
   [ProductType.PHYSICAL_PRODUCTS]:     [StoreTool.INVENTORY_MANAGER, StoreTool.SHIPPING_MANAGER],

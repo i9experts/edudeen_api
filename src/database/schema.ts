@@ -30,11 +30,6 @@ export { ReconciliationRun, ReconciliationRunDocument, ReconciliationRunSchema }
 
 export { Store, StoreDocument, StoreSchema } from '../store/schemas/store.schema';
 export { StoreFollower, StoreFollowerDocument, StoreFollowerSchema } from '../store/schemas/store-follower.schema';
-export { Employee, EmployeeDocument, EmployeeSchema } from '../pos/schemas/employee.schema';
-export { RegisterSession, RegisterSessionDocument, RegisterSessionSchema } from '../pos/schemas/register-session.schema';
-export { Sale, SaleDocument, SaleSchema } from '../pos/schemas/sales.schema';
-export { PosAuditLog, PosAuditLogDocument, PosAuditLogSchema } from '../pos/schemas/pos-audit-log.schema';
-export { PosSettings, PosSettingsDocument, PosSettingsSchema } from '../pos/schemas/pos-settings.schema';
 export { Conversation, ConversationDocument, ConversationSchema } from '../messaging/schemas/conversation.schema';
 export { Message, MessageDocument, MessageSchema } from '../messaging/schemas/message.schema';
 export { Block, BlockDocument, BlockSchema } from '../messaging/schemas/block.schema';
@@ -60,7 +55,6 @@ export { PlatformPlanInvoice, PlatformPlanInvoiceDocument, PlatformPlanInvoiceSc
 export { PlatformPlanPaymentAttempt, PlatformPlanPaymentAttemptDocument, PlatformPlanPaymentAttemptSchema } from '../platform-plans/schemas/platform-plan-payment-attempt.schema';
 export { AiCreditsWallet, AiCreditsWalletDocument, AiCreditsWalletSchema } from '../platform-plans/schemas/ai-credits-wallet.schema';
 export { PlatformAddonPurchase, PlatformAddonPurchaseDocument, PlatformAddonPurchaseSchema } from '../platform-plans/schemas/platform-addon-purchase.schema';
-export { StoreLocation, StoreLocationDocument, StoreLocationSchema } from '../pos/schemas/store-location.schema';
 
 export type { Otp, OtpSchema } from '../otp/schemas/otp.schema';
 export type { OtpDocument } from '../otp/schemas/otp.schema';
@@ -82,7 +76,6 @@ export { GiftCardTransaction, GiftCardTransactionDocument, GiftCardTransactionSc
 export { GiftCardSettings, GiftCardSettingsDocument, GiftCardSettingsSchema } from '../gift-cards/schemas/gift-card-settings.schema';
 export { AutomaticDiscount, AutomaticDiscountDocument, AutomaticDiscountSchema } from '../discounts/schemas/automatic-discount.schema';
 export { Collection, CollectionDocument, CollectionSchema } from '../collections/schemas/collection.schema';
-export { PlatformSubscription, PlatformSubscriptionDocument, PlatformSubscriptionSchema } from '../platform-subscriptions/schemas/platform-subscription.schema';
 export { PlatformSeoSettings, PlatformSeoSettingsDocument, PlatformSeoSettingsSchema } from '../seo/schemas/platform-seo-settings.schema';
 export { SeoRedirect, SeoRedirectDocument, SeoRedirectSchema } from '../seo/schemas/seo-redirect.schema';
 export { SeoCanonicalRule, SeoCanonicalRuleDocument, SeoCanonicalRuleSchema } from '../seo/schemas/seo-canonical-rule.schema';

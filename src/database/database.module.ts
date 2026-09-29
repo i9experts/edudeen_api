@@ -48,14 +48,6 @@ import { DatabaseService } from './databaseservice';
       { name: schema.StoreFollower.name, schema: schema.StoreFollowerSchema },
       { name: schema.Banner.name, schema: schema.BannerSchema },
       { name: schema.OnboardingSlide.name, schema: schema.OnboardingSlideSchema },
-      { name: schema.Employee.name, schema: schema.EmployeeSchema },
-      {
-        name: schema.RegisterSession.name,
-        schema: schema.RegisterSessionSchema,
-      },
-      { name: schema.Sale.name, schema: schema.SaleSchema },
-      { name: schema.PosAuditLog.name, schema: schema.PosAuditLogSchema },
-      { name: schema.PosSettings.name, schema: schema.PosSettingsSchema },
       { name: schema.Conversation.name, schema: schema.ConversationSchema },
       { name: schema.Message.name, schema: schema.MessageSchema },
       { name: schema.Block.name, schema: schema.BlockSchema },
@@ -117,7 +109,6 @@ import { DatabaseService } from './databaseservice';
         name: schema.PlatformAddonPurchase.name,
         schema: schema.PlatformAddonPurchaseSchema,
       },
-      { name: schema.StoreLocation.name, schema: schema.StoreLocationSchema },
       { name: schema.ActivityLog.name, schema: schema.ActivityLogSchema },
       { name: schema.Coupon.name, schema: schema.CouponSchema },
       { name: schema.LoyaltyProgram.name, schema: schema.LoyaltyProgramSchema },
@@ -133,10 +124,6 @@ import { DatabaseService } from './databaseservice';
       { name: schema.GiftCardSettings.name, schema: schema.GiftCardSettingsSchema },
       { name: schema.AutomaticDiscount.name, schema: schema.AutomaticDiscountSchema },
       { name: schema.Collection.name, schema: schema.CollectionSchema },
-      {
-        name: schema.PlatformSubscription.name,
-        schema: schema.PlatformSubscriptionSchema,
-      },
       {
         name: schema.PlatformSeoSettings.name,
         schema: schema.PlatformSeoSettingsSchema,

@@ -3,8 +3,11 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsEnum, IsOptional, IsNumber, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
+// 'extra_staff_seat' is no longer sold: staff seats only existed for the POS
+// module, which was removed from Edudeen (existing records stay valid in the
+// schema enum; renewals for them are auto-canceled, see PlatformAddonsService).
 export const ADDON_TYPES = [
-  'extra_ai_credits', 'extra_staff_seat', 'priority_marketplace_placement',
+  'extra_ai_credits', 'priority_marketplace_placement',
   'advanced_tax_compliance', 'sms_notifications',
 ] as const;
 

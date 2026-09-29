@@ -8,7 +8,7 @@ import {
 import { promises as dns } from 'dns';
 import { DatabaseService } from 'src/database/databaseservice';
 import {
-  SellerType, ProductType, resolveTools,
+  SellerType, ProductType, resolveTools, SELECTABLE_STORE_PRODUCT_TYPES,
   BUSINESS_TYPES, ID_DOCUMENT_TYPES, VERIFICATION_DOCUMENT_TYPES,
   determineVerificationLevel, assertValidVerificationTransition,
   type BusinessType, type VerificationDocumentType, type VerificationDocument,
@@ -118,10 +118,11 @@ export class StoreService {
     }
 
     if (productTypes && Array.isArray(productTypes)) {
-      const validTypes = Object.values(ProductType);
       for (const pt of productTypes) {
-        if (!validTypes.includes(pt)) {
-          throw new BadRequestException(`Invalid productType: ${pt}`);
+        if (!SELECTABLE_STORE_PRODUCT_TYPES.includes(pt)) {
+          throw new BadRequestException(
+            `Invalid productType: ${pt}. Allowed: ${SELECTABLE_STORE_PRODUCT_TYPES.join(', ')}`,
+          );
         }
       }
     }
@@ -799,10 +800,11 @@ export class StoreService {
     }
 
     if (productTypes && Array.isArray(productTypes)) {
-      const validTypes = Object.values(ProductType);
       for (const pt of productTypes) {
-        if (!validTypes.includes(pt)) {
-          throw new BadRequestException(`Invalid productType: ${pt}`);
+        if (!SELECTABLE_STORE_PRODUCT_TYPES.includes(pt)) {
+          throw new BadRequestException(
+            `Invalid productType: ${pt}. Allowed: ${SELECTABLE_STORE_PRODUCT_TYPES.join(', ')}`,
+          );
         }
       }
     }
