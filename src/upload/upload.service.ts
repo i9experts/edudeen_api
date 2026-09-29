@@ -13,6 +13,47 @@ import {
   PREVIEW_SOURCE_FOLDER,
 } from '../products/constants/preview.constants';
 
+// Public uploads are served inline from Cloudinary, so anything that a
+// browser would execute or render as active content (SVG, HTML, JS) is
+// excluded. Private (sold) files are only ever delivered as attachments with
+// `nosniff`, so the list is wider — the formats teachers actually sell.
+const PUBLIC_UPLOAD_EXTENSIONS = new Set([
+  'jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'heic',
+  'mp4', 'webm', 'mov', 'mp3', 'm4a', 'wav',
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv',
+]);
+const PRIVATE_UPLOAD_EXTENSIONS = new Set([
+  ...PUBLIC_UPLOAD_EXTENSIONS,
+  'epub', 'zip', 'svg', 'odt', 'ods', 'odp', 'rtf', 'key', 'pages', 'numbers', 'ogg',
+]);
+const PUBLIC_MIME_PREFIXES = ['image/', 'video/', 'audio/'];
+const BLOCKED_MIME = new Set(['image/svg+xml', 'text/html', 'application/xhtml+xml', 'application/javascript', 'text/javascript']);
+
+function assertUploadAllowed(file: Express.Multer.File, kind: 'public' | 'private'): void {
+  const ext = (file.originalname?.split('.').pop() ?? '').toLowerCase();
+  const allowedExt = kind === 'public' ? PUBLIC_UPLOAD_EXTENSIONS : PRIVATE_UPLOAD_EXTENSIONS;
+  if (!ext || !allowedExt.has(ext)) {
+    throw new BadRequestException(`File type ".${ext || '?'}" is not allowed`);
+  }
+  const mime = (file.mimetype ?? '').toLowerCase();
+  if (kind === 'public') {
+    if (BLOCKED_MIME.has(mime)) throw new BadRequestException('This file type is not allowed');
+    const mimeOk =
+      PUBLIC_MIME_PREFIXES.some((p) => mime.startsWith(p)) ||
+      mime === 'application/pdf' ||
+      mime === 'text/plain' ||
+      mime === 'text/csv' ||
+      mime === 'application/msword' ||
+      mime === 'application/vnd.ms-excel' ||
+      mime === 'application/vnd.ms-powerpoint' ||
+      mime.startsWith('application/vnd.openxmlformats-officedocument.') ||
+      mime === 'application/octet-stream'; // some clients send this for office files; extension already checked
+    if (!mimeOk) throw new BadRequestException('This file type is not allowed');
+  } else if (mime === 'text/html' || mime.includes('javascript') || mime === 'application/x-msdownload') {
+    throw new BadRequestException('This file type is not allowed');
+  }
+}
+
 @Injectable()
 export class UploadService {
   constructor(private readonly configService: ConfigService) {
@@ -32,6 +73,7 @@ export class UploadService {
     file: Express.Multer.File,
     options?: { folder?: string; maxDimension?: number },
   ): Promise<{ url: string; publicId: string; resourceType: string; width?: number; height?: number }> {
+    assertUploadAllowed(file, 'public');
     const resourceType = this.getResourceType(file.mimetype);
     const folder = options?.folder ?? (resourceType === 'raw' ? 'uploads/documents' : `uploads/${resourceType}s`);
     const transformation =
@@ -69,6 +111,7 @@ export class UploadService {
     file: Express.Multer.File,
     folder: string = 'private/digital-products',
   ): Promise<{ publicId: string; resourceType: string; fileName: string; fileSize: number; mimeType: string }> {
+    assertUploadAllowed(file, 'private');
     const mimeType = this.getMimeTypeFromExtension(file.originalname) || file.mimetype;
     const resourceType = this.getResourceType(mimeType);
     return new Promise((resolve, reject) => {
