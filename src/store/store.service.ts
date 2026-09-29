@@ -176,23 +176,33 @@ export class StoreService {
       ...(selfServeActivation ? { reviewedAt: new Date() } : {}),
     });
 
-    // ✅ seller pe sirf onboarded mark — storeId nahi rakhte (source of truth = Store.sellerId)
-    // onboardingDraft cleared too — nothing left to resume once the store is real.
-    await this.databaseService.repositories.sellerModel.findByIdAndUpdate(sellerId, {
-      isOnboarded: true,
-      onboardingDraft: null,
-    });
+    // Post-insert setup. If any step fails, roll the store back (soft
+    // delete) and rethrow — otherwise the seller sees a 500 while the store
+    // row survives, and every retry leaves another orphan store behind.
+    try {
+      // ✅ seller pe sirf onboarded mark — storeId nahi rakhte (source of truth = Store.sellerId)
+      // onboardingDraft cleared too — nothing left to resume once the store is real.
+      await this.databaseService.repositories.sellerModel.findByIdAndUpdate(sellerId, {
+        isOnboarded: true,
+        onboardingDraft: null,
+      });
 
-    // Every store always has exactly one platform-plan subscription — auto
-    // start on the free tier so onboarding has zero friction (see EntitlementsService).
-    await this.sellerPlatformSubscriptionsService.ensureDefaultSubscription(store._id.toString(), sellerId);
+      // Every store always has exactly one platform-plan subscription — auto
+      // start on the free tier so onboarding has zero friction (see EntitlementsService).
+      await this.sellerPlatformSubscriptionsService.ensureDefaultSubscription(store._id.toString(), sellerId);
 
-    // Every store gets its own storefront chrome (theme/header/footer) and a
-    // home page seeded at creation time, not lazily on first public visit —
-    // lazy-on-a-public-GET would let two simultaneous buyer visits race on
-    // creating the same home page. Both calls are idempotent upserts.
-    await this.storeThemeService.ensureDefaultTheme(store._id.toString());
-    await this.storePagesService.ensureHomePage(store._id.toString());
+      // Every store gets its own storefront chrome (theme/header/footer) and a
+      // home page seeded at creation time, not lazily on first public visit —
+      // lazy-on-a-public-GET would let two simultaneous buyer visits race on
+      // creating the same home page. Both calls are idempotent upserts.
+      await this.storeThemeService.ensureDefaultTheme(store._id.toString());
+      await this.storePagesService.ensureHomePage(store._id.toString());
+    } catch (err) {
+      await this.databaseService.repositories.storeModel
+        .updateOne({ _id: store._id }, { $set: { isDelete: true } })
+        .catch(() => undefined);
+      throw err;
+    }
 
     return {
       success: true,

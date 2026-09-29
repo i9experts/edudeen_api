@@ -111,15 +111,22 @@ export class RatingService {
     const filter: any = { userId, isDelete: false };
     if (orderId) filter._id = orderId;
 
-    const orders = await orderModel.find(filter).select('sellerOrders').lean();
+    const orders = await orderModel.find(filter).select('sellerOrders isPaid').lean();
 
     for (const order of orders) {
       for (const sellerOrder of (order as any).sellerOrders || []) {
         for (const item of sellerOrder.items || []) {
+          if (item.productId !== productId) continue;
+          if (productVariantId && item.variantId !== productVariantId) continue;
+          // Physical goods: must actually have been delivered.
+          if (DELIVERED_ITEM_STATUSES.includes(item.status)) return true;
+          // Digital goods are delivered at payment (their item status is
+          // never moved to delivered/completed), so a paid, non-refunded
+          // digital line is a real purchase.
           if (
-            item.productId === productId &&
-            (!productVariantId || item.variantId === productVariantId) &&
-            DELIVERED_ITEM_STATUSES.includes(item.status)
+            item.type === 'digital' &&
+            (order as any).isPaid &&
+            !['cancelled', 'refunded'].includes(item.status)
           ) {
             return true;
           }
@@ -188,6 +195,13 @@ export class RatingService {
       productVariantId ?? null,
       orderId,
     );
+
+    // Education marketplaces (e.g. TPT) only accept reviews from buyers —
+    // otherwise any account can review-bomb a competitor's resource, since
+    // every rating counts toward Product.averageRating.
+    if (!isVerifiedPurchase) {
+      throw new ForbiddenException('Only customers who purchased this product can review it');
+    }
 
     const reviewData: any = {
       userId,
