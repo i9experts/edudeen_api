@@ -64,6 +64,10 @@ export class StoreThemeService {
           },
         },
       ],
+      // Mongoose 9 rejects array (aggregation-pipeline) updates unless this
+      // is set explicitly — without it every call threw, which broke store
+      // creation and every Store Builder theme endpoint.
+      { updatePipeline: true },
     );
     return this.storeThemeModel.findOne({ storeId });
   }
@@ -115,7 +119,7 @@ export class StoreThemeService {
           },
         },
       ],
-      { new: true },
+      { new: true, updatePipeline: true },
     );
     return { success: true, message: 'Theme published', data: updated };
   }
@@ -139,7 +143,7 @@ export class StoreThemeService {
           },
         },
       ],
-      { new: true },
+      { new: true, updatePipeline: true },
     );
     return { success: true, message: 'Draft reverted to the published theme', data: updated };
   }

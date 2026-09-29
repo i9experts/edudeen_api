@@ -6,9 +6,11 @@ import {
 } from './attributes.controller';
 import { ProductAttributesController } from './product-attributes.controller';
 import { AuthModule } from 'src/auth/auth.module';
+import { RedisModule } from 'src/redis/redis.module';
 
 @Module({
-  imports: [AuthModule],
+  // RedisModule: required by JwtAuthGuard (RedisService), not re-exported by AuthModule.
+  imports: [AuthModule, RedisModule],
   controllers: [
     CategoryAttributesController,
     AttributesController,
