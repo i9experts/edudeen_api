@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 
 import { DatabaseService } from 'src/database/databaseservice';
-import { AddToCartDto } from './dto/add-to-cart.dto';
+import { AddToCartDto, MAX_CART_LINE_QUANTITY } from './dto/add-to-cart.dto';
 
 @Injectable()
 export class CartService {
@@ -51,11 +51,18 @@ export class CartService {
           ? variant.images
           : product.images || [];
 
+      // Service-level guard as well as the DTO: a zero, negative or
+      // fractional quantity would flow straight into checkout totals.
+      const quantity = dto.quantity ?? 1;
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > MAX_CART_LINE_QUANTITY) {
+        throw new BadRequestException(`Quantity must be a whole number between 1 and ${MAX_CART_LINE_QUANTITY}`);
+      }
+
       const newItem = {
         productId: dto.productId,
         productVariantId: dto.productVariantId,
         name: product.name,
-        quantity: dto.quantity || 1,
+        quantity,
         price: variant.price,
         currency: variant.currency ?? null,
         images: itemImages,
@@ -84,7 +91,11 @@ export class CartService {
       );
 
       if (existingIndex > -1) {
-        cart.items[existingIndex].quantity += dto.quantity || 1;
+        const merged = cart.items[existingIndex].quantity + quantity;
+        if (merged > MAX_CART_LINE_QUANTITY) {
+          throw new BadRequestException(`Quantity cannot exceed ${MAX_CART_LINE_QUANTITY}`);
+        }
+        cart.items[existingIndex].quantity = merged;
       } else {
         cart.items.push(newItem as any);
       }
@@ -131,9 +142,12 @@ export class CartService {
 
       // 1️⃣ update quantity
       if (action === 'increase') {
+        if (cart.items[itemIndex].quantity >= MAX_CART_LINE_QUANTITY) {
+          throw new BadRequestException(`Quantity cannot exceed ${MAX_CART_LINE_QUANTITY}`);
+        }
         cart.items[itemIndex].quantity += 1;
       } else if (action === 'decrease') {
-        if (cart.items[itemIndex].quantity === 1) {
+        if (cart.items[itemIndex].quantity <= 1) {
           throw new BadRequestException('Quantity cannot be less than 1');
         }
         cart.items[itemIndex].quantity -= 1;

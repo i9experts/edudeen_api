@@ -1,4 +1,6 @@
-import { IsOptional, IsString, IsNumber, IsNotEmpty } from 'class-validator';
+import { IsOptional, IsString, IsInt, Min, Max, IsNotEmpty } from 'class-validator';
+
+export const MAX_CART_LINE_QUANTITY = 1000;
 
 export class AddToCartDto {
   // Which store's cart this goes into — a buyer's cart is scoped per store.
@@ -18,6 +20,8 @@ export class AddToCartDto {
   productVariantId?: string;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt()
+  @Min(1)
+  @Max(MAX_CART_LINE_QUANTITY)
   quantity?: number;
 }

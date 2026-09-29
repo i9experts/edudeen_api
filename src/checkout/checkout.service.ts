@@ -205,6 +205,14 @@ export class CheckoutService {
     const storeSubtotals = new Map<string, number>();
 
     for (const cartItem of selectedItems) {
+      // Defense in depth: carts saved before quantity validation existed may
+      // hold 0/negative/fractional lines, which would subtract from totals.
+      if (!Number.isInteger(cartItem.quantity) || cartItem.quantity < 1) {
+        throw new BadRequestException(
+          'Your cart contains an item with an invalid quantity. Please update it and try again.',
+        );
+      }
+
       const product = await productModel.findOne({
         _id: cartItem.productId,
         status: 'active',
@@ -232,6 +240,10 @@ export class CheckoutService {
       if (!variant)
         throw new BadRequestException(
           `Variant not found: ${cartItem.productVariantId}`,
+        );
+      if (variant.productId !== product._id.toString())
+        throw new BadRequestException(
+          `Variant does not belong to product: ${product.name}`,
         );
 
       if (product.type === 'physical') {

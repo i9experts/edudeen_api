@@ -36,6 +36,11 @@ export class User {
    @Prop()
    otpExpiresAt: Date;
 
+   // Wrong-code counter for the current OTP — reset whenever a new OTP is
+   // issued. Once it hits the limit the code is burned (see AuthService).
+   @Prop({ default: 0 })
+   otpAttempts: number;
+
   @Prop({ default: false })
   isVerified: boolean;
 

@@ -1,6 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { Body, Controller, Post, Req, Get, Patch } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -41,9 +42,17 @@ export class AuthController {
   }
 
   // ✅ Social login (Google / Facebook / Apple) — resolves to buyer or seller per dto.role (default 'user')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('social-login')
   async socialLogin(@Body() socialLoginDto: SocialLoginDto) {
     return this.authService.socialLogin(socialLoginDto);
+  }
+
+  // Exchanges a refresh token (typ: 'refresh') for a fresh access/refresh pair.
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post('refresh')
+  async refresh(@Body() dto: RefreshTokenDto) {
+    return this.authService.refresh(dto.refreshToken);
   }
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })

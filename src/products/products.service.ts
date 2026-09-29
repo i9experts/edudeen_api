@@ -30,6 +30,18 @@ import { AttributesService } from 'src/attributes/attributes.service';
 
 const EDUCATION_LEVEL_VALUES: string[] = Object.values(EducationLevel);
 
+/** Prices arrive on `body: any` endpoints, so they are checked here rather
+ *  than by a DTO. 0 is allowed (free resources are common on education
+ *  marketplaces); negative / non-finite values would corrupt order totals
+ *  and seller ledgers. */
+const MAX_PRICE = 1_000_000;
+function assertValidPrice(value: unknown, field: string, { nullable = false } = {}): void {
+  if (value === null && nullable) return;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > MAX_PRICE) {
+    throw new BadRequestException(`${field} must be a number between 0 and ${MAX_PRICE}`);
+  }
+}
+
 @Injectable()
 export class ProductsService {
   constructor(
@@ -1067,6 +1079,8 @@ export class ProductsService {
       if (v?.price === undefined || v?.price === null) {
         throw new BadRequestException('Every variant requires a price');
       }
+      assertValidPrice(v.price, 'Variant price');
+      if (v.compareAtPrice !== undefined) assertValidPrice(v.compareAtPrice, 'compareAtPrice', { nullable: true });
       try {
         validateOptions(v.options);
       } catch (e: any) {
@@ -1203,6 +1217,8 @@ export class ProductsService {
     if (!name) throw new BadRequestException('Product name is required');
     if (price === undefined || price === null)
       throw new BadRequestException('Price is required');
+    assertValidPrice(price, 'Price');
+    if (compareAtPrice !== undefined) assertValidPrice(compareAtPrice, 'compareAtPrice', { nullable: true });
 
     if (status === 'scheduled' && !scheduledAt) {
       throw new BadRequestException(
@@ -1505,6 +1521,8 @@ export class ProductsService {
     // price per-variant exclusively via the product-variants module now.
     let updatedVariant: any;
     if (product.type !== 'physical' && (price !== undefined || compareAtPrice !== undefined)) {
+      if (price !== undefined) assertValidPrice(price, 'Price');
+      if (compareAtPrice !== undefined) assertValidPrice(compareAtPrice, 'compareAtPrice', { nullable: true });
       const variantUpdate: any = {};
       if (price !== undefined) variantUpdate.price = price;
       if (compareAtPrice !== undefined) variantUpdate.compareAtPrice = compareAtPrice;

@@ -1,12 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import {
-  IsEmail,
-  IsString,
-  IsOptional,
-  MinLength,
-  IsNotEmpty,
-  IsIn,
-} from 'class-validator';
+import { IsEmail, IsString, IsOptional, MinLength, IsNotEmpty, IsIn, MaxLength } from 'class-validator';
 
 export class RegisterDto {
   @IsString()
@@ -36,6 +29,8 @@ export class RegisterDto {
 
   @IsString()
   @IsNotEmpty()
+  @MinLength(8, { message: 'Password must be at least 8 characters' })
+  @MaxLength(72, { message: 'Password must be at most 72 characters' })
   password: string;
 
   @IsOptional()

@@ -15,6 +15,7 @@ import { CreateAdminDto } from './dto/create-admin.dto';
 import { OtpService } from 'src/otp/otp.service';
 import { DatabaseService } from 'src/database/databaseservice';
 import { OAuth2Client } from 'google-auth-library';
+import { randomInt, timingSafeEqual } from 'crypto';
 import * as appleSignin from 'apple-signin-auth';
 // import axios from 'axios';
 import { stat } from 'fs';
@@ -44,6 +45,94 @@ export class AuthService {
   }
 
   /** Seller logins/edits are logged against their store's activity feed; users/admins have no store to attach to. */
+  private static readonly MAX_OTP_ATTEMPTS = 5;
+
+  /** Cryptographically secure 6-digit code (Math.random is predictable). */
+  private static generateOtp(): string {
+    return randomInt(100000, 1000000).toString();
+  }
+
+  /** Validates an OTP against the account and burns it after
+   *  MAX_OTP_ATTEMPTS wrong tries — the per-IP throttle alone does not stop
+   *  a distributed brute force of a 6-digit code. */
+  private async checkOtp(user: any, otp: string): Promise<void> {
+    if (!user.otp || !user.otpExpiresAt || new Date() > user.otpExpiresAt) {
+      throw new UnauthorizedException('OTP has expired, please request a new one');
+    }
+    if ((user.otpAttempts ?? 0) >= AuthService.MAX_OTP_ATTEMPTS) {
+      throw new UnauthorizedException('Too many wrong attempts, please request a new OTP');
+    }
+    const a = Buffer.from(String(otp ?? ''));
+    const b = Buffer.from(String(user.otp));
+    const ok = a.length === b.length && timingSafeEqual(a, b);
+    if (!ok) {
+      user.otpAttempts = (user.otpAttempts ?? 0) + 1;
+      if (user.otpAttempts >= AuthService.MAX_OTP_ATTEMPTS) {
+        user.otp = null;
+        user.otpExpiresAt = null;
+      }
+      await user.save();
+      throw new UnauthorizedException('Invalid OTP');
+    }
+  }
+
+  private static readonly ACCESS_TTL_SECONDS = 24 * 60 * 60;
+
+  /** Single place that mints a session. `typ` separates access from refresh
+   *  tokens (and from order download tokens, which share JWT_SECRET) so
+   *  JwtStrategy can refuse anything that is not an access token. */
+  private async issueSession(account: any) {
+    const base = {
+      sub: account._id,
+      email: account.email,
+      role: account.role,
+      tokenVersion: account.tokenVersion ?? 0,
+    };
+    const accessToken = this.jwtService.sign(
+      { ...base, typ: 'access' },
+      { expiresIn: AuthService.ACCESS_TTL_SECONDS },
+    );
+    await this.redisService.set(
+      accessToken,
+      account._id.toString(),
+      AuthService.ACCESS_TTL_SECONDS,
+    );
+    const refreshToken = this.jwtService.sign(
+      { ...base, typ: 'refresh' },
+      { expiresIn: '7d' },
+    );
+    return { accessToken, refreshToken };
+  }
+
+  /** Exchanges a refresh token for a new session. Rejects anything that is
+   *  not a refresh token, and any token issued before a suspend/reset
+   *  (tokenVersion mismatch). */
+  async refresh(refreshToken: string) {
+    let payload: any;
+    try {
+      payload = this.jwtService.verify(refreshToken);
+    } catch {
+      throw new UnauthorizedException('Refresh token expired or invalid');
+    }
+    if (payload?.typ !== 'refresh') throw new UnauthorizedException('Invalid refresh token');
+    const repos = this.databaseService.repositories;
+    const model: any =
+      payload.role === 'user' ? repos.userModel
+      : payload.role === 'seller' ? repos.sellerModel
+      : payload.role === 'admin' ? repos.adminModel
+      : null;
+    if (!model) throw new UnauthorizedException('Invalid refresh token');
+    const account = await model.findById(payload.sub);
+    if (!account || account.isDelete || ['deleted', 'suspended'].includes(account.status)) {
+      throw new UnauthorizedException('Account is not active');
+    }
+    if ((account.tokenVersion ?? 0) !== (payload.tokenVersion ?? 0)) {
+      throw new UnauthorizedException('Session revoked, please login again');
+    }
+    const tokens = await this.issueSession(account);
+    return { success: true, message: 'Token refreshed', data: { token: tokens } };
+  }
+
   private async logSellerSecurityEvent(
     sellerId: string,
     category: 'security' | 'customers',
@@ -100,7 +189,7 @@ export class AuthService {
         throw new UnauthorizedException('User already exists');
       }
 
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otp = AuthService.generateOtp();
       const otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
       const hashedPassword = await bcrypt.hash(password, 10);
@@ -217,25 +306,7 @@ export class AuthService {
       // tokenVersion is embedded so a suspend/deactivate action elsewhere
       // (which bumps the DB value) invalidates this token on its very next
       // request — see JwtAuthGuard's comparison against the current DB value.
-      const payload = {
-        sub: existingUser._id,
-        email: existingUser.email,
-        role: existingUser.role,
-        tokenVersion: existingUser.tokenVersion ?? 0,
-      };
-
-      const token = this.jwtService.sign(payload);
-
-      await this.redisService.set(
-        token,
-        existingUser._id.toString(),
-        24 * 60 * 60,
-      );
-
-      // ✅ Refresh Token (long expiry)
-      const refreshToken = this.jwtService.sign(payload, {
-        expiresIn: '7d',
-      });
+      const { accessToken: token, refreshToken } = await this.issueSession(existingUser);
 
       return {
         message: 'Login successful',
@@ -261,12 +332,24 @@ export class AuthService {
     }
   }
 
-  /** Verifies the provider token server-side so a forged socialId/email pair can't be used to hijack an account. */
+  /** Comma-separated GOOGLE_CLIENT_IDS (Android/iOS/web each have their own
+   *  OAuth client, so an ID token's `aud` can be any of them), falling back
+   *  to the single legacy GOOGLE_CLIENT_ID. */
+  private googleAudiences(): string[] {
+    const raw = process.env.GOOGLE_CLIENT_IDS || process.env.GOOGLE_CLIENT_ID || '';
+    return raw.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+
+  /** Verifies the provider token server-side and returns the identity the
+   *  PROVIDER vouches for. The email used to find/link an account must come
+   *  from here — never from the request body — otherwise anyone holding a
+   *  valid token for their own social account could send someone else's
+   *  email and receive that person's session (account takeover). */
   private async verifySocialToken(
     authProvider: string,
     socialId: string,
     token?: string,
-  ) {
+  ): Promise<{ email: string | null; emailVerified: boolean }> {
     if (!token) {
       throw new UnauthorizedException(
         'Missing provider token for verification',
@@ -274,67 +357,79 @@ export class AuthService {
     }
 
     if (authProvider === 'google') {
-      const ticket = await this.googleClient.verifyIdToken({
-        idToken: token,
-        audience: process.env.GOOGLE_CLIENT_ID,
-      });
+      const audience = this.googleAudiences();
+      if (!audience.length) throw new UnauthorizedException('Google sign-in is not configured');
+      const ticket = await this.googleClient.verifyIdToken({ idToken: token, audience });
       const payload = ticket.getPayload();
       if (!payload || payload.sub !== socialId) {
         throw new UnauthorizedException('Invalid Google token');
       }
-    } else if (authProvider === 'facebook') {
+      return {
+        email: payload.email ? payload.email.toLowerCase() : null,
+        emailVerified: payload.email_verified === true,
+      };
+    }
+    if (authProvider === 'facebook') {
       const resp = await fetch(
-        `https://graph.facebook.com/me?fields=id&access_token=${encodeURIComponent(token)}`,
+        `https://graph.facebook.com/me?fields=id,email&access_token=${encodeURIComponent(token)}`,
       );
       const data: any = await resp.json();
       if (!data?.id || data.id !== socialId) {
         throw new UnauthorizedException('Invalid Facebook token');
       }
-    } else if (authProvider === 'apple') {
-      const payload = await appleSignin.verifyIdToken(token, {
+      // Graph only returns an email the user has confirmed with Facebook.
+      return {
+        email: typeof data.email === 'string' ? data.email.toLowerCase() : null,
+        emailVerified: typeof data.email === 'string',
+      };
+    }
+    if (authProvider === 'apple') {
+      const payload: any = await appleSignin.verifyIdToken(token, {
         audience: process.env.APPLE_CLIENT_ID,
       });
       if (!payload || payload.sub !== socialId) {
         throw new UnauthorizedException('Invalid Apple token');
       }
-    } else {
-      throw new UnauthorizedException('Unsupported auth provider');
+      const verified = payload.email_verified === true || payload.email_verified === 'true';
+      return {
+        email: typeof payload.email === 'string' ? payload.email.toLowerCase() : null,
+        emailVerified: verified,
+      };
     }
+    throw new UnauthorizedException('Unsupported auth provider');
   }
 
   /** Social login resolves against the buyer (User) or seller (Seller) collection based on dto.role (default 'user') — same role-picks-the-model pattern as login()/signup(). */
   async socialLogin(dto: SocialLoginDto) {
     try {
-      const {
-        authProvider,
-        socialId,
-        userName,
-        name,
-        email,
-        image,
-        fcmToken,
-        token,
-        role,
-      } = dto;
+      const { authProvider, socialId, userName, name, image, fcmToken, token, role } = dto;
 
-      await this.verifySocialToken(authProvider, socialId, token);
+      const identity = await this.verifySocialToken(authProvider, socialId, token);
+      const verifiedEmail = identity.emailVerified ? identity.email : null;
 
       const targetRole: 'user' | 'seller' = role === 'seller' ? 'seller' : 'user';
-      let accountModel;
-      if (targetRole === 'seller') {
-        accountModel = this.databaseService.repositories.sellerModel;
-      } else {
-        accountModel = this.databaseService.repositories.userModel;
+      const accountModel: any =
+        targetRole === 'seller'
+          ? this.databaseService.repositories.sellerModel
+          : this.databaseService.repositories.userModel;
+
+      // 1) Already-linked account for this exact provider identity.
+      let account = await accountModel.findOne({ providerId: socialId, authProvider });
+      // 2) Otherwise link to an existing account ONLY by a provider-verified email.
+      if (!account && verifiedEmail) {
+        const escaped = verifiedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        account = await accountModel.findOne({ email: new RegExp(`^${escaped}$`, 'i') });
       }
 
-      let account = await accountModel.findOne({
-        $or: [{ email }, { providerId: socialId, authProvider }],
-      });
-
       if (!account) {
+        if (!verifiedEmail) {
+          throw new UnauthorizedException(
+            'Your social account did not share a verified email address. Please sign up with email instead.',
+          );
+        }
         account = new accountModel({
           name: name || userName,
-          email,
+          email: verifiedEmail,
           role: targetRole,
           isVerified: true,
           authProvider,
@@ -366,7 +461,8 @@ export class AuthService {
           account.fcmToken = fcmToken;
           changed = true;
         }
-        if (!account.isVerified) {
+        // Only a provider-verified email proves ownership of the address.
+        if (!account.isVerified && verifiedEmail && String(account.email).toLowerCase() === verifiedEmail) {
           account.isVerified = true;
           changed = true;
         }
@@ -385,19 +481,7 @@ export class AuthService {
         );
       }
 
-      const payload = {
-        sub: account._id,
-        email: account.email,
-        role: account.role,
-        tokenVersion: account.tokenVersion ?? 0,
-      };
-      const accessToken = this.jwtService.sign(payload);
-      await this.redisService.set(
-        accessToken,
-        account._id.toString(),
-        24 * 60 * 60,
-      );
-      const refreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
+      const { accessToken, refreshToken } = await this.issueSession(account);
 
       return {
         message: 'Social login successful',
@@ -445,11 +529,12 @@ export class AuthService {
         throw new UnauthorizedException('User already verified');
       }
 
-      const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
+      const newOtp = AuthService.generateOtp();
       const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
       user.otp = newOtp;
       user.otpExpiresAt = otpExpiresAt;
+      user.otpAttempts = 0;
       await user.save();
 
       await this.otpService.sendOtp(user.email, newOtp);
@@ -492,32 +577,15 @@ export class AuthService {
         throw new UnauthorizedException('User already verified');
       }
 
-      if (user.otp !== otp) {
-        throw new UnauthorizedException('Invalid OTP');
-      }
-
-      if (user.otpExpiresAt && new Date() > user.otpExpiresAt) {
-        throw new UnauthorizedException('OTP has expired');
-      }
+      await this.checkOtp(user, otp);
 
       user.isVerified = true;
       user.otp = null as any;
       user.otpExpiresAt = null as any;
+      user.otpAttempts = 0;
       await user.save();
 
-      const payload = {
-        sub: user._id,
-        email: user.email,
-        role: user.role,
-        tokenVersion: user.tokenVersion ?? 0,
-      };
-      const token = this.jwtService.sign(payload, { expiresIn: '1h' });
-
-      await this.redisService.set(token, user._id.toString(), 30 * 60);
-
-      const refreshToken = this.jwtService.sign(payload, {
-        expiresIn: '7d',
-      });
+      const { accessToken: token, refreshToken } = await this.issueSession(user);
 
       return {
         message: 'OTP verified successfully',
@@ -574,11 +642,12 @@ export class AuthService {
       // no-ops but still reports success, exactly as a real user's request
       // would look from the outside.
       if (user) {
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const otp = AuthService.generateOtp();
         const otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
         user.otp = otp;
         user.otpExpiresAt = otpExpiresAt;
+        user.otpAttempts = 0;
         await user.save();
 
         await this.otpService.sendOtp(user.email, otp);
@@ -615,25 +684,27 @@ export class AuthService {
         throw new UnauthorizedException('Invalid user type');
       }
 
-      const user = await userModel.findOne({ email });
-      if (!user) {
-        throw new UnauthorizedException('User not found');
+      if (typeof newPassword !== 'string' || newPassword.length < 8 || newPassword.length > 72) {
+        throw new BadRequestException('Password must be between 8 and 72 characters');
       }
 
-      if (user.otp !== otp) {
+      const user = await userModel.findOne({ email });
+      if (!user) {
+        // Same generic failure as a wrong code — don't confirm which emails exist.
         throw new UnauthorizedException('Invalid OTP');
       }
 
-      const now = new Date();
-      if (!user.otpExpiresAt || now > user.otpExpiresAt) {
-        throw new UnauthorizedException('OTP has expired');
-      }
+      await this.checkOtp(user, otp);
 
       const hashedPassword = await bcrypt.hash(newPassword, 10);
 
       user.password = hashedPassword;
       user.otp = null;
       user.otpExpiresAt = null;
+      user.otpAttempts = 0;
+      // Revoke every session issued before the reset — a password reset is
+      // exactly what a user does after suspecting their account is compromised.
+      user.tokenVersion = (user.tokenVersion ?? 0) + 1;
       await user.save();
 
       return {

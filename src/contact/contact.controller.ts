@@ -13,6 +13,8 @@ import { Throttle } from '@nestjs/throttler';
 import { ContactService } from './contact.service';
 import { CreateContactSubmissionDto, UpdateContactStatusDto } from './dto/contact.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 
 @ApiTags('Contact')
 @Controller('api/contact')
@@ -35,7 +37,8 @@ export class ContactController {
   // ============================================================
 
   @Get('admin/all')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all contact submissions (admin)' })
   getAll() {
@@ -43,7 +46,8 @@ export class ContactController {
   }
 
   @Patch('admin/:id/status')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update a contact submission status (admin)' })
   updateStatus(@Param('id') id: string, @Body() dto: UpdateContactStatusDto) {
@@ -51,7 +55,8 @@ export class ContactController {
   }
 
   @Delete('admin/:id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete a contact submission (admin)' })
   remove(@Param('id') id: string) {

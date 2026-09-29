@@ -38,10 +38,13 @@ export class SocialLoginDto {
   @IsString()
   name?: string;
 
-  @ApiProperty({ example: 'john@example.com' })
+  // Ignored by the server — the account email is taken from the provider's
+  // verified token (see AuthService.verifySocialToken). Kept optional so
+  // existing clients that still send it keep working.
+  @ApiProperty({ required: false, example: 'john@example.com' })
+  @IsOptional()
   @IsEmail()
-  @IsNotEmpty()
-  email: string;
+  email?: string;
 
   // Which account this social login should resolve against — 'user' (buyer,
   // default) or 'seller'. Buyer and seller are separate collections, so this
@@ -70,11 +73,10 @@ export class SocialLoginDto {
   fcmToken?: string;
 
   @ApiProperty({
-    required: false,
     example: 'id-token-from-provider',
-    description: 'OAuth token from provider (for additional verification)',
+    description: 'ID token (Google/Apple) or access token (Facebook) from the provider — required',
   })
-  @IsOptional()
   @IsString()
-  token?: string;
+  @IsNotEmpty()
+  token: string;
 }

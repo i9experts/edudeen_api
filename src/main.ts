@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import cookieParser from 'cookie-parser';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { ValidationPipe } from '@nestjs/common';
 
 async function bootstrap() {
   // rawBody: Stripe webhook signature verification (payment + subscriptions
@@ -11,6 +12,15 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, { rawBody: true });
 
   app.use(cookieParser());
+
+  // Global DTO validation. Before this, only the ~27 controllers that opted
+  // in with a local @UsePipes ran their class-validator rules — every other
+  // DTO (auth, cart, messaging, categories, ...) was decoration only.
+  // `transform: true` matches the local pipes already used across the app,
+  // so query DTOs relying on @Type(() => Number) behave identically.
+  // No `whitelist` here on purpose: stripping unknown props globally could
+  // silently drop fields that `body: any` handlers still rely on.
+  app.useGlobalPipes(new ValidationPipe({ transform: true }));
 
   const config = new DocumentBuilder()
     .setTitle('Edudeen API')
@@ -28,12 +38,11 @@ async function bootstrap() {
     .build();
 
   const whitelist = [
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'http://127.0.0.1:3000',
+    ...(process.env.NODE_ENV !== 'production'
+      ? ['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:3000']
+      : []),
     'https://edudeen.com',
     'https://www.edudeen.com',
-    'https://solvexo-web.vercel.app',
     'https://api.edudeen.com',
   ];
 
@@ -52,12 +61,12 @@ async function bootstrap() {
     } catch {
       return false;
     }
-    return (
-      hostname === 'edudeen.com' ||
-      hostname.endsWith('.edudeen.com') ||
-      hostname === 'localhost' ||
-      hostname.endsWith('.localhost')
-    );
+    if (hostname === 'edudeen.com' || hostname.endsWith('.edudeen.com')) return true;
+    // Local dev origins are never trusted with credentials in production.
+    if (process.env.NODE_ENV !== 'production') {
+      return hostname === 'localhost' || hostname.endsWith('.localhost');
+    }
+    return false;
   };
 
   app.enableCors({
