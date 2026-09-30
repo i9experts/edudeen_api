@@ -110,6 +110,7 @@ import { DatabaseService } from './databaseservice';
         schema: schema.PlatformAddonPurchaseSchema,
       },
       { name: schema.ActivityLog.name, schema: schema.ActivityLogSchema },
+      { name: schema.UploadedAsset.name, schema: schema.UploadedAssetSchema },
       { name: schema.Coupon.name, schema: schema.CouponSchema },
       { name: schema.LoyaltyProgram.name, schema: schema.LoyaltyProgramSchema },
       { name: schema.LoyaltyMember.name, schema: schema.LoyaltyMemberSchema },

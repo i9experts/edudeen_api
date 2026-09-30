@@ -146,6 +146,9 @@ export class DatabaseService {
     @InjectModel(schema.ActivityLog.name)
     private activityLogModel: Model<schema.ActivityLogDocument>,
 
+    @InjectModel(schema.UploadedAsset.name)
+    private uploadedAssetModel: Model<schema.UploadedAssetDocument>,
+
     @InjectModel(schema.Coupon.name)
     private couponModel: Model<schema.CouponDocument>,
 
@@ -344,6 +347,7 @@ export class DatabaseService {
       aiCreditsWalletModel: this.aiCreditsWalletModel,
       platformAddonPurchaseModel: this.platformAddonPurchaseModel,
       activityLogModel: this.activityLogModel,
+      uploadedAssetModel: this.uploadedAssetModel,
       couponModel: this.couponModel,
       loyaltyProgramModel: this.loyaltyProgramModel,
       loyaltyMemberModel: this.loyaltyMemberModel,

@@ -15,6 +15,7 @@ import {
   type VerificationStatus,
 } from './schemas/store.schema';
 import { getVerificationRequirements, isFieldSatisfied } from './verification-requirements.config';
+import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
 import { UploadService } from 'src/upload/upload.service';
 import { SUPPORTED_CURRENCIES } from 'src/exchange-rate/schemas/exchange-rate.schema';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
@@ -67,6 +68,7 @@ export class StoreService {
     private readonly storeThemeService: StoreThemeService,
     private readonly storePagesService: StorePagesService,
     private readonly collectionsService: CollectionsService,
+    private readonly uploadedAssets: UploadedAssetsService,
   ) {}
 
   private generateSlug(name: string): string {
@@ -357,6 +359,12 @@ export class StoreService {
       throw new BadRequestException('Verification details can no longer be edited once submitted for review');
     }
 
+    for (const field of ['legalBusinessName', 'registrationNumber', 'taxId', 'businessAddress'] as const) {
+      const v = body[field];
+      if (v !== undefined && (typeof v !== 'string' || v.length > 500)) {
+        throw new BadRequestException(`${field} must be text of at most 500 characters`);
+      }
+    }
     if (body.businessType && !BUSINESS_TYPES.includes(body.businessType)) {
       throw new BadRequestException('Invalid businessType');
     }
@@ -398,7 +406,13 @@ export class StoreService {
         (current.documents ?? []).map((d: VerificationDocument) => [d.type, d]),
       );
       for (const d of body.documents) {
-        byType.set(d.type, { type: d.type, publicId: d.publicId, resourceType: d.resourceType ?? 'raw', fileName: d.fileName, uploadedAt: new Date() });
+        // The publicId must be a KYC upload made by THIS seller (or already on this record). Before, any
+        // string was accepted: fake ids passed the "documents present" gate, and a seller could point at
+        // any other private asset so the admin review would sign a link to it.
+        const already = (current.documents ?? []).some((e: VerificationDocument) => e.publicId === d.publicId);
+        const trusted = await this.uploadedAssets.assertOwned(sellerId, d.publicId, 'kyc_document', { alreadyReferenced: already });
+        const fileName = typeof d.fileName === 'string' && d.fileName.trim() && d.fileName.length <= 255 ? d.fileName : 'document';
+        byType.set(d.type, { type: d.type, publicId: d.publicId, resourceType: trusted?.resourceType ?? d.resourceType ?? 'raw', fileName, uploadedAt: new Date() });
       }
       next.documents = [...byType.values()];
     }

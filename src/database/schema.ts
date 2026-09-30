@@ -65,6 +65,7 @@ export type { FaqDocument } from '../faqs/schemas/faq.schema';
 export type { NewsletterSubscriber, NewsletterSubscriberSchema } from '../newsletter/schemas/newsletter-subscriber.schema';
 export type { NewsletterSubscriberDocument } from '../newsletter/schemas/newsletter-subscriber.schema';
 export { ActivityLog, ActivityLogDocument, ActivityLogSchema } from '../activity-log/schemas/activity-log.schema';
+export { UploadedAsset, UploadedAssetDocument, UploadedAssetSchema } from '../upload/schemas/uploaded-asset.schema';
 export { Coupon, CouponDocument, CouponSchema } from '../marketing/schemas/coupon.schema';
 export { LoyaltyProgram, LoyaltyProgramDocument, LoyaltyProgramSchema } from '../loyalty/schemas/loyalty-program.schema';
 export { LoyaltyMember, LoyaltyMemberDocument, LoyaltyMemberSchema } from '../loyalty/schemas/loyalty-member.schema';

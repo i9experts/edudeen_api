@@ -18,6 +18,8 @@ import { pickPrimaryCampaignForBadge } from 'src/marketing/campaign-pricing.util
 import { EducationLevel } from './schemas/product.schema';
 import { EducationLevelService } from './education-level.service';
 import { UploadService } from 'src/upload/upload.service';
+import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
+import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings } from './product-input.util';
 import { generateUniqueSlug } from 'src/common/slug.util';
 import { RedisService } from 'src/redis/redis.service';
 import { aggregateProductSales } from 'src/analytics/utils/order-aggregation.util';
@@ -54,6 +56,7 @@ export class ProductsService {
     private uploadService: UploadService,
     private redisService: RedisService,
     private attributesService: AttributesService,
+    private uploadedAssets: UploadedAssetsService,
   ) {}
 
   /** Attaches an `activeCampaign` badge summary (or null) to each product,
@@ -162,6 +165,52 @@ export class ProductsService {
         previewAvailable: !!preview?.enabled,
       },
     };
+  }
+
+  /** subCategoryId must be an ACTIVE child of the product's root category. It used to be stored unchecked
+   *  (any string, any foreign/inactive/deleted/root category), polluting other categories' browse pages. */
+  private async resolveSubCategoryId(rootCategoryId: string, subCategoryId: unknown): Promise<string | null> {
+    if (subCategoryId === undefined || subCategoryId === null || subCategoryId === '') return null;
+    if (typeof subCategoryId !== 'string' || !isValidObjectId(subCategoryId)) {
+      throw new BadRequestException('subCategoryId is not a valid category id');
+    }
+    const sub = await this.databaseService.repositories.categoryModel.findOne({
+      _id: subCategoryId, parentId: rootCategoryId, status: 'active', isDelete: false,
+    });
+    if (!sub) throw new BadRequestException('subCategoryId must be an active subcategory of your store\'s category');
+    return subCategoryId;
+  }
+
+  /** Builds the digital config from untrusted input: every file must be one THIS seller uploaded (or already be
+   *  part of this same product), its mime type/size come from our upload record — never the client — and the
+   *  remaining settings are whitelisted and bounds-checked. */
+  private async buildDigitalConfig(sellerId: string, raw: unknown, existing: any | null): Promise<any> {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new BadRequestException('digital must be an object');
+    const input = raw as Record<string, unknown>;
+    const existingFiles: any[] = existing?.files ?? [];
+
+    const rawFiles = input.files === undefined ? existingFiles : input.files;
+    if (!Array.isArray(rawFiles)) throw new BadRequestException('digital.files must be an array');
+    if (rawFiles.length > 30) throw new BadRequestException('A product can have at most 30 files');
+
+    const files: Array<{ url: string; name: string; size: number | null; mimeType: string | null }> = [];
+    for (const f of rawFiles as Array<Record<string, unknown>>) {
+      if (!f || typeof f !== 'object') throw new BadRequestException('Each file must be an object');
+      const known = existingFiles.find((e) => e.url === f.url);
+      const trusted = await this.uploadedAssets.assertOwned(sellerId, f.url, 'digital_product', { alreadyReferenced: !!known });
+      const name = f.name === undefined && known ? known.name : assertText(f.name, 'file name', 255);
+      if (!name.trim()) throw new BadRequestException('Each file needs a name');
+      files.push({
+        url: f.url as string,
+        name,
+        size: trusted?.fileSize ?? known?.size ?? null,
+        mimeType: trusted?.mimeType ?? known?.mimeType ?? null,
+      });
+    }
+
+    const settings = cleanDigitalSettings(input, existing);
+    const { preview, ...rest } = settings;
+    return this.prepareDigitalPreview(existing?.preview ?? null, { files, ...rest, preview });
   }
 
   /**
@@ -1105,11 +1154,12 @@ export class ProductsService {
       throw new BadRequestException('Only one variant may be marked as default');
     }
 
-    if (status === 'scheduled' && !scheduledAt) {
-      throw new BadRequestException(
-        'scheduledAt is required when status is scheduled',
-      );
-    }
+    assertText(name, 'name', 200);
+    if (description !== undefined && description !== null) assertText(description, 'description', 20000);
+    if (status !== undefined) assertSellerStatus(status);
+    const scheduledDate = status === 'scheduled' ? parseScheduledAt(scheduledAt) : null;
+    const cleanTags = tags === undefined ? [] : assertStringArray(tags, 'tags', { maxItems: 30, maxLength: 60 });
+    const cleanImages = images === undefined ? [] : assertStringArray(images, 'images', { maxItems: 20, maxLength: 2048 });
 
     const categoryId = store.categoryId;
     if (!categoryId)
@@ -1126,13 +1176,13 @@ export class ProductsService {
       productType: 'physical',
       type: 'physical',
       categoryId,
-      subCategoryId: subCategoryId ?? null,
-      images: images ?? [],
-      tags: tags ?? [],
+      subCategoryId: await this.resolveSubCategoryId(categoryId, subCategoryId),
+      images: cleanImages,
+      tags: cleanTags,
       digital: null,
       isListedOnEdudeen: isListedOnEdudeen ?? false,
       status: status ?? 'draft',
-      scheduledAt: status === 'scheduled' ? new Date(scheduledAt) : null,
+      scheduledAt: scheduledDate,
     });
 
     const defaultIndex = variants.findIndex((v: any) => v.isDefault === true);
@@ -1232,6 +1282,13 @@ export class ProductsService {
       );
     }
 
+    assertText(name, 'name', 200);
+    if (description !== undefined && description !== null) assertText(description, 'description', 20000);
+    if (status !== undefined) assertSellerStatus(status);
+    const scheduledDate = status === 'scheduled' ? parseScheduledAt(scheduledAt) : null;
+    const cleanTags = tags === undefined ? [] : assertStringArray(tags, 'tags', { maxItems: 30, maxLength: 60 });
+    const cleanImages = images === undefined ? [] : assertStringArray(images, 'images', { maxItems: 20, maxLength: 2048 });
+
     const finalProductType =
       productType === 'educational' ? 'educational' : 'digital';
 
@@ -1272,6 +1329,9 @@ export class ProductsService {
     if (!categoryId)
       throw new BadRequestException('Your store has no category selected');
 
+    const validSubCategoryId = await this.resolveSubCategoryId(categoryId, subCategoryId);
+    const digitalConfig = digital ? await this.buildDigitalConfig(sellerId, digital, null) : null;
+
     const slug = await generateUniqueSlug(productModel, name);
 
     const product = await productModel.create({
@@ -1283,16 +1343,16 @@ export class ProductsService {
       productType: finalProductType,
       type: 'digital',
       categoryId,
-      subCategoryId: subCategoryId ?? null,
+      subCategoryId: validSubCategoryId,
       educationLevel: finalEducationLevel,
       customLevel: normalizedFields.customLevel,
       normalizedCustomLevel: normalizedFields.normalizedCustomLevel,
-      images: images ?? [],
-      tags: tags ?? [],
-      digital: digital ? await this.prepareDigitalPreview(null, digital) : null,
+      images: cleanImages,
+      tags: cleanTags,
+      digital: digitalConfig,
       isListedOnEdudeen: isListedOnEdudeen ?? false,
       status: status ?? 'draft',
-      scheduledAt: status === 'scheduled' ? new Date(scheduledAt) : null,
+      scheduledAt: scheduledDate,
     });
 
     const sku = `SKU-${product._id.toString().slice(-6).toUpperCase()}-${Date.now().toString().slice(-4)}`;
@@ -1455,28 +1515,21 @@ export class ProductsService {
       productUpdate.slug = slug;
     }
 
-    if (description !== undefined) productUpdate.description = description;
+    if (name !== undefined) assertText(name, 'name', 200);
+    if (description !== undefined) productUpdate.description = description === null ? null : assertText(description, 'description', 20000);
     if (subCategoryId !== undefined)
-      productUpdate.subCategoryId = subCategoryId;
-    if (images !== undefined) productUpdate.images = images;
-    if (tags !== undefined) productUpdate.tags = tags;
+      productUpdate.subCategoryId = await this.resolveSubCategoryId(product.categoryId, subCategoryId);
+    if (images !== undefined) productUpdate.images = assertStringArray(images, 'images', { maxItems: 20, maxLength: 2048 });
+    if (tags !== undefined) productUpdate.tags = assertStringArray(tags, 'tags', { maxItems: 30, maxLength: 60 });
     if (isListedOnEdudeen !== undefined)
       productUpdate.isListedOnEdudeen = isListedOnEdudeen;
     if (status !== undefined) {
-      if (status === 'scheduled' && !scheduledAt) {
-        throw new BadRequestException(
-          'scheduledAt is required when status is scheduled',
-        );
-      }
+      assertSellerStatus(status);
       productUpdate.status = status;
-      productUpdate.scheduledAt =
-        status === 'scheduled' ? new Date(scheduledAt) : null;
+      productUpdate.scheduledAt = status === 'scheduled' ? parseScheduledAt(scheduledAt) : null;
     }
     if (digital !== undefined && product.type === 'digital') {
-      productUpdate.digital = await this.prepareDigitalPreview(
-        product.digital?.preview,
-        digital,
-      );
+      productUpdate.digital = await this.buildDigitalConfig(sellerId, digital, product.digital ?? null);
     }
 
     if (educationLevel !== undefined && product.productType === 'educational') {
@@ -1503,7 +1556,9 @@ export class ProductsService {
           productUpdate.customLevel = normalized.customLevel;
           productUpdate.normalizedCustomLevel =
             normalized.normalizedCustomLevel;
-        } else if (!product.customLevel) {
+        } else if (!product.customLevel || product.educationLevel !== EducationLevel.OTHER) {
+          // Moving TO "other" must bring its own customLevel — a stale one left from an earlier
+          // "other" (or none at all) is not accepted silently.
           throw new BadRequestException(
             'customLevel is required when educationLevel is "other"',
           );
@@ -1517,6 +1572,7 @@ export class ProductsService {
     const updatedProduct =
       Object.keys(productUpdate).length > 0
         ? await productModel.findByIdAndUpdate(productId, productUpdate, {
+            runValidators: true,
             returnDocument: 'after',
           })
         : product;
