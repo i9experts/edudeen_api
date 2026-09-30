@@ -20,7 +20,8 @@ export class OtpService {
   async sendOtp(toEmail: string, otp: string): Promise<void> {
     try {
       const mailOptions = {
-        from: 'jamiraza359@gmail.com', // 🟢 same Gmail as above
+        // Was a hard-coded personal Gmail address: mail from any other SMTP_USER was rejected/spoofed. Uses the configured sender.
+        from: this.configService.get<string>('SMTP_FROM') || this.configService.get<string>('SMTP_USER'),
         to: toEmail,
         subject: 'Your OTP Code',
         text: `Your OTP code is: ${otp}`,
@@ -29,9 +30,10 @@ export class OtpService {
 
       const result = await this.transporter.sendMail(mailOptions);
 
-      this.logger.log(`OTP email sent to ${toEmail}: ${result.response}`);
+      // No recipient address or SMTP response in the log line (PII); the message id is enough to trace a delivery.
+      this.logger.log(`OTP email sent (id ${result.messageId ?? 'n/a'})`);
     } catch (error) {
-      this.logger.error(`Failed to send OTP to ${toEmail}`, error);
+      this.logger.error(`Failed to send OTP email: ${(error as Error)?.message}`);
       throw new Error('Failed to send OTP email');
     }
   }
