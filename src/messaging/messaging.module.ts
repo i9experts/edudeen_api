@@ -1,3 +1,4 @@
+import { WsAuthService } from 'src/common/ws-auth.service';
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -23,7 +24,7 @@ import { UploadModule } from 'src/upload/upload.module';
     }),
   ],
   controllers: [MessagingController],
-  providers: [MessagingService, MessagingGateway],
+  providers: [MessagingService, MessagingGateway, WsAuthService],
   exports: [MessagingService],
 })
 export class MessagingModule {}

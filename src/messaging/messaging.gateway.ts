@@ -1,4 +1,6 @@
 /* eslint-disable prettier/prettier */
+import { isValidObjectId } from 'mongoose';
+import { WsAuthService } from 'src/common/ws-auth.service';
 import { Logger } from '@nestjs/common';
 import {
   WebSocketGateway,
@@ -47,29 +49,29 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
   private readonly onlineCounts = new Map<string, number>();
 
   constructor(
-    private readonly jwtService: JwtService,
+    private readonly wsAuth: WsAuthService,
     private readonly databaseService: DatabaseService,
   ) {}
 
-  handleConnection(client: Socket) {
-    try {
-      const token = (client.handshake.auth?.token || client.handshake.query?.token) as string;
-      if (!token) throw new Error('Missing token');
-
-      const payload = this.jwtService.verify(token, { secret: process.env.JWT_SECRET });
-      const userId = payload.sub;
-      (client.data).userId = userId;
-      (client.data).joinedConversations = new Set<string>();
-
-      client.join(`user:${userId}`);
-
-      const count = (this.onlineCounts.get(userId) || 0) + 1;
-      this.onlineCounts.set(userId, count);
-      if (count === 1) {
-        this.server.emit(`presence:${userId}`, { userId, online: true });
-      }
-    } catch {
+  async handleConnection(client: Socket) {
+    const identity = await this.wsAuth.authenticate(client);
+    if (!identity) {
       client.disconnect();
+      return;
+    }
+    const userId = identity.userId;
+    client.data.userId = userId;
+    client.data.role = identity.role;
+    client.data.joinedConversations = new Set<string>();
+
+    await client.join(`user:${userId}`);
+
+    const count = (this.onlineCounts.get(userId) || 0) + 1;
+    this.onlineCounts.set(userId, count);
+    if (count === 1) {
+      // Presence goes only to sockets that are WATCHING this user (their conversation counterparts) — it used to
+      // be a namespace-wide broadcast, i.e. every connected account learned every other account's id + status.
+      this.server.to(`watch:${userId}`).emit(`presence:${userId}`, { userId, online: true });
     }
   }
 
@@ -80,7 +82,7 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const count = Math.max(0, (this.onlineCounts.get(userId) || 1) - 1);
     if (count === 0) {
       this.onlineCounts.delete(userId);
-      this.server.emit(`presence:${userId}`, { userId, online: false, lastSeen: new Date() });
+      this.server.to(`watch:${userId}`).emit(`presence:${userId}`, { userId, online: false, lastSeen: new Date() });
     } else {
       this.onlineCounts.set(userId, count);
     }
@@ -100,7 +102,7 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('join-conversation')
   async handleJoinConversation(@ConnectedSocket() client: Socket, @MessageBody() conversationId: string) {
     const userId = (client.data).userId;
-    if (!userId || !conversationId) return;
+    if (!userId || typeof conversationId !== 'string' || !isValidObjectId(conversationId)) return;
 
     const conv = await this.databaseService.repositories.conversationModel.findById(conversationId).lean();
     if (!conv || (conv.buyerId !== userId && conv.sellerId !== userId)) {
@@ -112,6 +114,7 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
     (client.data).joinedConversations.add(conversationId);
 
     const otherUserId = conv.buyerId === userId ? conv.sellerId : conv.buyerId;
+    await client.join(`watch:${otherUserId}`); // this conversation's counterpart's presence changes reach this socket
     client.emit('messaging:joined', { conversationId, otherUserId, otherOnline: this.isOnline(otherUserId) });
   }
 
@@ -127,7 +130,9 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @MessageBody() body: { conversationId: string; isTyping: boolean },
   ) {
     const userId = (client.data).userId;
-    if (!userId || !body?.conversationId) return;
+    // Only into a conversation this socket actually joined (join-conversation verified participation);
+    // any socket used to be able to emit typing into any conversation room.
+    if (!userId || typeof body?.conversationId !== 'string' || !(client.data.joinedConversations as Set<string>)?.has(body.conversationId)) return;
     client.to(`conversation:${body.conversationId}`).emit('typing', {
       conversationId: body.conversationId,
       userId,
@@ -136,10 +141,21 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   @SubscribeMessage('presence:check')
-  handlePresenceCheck(@ConnectedSocket() client: Socket, @MessageBody() userIds: string[]) {
-    if (!Array.isArray(userIds)) return;
-    const statuses = userIds.map((id) => ({ userId: id, online: this.isOnline(id) }));
-    client.emit('presence:status', statuses);
+  async handlePresenceCheck(@ConnectedSocket() client: Socket, @MessageBody() userIds: string[]) {
+    const me = (client.data).userId;
+    if (!me || !Array.isArray(userIds)) return;
+    // Bounded, and limited to people this user actually has a conversation with — it used to answer for ANY
+    // user id (account enumeration + online/last-seen for everyone), with an unbounded array.
+    const ids = [...new Set(userIds.filter((id): id is string => typeof id === 'string').slice(0, 50))];
+    if (ids.length === 0) return;
+    const convs = await this.databaseService.repositories.conversationModel
+      .find({ $or: [{ buyerId: me, sellerId: { $in: ids } }, { sellerId: me, buyerId: { $in: ids } }] })
+      .select('buyerId sellerId')
+      .lean();
+    const allowed = new Set<string>();
+    for (const c of convs) allowed.add(c.buyerId === me ? c.sellerId : c.buyerId);
+    for (const id of allowed) await client.join(`watch:${id}`);
+    client.emit('presence:status', [...allowed].map((id) => ({ userId: id, online: this.isOnline(id) })));
   }
 
   // ── Called by MessagingService after DB writes ────────────────────────────

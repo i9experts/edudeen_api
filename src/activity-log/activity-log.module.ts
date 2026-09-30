@@ -1,3 +1,4 @@
+import { WsAuthService } from 'src/common/ws-auth.service';
 import { Global, Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -26,7 +27,7 @@ import { RedisModule } from '../redis/redis.module';
     }),
   ],
   controllers: [ActivityLogController, AdminActivityLogController],
-  providers: [ActivityLogService, ActivityLogGateway],
+  providers: [ActivityLogService, ActivityLogGateway, WsAuthService],
   exports: [ActivityLogService],
 })
 export class ActivityLogModule {}

@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { WsAuthService } from 'src/common/ws-auth.service';
 import { Logger } from '@nestjs/common';
 import {
   WebSocketGateway,
@@ -38,20 +39,17 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
   private readonly logger = new Logger(NotificationsGateway.name);
 
-  constructor(private readonly jwtService: JwtService) {}
+  constructor(private readonly wsAuth: WsAuthService) {}
 
-  handleConnection(client: Socket) {
-    try {
-      const token = (client.handshake.auth?.token || client.handshake.query?.token) as string;
-      if (!token) throw new Error('Missing token');
-
-      const payload = this.jwtService.verify(token, { secret: process.env.JWT_SECRET });
-      const userId = payload.sub;
-      (client.data).userId = userId;
-      client.join(`user:${userId}`);
-    } catch {
+  async handleConnection(client: Socket) {
+    const identity = await this.wsAuth.authenticate(client);
+    if (!identity) {
       client.disconnect();
+      return;
     }
+    client.data.userId = identity.userId;
+    client.data.role = identity.role;
+    await client.join(`user:${identity.userId}`);
   }
 
   handleDisconnect(client: Socket) {

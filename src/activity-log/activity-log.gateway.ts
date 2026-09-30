@@ -1,4 +1,6 @@
 /* eslint-disable prettier/prettier */
+import { isValidObjectId } from 'mongoose';
+import { WsAuthService } from 'src/common/ws-auth.service';
 import { Logger } from '@nestjs/common';
 import {
   WebSocketGateway,
@@ -42,20 +44,18 @@ export class ActivityLogGateway implements OnGatewayConnection, OnGatewayDisconn
   private readonly logger = new Logger(ActivityLogGateway.name);
 
   constructor(
-    private readonly jwtService: JwtService,
+    private readonly wsAuth: WsAuthService,
     private readonly databaseService: DatabaseService,
   ) {}
 
-  handleConnection(client: Socket) {
-    try {
-      const token = (client.handshake.auth?.token || client.handshake.query?.token) as string;
-      if (!token) throw new Error('Missing token');
-
-      const payload = this.jwtService.verify(token, { secret: process.env.JWT_SECRET });
-      (client.data).userId = payload.sub;
-    } catch {
+  async handleConnection(client: Socket) {
+    const identity = await this.wsAuth.authenticate(client);
+    if (!identity) {
       client.disconnect();
+      return;
     }
+    client.data.userId = identity.userId;
+    client.data.role = identity.role;
   }
 
   handleDisconnect(client: Socket) {
@@ -65,8 +65,13 @@ export class ActivityLogGateway implements OnGatewayConnection, OnGatewayDisconn
   @SubscribeMessage('join-store')
   async handleJoinStore(@ConnectedSocket() client: Socket, @MessageBody() storeId: string) {
     const sellerId = (client.data).userId;
-    if (!sellerId || !storeId) {
+    if (!sellerId || typeof storeId !== 'string' || !isValidObjectId(storeId)) {
       client.emit('activity:error', 'storeId required');
+      return;
+    }
+    // Store activity is seller-facing: a buyer/admin account must not be able to subscribe by id.
+    if (client.data.role !== 'seller') {
+      client.emit('activity:error', 'Not authorized for this store');
       return;
     }
 
