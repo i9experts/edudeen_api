@@ -54,7 +54,7 @@ describe('OrdersService — digital delivery', () => {
       generateSignedUrl: () => 'https://signed.example/file',
     };
     const config: any = { get: () => SECRET };
-    service = new OrdersService(db, upload, jwt, config, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    service = new OrdersService(db, upload, jwt, config, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
   };
 
   // On newer Node versions restoreAllMocks can leave global.fetch undefined

@@ -241,7 +241,7 @@ export class RefundRequestService {
 
       items = (sellerOrder.items as any[]).filter((i: any) => request.itemIds.includes(i._id.toString()));
       // State may have changed since the request was filed.
-      const unrefundable = items.filter((i: any) => ['refunded', 'cancelled'].includes(i.status));
+      const unrefundable = items.filter((i: any) => ['refunded', 'cancelled'].includes(i.status) || i.returnStatus === 'approved');
       if (unrefundable.length > 0) {
         throw new BadRequestException('One or more items were already refunded or cancelled');
       }

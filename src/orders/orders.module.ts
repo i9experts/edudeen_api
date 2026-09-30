@@ -13,6 +13,7 @@ import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 import { AuthModule } from 'src/auth/auth.module';
 import { UploadModule } from 'src/upload/upload.module';
+import { ExchangeRateModule } from 'src/exchange-rate/exchange-rate.module';
 import { RedisModule } from 'src/redis/redis.module';
 import { FinanceModule } from 'src/finance/finance.module';
 import { PaymentModule } from 'src/payment/payment.module';
@@ -26,6 +27,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
     RedisModule,
     FinanceModule,
     PaymentModule,
+    ExchangeRateModule,
     ConfigModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

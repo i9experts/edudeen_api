@@ -1,3 +1,4 @@
+import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import {
   Injectable,
   BadRequestException,
@@ -50,6 +51,7 @@ export class OrdersService {
     private readonly subscriptionBenefits: SubscriptionBenefitsService,
     private readonly notificationsService: NotificationsService,
     private readonly paymentService: PaymentService,
+    private readonly exchangeRateService: ExchangeRateService,
   ) {}
 
   /** Subscribers earn points at their plan's configured multiplier (default 1x). */
@@ -1141,6 +1143,8 @@ export class OrdersService {
         throw new BadRequestException(
           `"${item.name}" has no pending return request`,
         );
+      if (['refunded', 'cancelled'].includes(item.status) || (item.refundedAmount ?? 0) > 0)
+        throw new BadRequestException(`"${item.name}" has already been refunded or cancelled`);
       targetItems.push({ itemIndex, item });
     }
 
@@ -1203,40 +1207,64 @@ export class OrdersService {
       updateData.hasReturnApproved = true;
     }
 
-    // Send the buyer's money back BEFORE recording the approval, so a failed
-    // Stripe refund leaves the return still pending instead of "approved"
-    // with nothing refunded.
-    let manualRefundNeeded = false;
-    if (action === 'approve' && order.isPaid) {
-      const buyerRefund = round(
-        targetItems.reduce((sum, t) => sum + (t.item.totalPrice || 0), 0),
-      );
-      if (order.paymentType === 'stripe' && buyerRefund > 0) {
-        const { paymentTransactionModel } = this.databaseService.repositories;
-        const tx = await paymentTransactionModel.findOne({
-          orderIds: orderId,
-          status: 'completed',
-          stripePaymentIntentId: { $ne: null },
-          isDelete: false,
-        });
-        if (!tx) throw new BadRequestException('Payment record not found — contact support to refund this return');
-        const amount = Math.min(buyerRefund, round((tx.amount ?? 0) - (tx.amountRefunded ?? 0)));
-        if (amount > 0) {
-          const itemKey = targetItems.map((t) => t.item._id.toString()).sort().join(',');
-          const refund = await this.paymentService.refundStripePaymentIntent(
-            tx.stripePaymentIntentId!,
-            amount,
-            `return-${orderId}-${itemKey}`,
-          );
-          if (!refund) throw new BadRequestException('Online refunds are not available right now — try again later');
-        }
-      } else if (buyerRefund > 0) {
-        // COD / bank transfer: the cash has to be returned by hand.
-        manualRefundNeeded = true;
-      }
+    // Claim the return atomically FIRST: only the request that flips these
+    // items requested→approved/rejected may move money, so a double-click or
+    // retry can't refund (and restock) twice. If the buyer refund below fails,
+    // the claim is rolled back so the return stays pending, as before.
+    const claimFilter: Record<string, any> = { _id: orderId, isDelete: false };
+    for (const t of targetItems) {
+      claimFilter[`sellerOrders.${soIndex}.items.${t.itemIndex}.returnStatus`] = 'requested';
     }
+    const claimed = await orderModel.findOneAndUpdate(claimFilter, { $set: updateData });
+    if (!claimed) throw new BadRequestException('These return requests were already processed');
 
-    await orderModel.findByIdAndUpdate(orderId, { $set: updateData });
+    const revertClaim = async () => {
+      const revert: Record<string, any> = {
+        [`sellerOrders.${soIndex}.returnStatus`]: sellerOrder.returnStatus ?? 'none',
+        hasReturnApproved: order.hasReturnApproved ?? false,
+      };
+      for (const t of targetItems) {
+        revert[`sellerOrders.${soIndex}.items.${t.itemIndex}.returnStatus`] = 'requested';
+        revert[`sellerOrders.${soIndex}.items.${t.itemIndex}.refundedAmount`] = t.item.refundedAmount ?? 0;
+      }
+      await orderModel.updateOne({ _id: orderId }, { $set: revert });
+    };
+
+    // Send the buyer's money back, and only keep the approval if that worked.
+    let manualRefundNeeded = false;
+    try {
+      if (action === 'approve' && order.isPaid) {
+        const buyerRefund = round(
+          targetItems.reduce((sum, t) => sum + (t.item.totalPrice || 0), 0),
+        );
+        if (order.paymentType === 'stripe' && buyerRefund > 0) {
+          const { paymentTransactionModel } = this.databaseService.repositories;
+          const tx = await paymentTransactionModel.findOne({
+            orderIds: orderId,
+            status: 'completed',
+            stripePaymentIntentId: { $ne: null },
+            isDelete: false,
+          });
+          if (!tx) throw new BadRequestException('Payment record not found — contact support to refund this return');
+          const amount = Math.min(buyerRefund, round((tx.amount ?? 0) - (tx.amountRefunded ?? 0)));
+          if (amount > 0) {
+            const itemKey = targetItems.map((t) => t.item._id.toString()).sort().join(',');
+            const refund = await this.paymentService.refundStripePaymentIntent(
+              tx.stripePaymentIntentId!,
+              amount,
+              `return-${orderId}-${itemKey}`,
+            );
+            if (!refund) throw new BadRequestException('Online refunds are not available right now — try again later');
+          }
+        } else if (buyerRefund > 0) {
+          // COD / bank transfer: the cash has to be returned by hand.
+          manualRefundNeeded = true;
+        }
+      }
+    } catch (err) {
+      await revertClaim();
+      throw err;
+    }
 
     // Returned goods go back on the shelf.
     if (action === 'approve') {
@@ -1267,23 +1295,45 @@ export class OrdersService {
 
     let refundProcessed = false;
     if (action === 'approve' && order.isPaid) {
-      const refundAmount = targetItems.reduce(
+      const refundAmount = round(targetItems.reduce(
         (sum, t) => sum + (t.item.totalPrice || 0),
         0,
-      );
+      ));
       if (refundAmount > 0) {
         try {
+          // item.totalPrice is in the ORDER currency; the seller's wallet is in
+          // their settlement currency — convert with the order's own frozen FX
+          // snapshots (never a live rate) and debit the matching wallet. It used
+          // to debit the raw number from the USD wallet (PKR 28000 → $28000).
+          const buyerCurrency = order.currency || 'USD';
+          const settlementCurrency = sellerOrder.settlementCurrency ?? buyerCurrency;
+          const sellerDebit = this.exchangeRateService.convertWithSnapshots(
+            refundAmount, buyerCurrency, settlementCurrency, (order.fxSnapshots as any) ?? [],
+          );
           await this.financeService.recordRefund(
             storeId,
             sellerId,
             orderId,
-            refundAmount,
+            sellerDebit,
             sellerId,
             'seller',
+            { currency: settlementCurrency, description: `Approved return — Order #${order.orderNumber ?? orderId}` },
           );
           refundProcessed = true;
         } catch (e) {
-          console.error('Finance recordRefund failed:', e?.message);
+          // The buyer has already been (or must be) refunded — a failed ledger
+          // debit must never be swallowed silently.
+          await this.activityLogService.log({
+            storeId,
+            category: 'finance',
+            action: 'return_ledger_debit_failed',
+            description: `Return on order #${orderId} approved but the seller ledger debit failed: ${e?.message}`,
+            actorId: sellerId,
+            actorRole: 'seller',
+            isSecurityAlert: true,
+            targetId: orderId,
+            targetType: 'order',
+          });
         }
 
         this.loyaltyService
