@@ -25,6 +25,5 @@ export class WebhookEvent {
 }
 
 export const WebhookEventSchema = SchemaFactory.createForClass(WebhookEvent);
-WebhookEventSchema.index({ providerEventId: 1 }, { unique: true });
 WebhookEventSchema.index({ provider: 1, status: 1, createdAt: -1 });
 WebhookEventSchema.index({ type: 1, createdAt: -1 });

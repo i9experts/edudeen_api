@@ -24,4 +24,3 @@ export class StripeWebhookEvent {
 }
 
 export const StripeWebhookEventSchema = SchemaFactory.createForClass(StripeWebhookEvent);
-StripeWebhookEventSchema.index({ eventId: 1 }, { unique: true });

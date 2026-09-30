@@ -79,4 +79,3 @@ export class PlatformSeoSettings {
 }
 
 export const PlatformSeoSettingsSchema = SchemaFactory.createForClass(PlatformSeoSettings);
-PlatformSeoSettingsSchema.index({ key: 1 }, { unique: true });

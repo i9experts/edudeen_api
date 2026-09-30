@@ -85,4 +85,3 @@ export class Campaign {
 export const CampaignSchema = SchemaFactory.createForClass(Campaign);
 
 CampaignSchema.index({ status: 1, startDate: 1, endDate: 1 });
-CampaignSchema.index({ slug: 1 });

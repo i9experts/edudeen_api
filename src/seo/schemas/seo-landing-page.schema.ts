@@ -32,5 +32,4 @@ export class SeoLandingPage {
 }
 
 export const SeoLandingPageSchema = SchemaFactory.createForClass(SeoLandingPage);
-SeoLandingPageSchema.index({ slug: 1 }, { unique: true });
 SeoLandingPageSchema.index({ status: 1 });

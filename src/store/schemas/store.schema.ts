@@ -508,7 +508,6 @@ export class Store {
 export const StoreSchema = SchemaFactory.createForClass(Store);
 
 StoreSchema.index({ sellerId: 1 });
-StoreSchema.index({ slug: 1 });
 StoreSchema.index({ name: 1 });
 StoreSchema.index({ sellerType: 1 });
 StoreSchema.index({ averageRating: -1 });

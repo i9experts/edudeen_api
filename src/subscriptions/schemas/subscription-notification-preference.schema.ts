@@ -18,4 +18,3 @@ export class SubscriptionNotificationPreference {
 }
 
 export const SubscriptionNotificationPreferenceSchema = SchemaFactory.createForClass(SubscriptionNotificationPreference);
-SubscriptionNotificationPreferenceSchema.index({ customerId: 1 }, { unique: true });

@@ -30,5 +30,4 @@ export class EducationLevelAlias {
 
 export const EducationLevelAliasSchema = SchemaFactory.createForClass(EducationLevelAlias);
 
-EducationLevelAliasSchema.index({ matchKey: 1 }, { unique: true });
 EducationLevelAliasSchema.index({ canonicalSlug: 1 });

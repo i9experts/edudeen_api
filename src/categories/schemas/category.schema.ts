@@ -61,4 +61,3 @@ export const CategorySchema = SchemaFactory.createForClass(Category);
 CategorySchema.index({ name: 1 });
 CategorySchema.index({ parentId: 1 });
 CategorySchema.index({ createdBy: 1 });
-CategorySchema.index({ slug: 1 });

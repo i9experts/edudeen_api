@@ -61,7 +61,6 @@ export const SubscriptionInvoiceSchema = SchemaFactory.createForClass(Subscripti
 SubscriptionInvoiceSchema.index({ subscriptionId: 1, createdAt: -1 });
 SubscriptionInvoiceSchema.index({ storeId: 1, createdAt: -1 });
 SubscriptionInvoiceSchema.index({ sellerId: 1, createdAt: -1 });
-SubscriptionInvoiceSchema.index({ invoiceNumber: 1 }, { unique: true });
 SubscriptionInvoiceSchema.index({ status: 1 });
 SubscriptionInvoiceSchema.index({ stripeInvoiceId: 1 });
 SubscriptionInvoiceSchema.index({ countryCode: 1, createdAt: -1 });

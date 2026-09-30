@@ -29,4 +29,3 @@ export class AiCreditsWallet {
 }
 
 export const AiCreditsWalletSchema = SchemaFactory.createForClass(AiCreditsWallet);
-AiCreditsWalletSchema.index({ storeId: 1 }, { unique: true });

@@ -24,5 +24,4 @@ export class IdempotencyRecord {
 }
 
 export const IdempotencyRecordSchema = SchemaFactory.createForClass(IdempotencyRecord);
-IdempotencyRecordSchema.index({ key: 1 }, { unique: true });
 IdempotencyRecordSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });

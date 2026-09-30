@@ -440,7 +440,6 @@ export class Order {
 
 export const OrderSchema = SchemaFactory.createForClass(Order);
 
-OrderSchema.index({ orderNumber: 1 }, { unique: true });
 OrderSchema.index({ userId: 1 });
 OrderSchema.index({ attributionSource: 1 });
 OrderSchema.index({ checkoutId: 1 });

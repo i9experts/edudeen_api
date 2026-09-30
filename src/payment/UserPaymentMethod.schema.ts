@@ -56,7 +56,4 @@ export const UserPaymentMethodSchema =
   SchemaFactory.createForClass(UserPaymentMethod);
 
 // Indexes
-UserPaymentMethodSchema.index({ userId: 1 });
 UserPaymentMethodSchema.index({ userId: 1, isDefault: 1 });
-UserPaymentMethodSchema.index({ type: 1 });
-UserPaymentMethodSchema.index({ status: 1 });

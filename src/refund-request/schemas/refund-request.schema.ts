@@ -81,6 +81,5 @@ export class RefundRequest {
 
 export const RefundRequestSchema = SchemaFactory.createForClass(RefundRequest);
 
-RefundRequestSchema.index({ orderId: 1 });
 RefundRequestSchema.index({ sellerOrderId: 1 });
 RefundRequestSchema.index({ status: 1, createdAt: -1 });
