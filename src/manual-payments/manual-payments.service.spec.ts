@@ -121,43 +121,98 @@ describe('ManualPaymentsService', () => {
   });
 
   describe('adminApprove', () => {
-    it('throws when the proof is not pending', async () => {
-      proofModel.findById.mockResolvedValue({ status: 'approved' });
-      await expect(service.adminApprove('p1', 'admin-1')).rejects.toThrow(BadRequestException);
+    const lean = (v: any) => ({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(v) }) });
+    const claimed = (o: any = {}) => ({ status: 'approved', orderIds: ['order-1'], amountPKR: 27800, userId: USER_ID, toObject() { return { ...this }; }, ...o });
+    beforeEach(() => {
+      proofModel.findOneAndUpdate = jest.fn();
+      proofModel.updateOne = jest.fn().mockResolvedValue({});
+      orderModel.findOneAndUpdate = jest.fn().mockResolvedValue({});
     });
 
-    it('marks every affected order paid, credits each seller via FinanceService with the order currency, and approves the proof', async () => {
-      const order = { _id: 'order-1', currency: 'PKR', sellerOrders: [makeSellerOrder()] };
-      proofModel.findById.mockResolvedValue({ status: 'pending', orderIds: ['order-1'], amountPKR: 27800, userId: USER_ID, save: jest.fn() });
+    it('a second approve (double-click / second admin) loses the atomic claim and credits nobody', async () => {
+      proofModel.findOneAndUpdate.mockResolvedValue(null);
+      proofModel.findById.mockReturnValue(lean({ status: 'approved' }));
+      await expect(service.adminApprove('p1', 'admin-1')).rejects.toThrow(/status "approved"/);
+      expect(financeService.recordSale).not.toHaveBeenCalled();
+      expect(orderModel.find).not.toHaveBeenCalled();
+    });
+
+    it('404 for a missing proof', async () => {
+      proofModel.findOneAndUpdate.mockResolvedValue(null);
+      proofModel.findById.mockReturnValue(lean(null));
+      await expect(service.adminApprove('nope', 'admin-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('claims only a pending proof, marks live orders paid, and credits each seller in the order currency', async () => {
+      const order = { _id: 'order-1', currency: 'PKR', orderStatus: 'pending', sellerOrders: [makeSellerOrder()] };
+      proofModel.findOneAndUpdate.mockResolvedValue(claimed());
       orderModel.find.mockResolvedValue([order]);
 
       await service.adminApprove('p1', 'admin-1');
 
-      expect(orderModel.findByIdAndUpdate).toHaveBeenCalledWith('order-1', expect.objectContaining({
-        $set: expect.objectContaining({ isPaid: true, paymentStatus: 'paid', orderStatus: 'completed' }),
-      }));
-      expect(financeService.recordSale).toHaveBeenCalledWith(
-        'store-1', 'seller-1', 'order-1', 100, expect.any(String), 0, null, 'PKR', 'manual_bank_transfer',
+      expect(proofModel.findOneAndUpdate).toHaveBeenCalledWith({ _id: 'p1', status: 'pending' }, expect.anything(), expect.anything());
+      expect(orderModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'order-1', isPaid: { $ne: true }, orderStatus: { $ne: 'cancelled' } },
+        { $set: expect.objectContaining({ isPaid: true, paymentStatus: 'paid', orderStatus: 'completed' }) },
       );
+      expect(financeService.recordSale).toHaveBeenCalledWith('store-1', 'seller-1', 'order-1', 100, expect.any(String), 0, null, 'PKR', 'manual_bank_transfer');
       expect(activityLogService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'manual_payment_approved' }));
       expect(notificationsService.notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'manual_payment_approved' }));
+    });
+
+    it('never revives a cancelled order: no paid flag, no seller credit, claim released', async () => {
+      proofModel.findOneAndUpdate.mockResolvedValue(claimed());
+      orderModel.find.mockResolvedValue([{ _id: 'order-1', currency: 'PKR', orderStatus: 'cancelled', sellerOrders: [makeSellerOrder()] }]);
+      await expect(service.adminApprove('p1', 'admin-1')).rejects.toThrow(/cancelled/);
+      expect(orderModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(financeService.recordSale).not.toHaveBeenCalled();
+      expect(proofModel.updateOne).toHaveBeenCalledWith({ _id: 'p1', status: 'approved' }, { $set: expect.objectContaining({ status: 'pending' }) });
+    });
+
+    it('skips cancelled/refunded sub-orders and items when completing and crediting', async () => {
+      const live = makeSellerOrder();
+      const dead = { ...makeSellerOrder(), storeId: 'store-2', sellerId: 'seller-2', status: 'cancelled' };
+      proofModel.findOneAndUpdate.mockResolvedValue(claimed());
+      orderModel.find.mockResolvedValue([{ _id: 'order-1', currency: 'PKR', orderStatus: 'pending', sellerOrders: [live, dead] }]);
+      await service.adminApprove('p1', 'admin-1');
+      expect(financeService.recordSale).toHaveBeenCalledTimes(1);
+      expect(financeService.recordSale).toHaveBeenCalledWith('store-1', 'seller-1', 'order-1', 100, expect.any(String), 0, null, 'PKR', 'manual_bank_transfer'); // store-2 (cancelled) is never credited
+      const set = (orderModel.findOneAndUpdate as jest.Mock).mock.calls[0][1].$set;
+      expect(Object.keys(set).some((k) => k.startsWith('sellerOrders.1.'))).toBe(false);
+    });
+
+    it('releases the claim when the proof has no orders, so it can be retried', async () => {
+      proofModel.findOneAndUpdate.mockResolvedValue(claimed());
+      orderModel.find.mockResolvedValue([]);
+      await expect(service.adminApprove('p1', 'admin-1')).rejects.toThrow(NotFoundException);
+      expect(proofModel.updateOne).toHaveBeenCalled();
     });
   });
 
   describe('adminReject', () => {
+    const lean = (v: any) => ({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(v) }) });
+    beforeEach(() => { proofModel.findOneAndUpdate = jest.fn(); });
+
     it('throws NotFoundException for a missing proof', async () => {
-      proofModel.findById.mockResolvedValue(null);
+      proofModel.findOneAndUpdate.mockResolvedValue(null);
+      proofModel.findById.mockReturnValue(lean(null));
       await expect(service.adminReject('missing', 'admin-1', 'reason')).rejects.toThrow(NotFoundException);
     });
 
-    it('marks the proof rejected with the given reason and notifies the buyer', async () => {
-      const proof: any = { status: 'pending', amountPKR: 27800, userId: USER_ID, save: jest.fn() };
-      proofModel.findById.mockResolvedValue(proof);
+    it('cannot reject a proof that was already approved', async () => {
+      proofModel.findOneAndUpdate.mockResolvedValue(null);
+      proofModel.findById.mockReturnValue(lean({ status: 'approved' }));
+      await expect(service.adminReject('p1', 'admin-1', 'reason')).rejects.toThrow(/status "approved"/);
+    });
 
+    it('atomically marks the proof rejected with the given reason and notifies the buyer', async () => {
+      proofModel.findOneAndUpdate.mockResolvedValue({ status: 'rejected', amountPKR: 27800, userId: USER_ID, toObject() { return { ...this }; } });
       await service.adminReject('p1', 'admin-1', 'Amount mismatch');
-
-      expect(proof.status).toBe('rejected');
-      expect(proof.rejectionReason).toBe('Amount mismatch');
+      expect(proofModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'p1', status: 'pending' },
+        { $set: expect.objectContaining({ status: 'rejected', rejectionReason: 'Amount mismatch' }) },
+        expect.anything(),
+      );
       expect(notificationsService.notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'manual_payment_rejected' }));
     });
   });

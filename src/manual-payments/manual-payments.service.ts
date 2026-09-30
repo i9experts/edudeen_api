@@ -219,17 +219,38 @@ export class ManualPaymentsService {
   }
 
   async adminApprove(proofId: string, adminId: string, ip?: string, userAgent?: string) {
-    const proof = await this.proofModel.findById(proofId);
-    if (!proof) throw new NotFoundException('Payment proof not found');
-    if (proof.status !== 'pending') {
-      throw new BadRequestException(`Cannot approve a proof with status "${proof.status}"`);
+    // Claim the proof atomically BEFORE any side effect: two admins clicking
+    // approve together (or a retry) can't both run the crediting below.
+    const now = new Date();
+    const proof = await this.proofModel.findOneAndUpdate(
+      { _id: proofId, status: 'pending' },
+      { $set: { status: 'approved', reviewedByAdminId: adminId, reviewedAt: now } },
+      { returnDocument: 'after' },
+    );
+    if (!proof) {
+      const existing = await this.proofModel.findById(proofId).select('status').lean();
+      if (!existing) throw new NotFoundException('Payment proof not found');
+      throw new BadRequestException(`Cannot approve a proof with status "${(existing as any).status}"`);
     }
 
-    const orders = await this.orderModel.find({ _id: { $in: proof.orderIds }, isDelete: false });
-    if (orders.length === 0) throw new NotFoundException('No orders found for this payment proof');
+    const releaseClaim = () =>
+      this.proofModel.updateOne({ _id: proofId, status: 'approved' }, { $set: { status: 'pending', reviewedByAdminId: null, reviewedAt: null } });
 
-    const now = new Date();
-    for (const order of orders as any[]) {
+    const orders = await this.orderModel.find({ _id: { $in: proof.orderIds }, isDelete: false });
+    if (orders.length === 0) {
+      await releaseClaim();
+      throw new NotFoundException('No orders found for this payment proof');
+    }
+    // A buyer may have cancelled the order while the proof was pending — never
+    // revive it, credit the seller, or hand over digital goods for it.
+    const payable = (orders as any[]).filter((o) => o.orderStatus !== 'cancelled');
+    if (payable.length === 0) {
+      await releaseClaim();
+      throw new BadRequestException('All orders for this payment proof have been cancelled');
+    }
+
+    const isLive = (x: any) => !['cancelled', 'refunded'].includes(x?.status);
+    for (const order of payable) {
       const updateData: Record<string, any> = {
         isPaid: true,
         paymentStatus: 'paid',
@@ -237,15 +258,23 @@ export class ManualPaymentsService {
         orderStatus: 'completed',
       };
       order.sellerOrders.forEach((so: any, soIndex: number) => {
+        if (!isLive(so)) return;
         updateData[`sellerOrders.${soIndex}.status`] = 'completed';
         updateData[`sellerOrders.${soIndex}.deliveredAt`] = now;
-        so.items.forEach((_: any, itemIndex: number) => {
-          updateData[`sellerOrders.${soIndex}.items.${itemIndex}.status`] = 'completed';
+        so.items.forEach((item: any, itemIndex: number) => {
+          if (isLive(item)) updateData[`sellerOrders.${soIndex}.items.${itemIndex}.status`] = 'completed';
         });
       });
-      await this.orderModel.findByIdAndUpdate(order._id, { $set: updateData });
+      // Guarded: if markPaid (or an earlier approval attempt) already paid this
+      // order, leave it alone. recordSale is idempotent per order+store, so a
+      // retry after a partial failure only fills in the sellers still missing.
+      await this.orderModel.findOneAndUpdate(
+        { _id: order._id, isPaid: { $ne: true }, orderStatus: { $ne: 'cancelled' } },
+        { $set: updateData },
+      );
 
       for (const so of order.sellerOrders) {
+        if (!isLive(so)) continue;
         const platformSponsoredUSD = so.platformSponsoredDiscountUSD ?? 0;
         const sponsoredCampaignId = so.items.find((i: any) => i.campaignSponsorType === 'platform')?.campaignId ?? null;
         try {
@@ -261,16 +290,11 @@ export class ManualPaymentsService {
       }
     }
 
-    proof.status = 'approved';
-    proof.reviewedByAdminId = adminId;
-    proof.reviewedAt = now;
-    await proof.save();
-
     this.activityLogService.log({
       storeId: 'platform',
       category: 'finance',
       action: 'manual_payment_approved',
-      description: `Manual bank-transfer payment of PKR ${proof.amountPKR.toFixed(2)} approved for ${orders.length} order(s)`,
+      description: `Manual bank-transfer payment of PKR ${proof.amountPKR.toFixed(2)} approved for ${payable.length} order(s)`,
       actorId: adminId,
       actorRole: 'admin',
       targetId: proofId,
@@ -293,17 +317,16 @@ export class ManualPaymentsService {
   }
 
   async adminReject(proofId: string, adminId: string, reason: string, ip?: string, userAgent?: string) {
-    const proof = await this.proofModel.findById(proofId);
-    if (!proof) throw new NotFoundException('Payment proof not found');
-    if (proof.status !== 'pending') {
-      throw new BadRequestException(`Cannot reject a proof with status "${proof.status}"`);
+    const proof = await this.proofModel.findOneAndUpdate(
+      { _id: proofId, status: 'pending' },
+      { $set: { status: 'rejected', rejectionReason: reason, reviewedByAdminId: adminId, reviewedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+    if (!proof) {
+      const existing = await this.proofModel.findById(proofId).select('status').lean();
+      if (!existing) throw new NotFoundException('Payment proof not found');
+      throw new BadRequestException(`Cannot reject a proof with status "${(existing as any).status}"`);
     }
-
-    proof.status = 'rejected';
-    proof.rejectionReason = reason;
-    proof.reviewedByAdminId = adminId;
-    proof.reviewedAt = new Date();
-    await proof.save();
 
     this.activityLogService.log({
       storeId: 'platform',
