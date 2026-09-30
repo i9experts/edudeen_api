@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { escapeHtml } from 'src/notifications/templates/notification-email.template';
 import { Injectable, Logger } from '@nestjs/common';
 import { EmailService } from '../otp/services/email.service';
 
@@ -61,11 +62,11 @@ export class SubscriptionNotificationsService {
     fromInterval: string; toInterval: string; amountUSD: number;
   }) {
     const html = shell('Your plan was changed', `
-      <p>Hi ${data.customerName},</p>
-      <p>Your subscription with <strong>${data.storeName}</strong> has been updated.</p>
+      <p>Hi ${escapeHtml(data.customerName)},</p>
+      <p>Your subscription with <strong>${escapeHtml(data.storeName)}</strong> has been updated.</p>
       <div class="box">
-        <div class="row"><span class="label">Previous plan</span><span class="value">${data.fromPlanName} (${data.fromInterval})</span></div>
-        <div class="row"><span class="label">New plan</span><span class="value">${data.toPlanName} (${data.toInterval})</span></div>
+        <div class="row"><span class="label">Previous plan</span><span class="value">${escapeHtml(data.fromPlanName)} (${escapeHtml(data.fromInterval)})</span></div>
+        <div class="row"><span class="label">New plan</span><span class="value">${escapeHtml(data.toPlanName)} (${escapeHtml(data.toInterval)})</span></div>
       </div>
       <div class="amount">${money(data.amountUSD)} charged</div>
       <p style="text-align:center;color:#666;font-size:13px;">This is a prorated charge for the remainder of your current billing period.</p>
@@ -78,11 +79,11 @@ export class SubscriptionNotificationsService {
     fromInterval: string; toInterval: string; creditUSD: number;
   }) {
     const html = shell('Your plan was changed', `
-      <p>Hi ${data.customerName},</p>
-      <p>Your subscription with <strong>${data.storeName}</strong> has been updated.</p>
+      <p>Hi ${escapeHtml(data.customerName)},</p>
+      <p>Your subscription with <strong>${escapeHtml(data.storeName)}</strong> has been updated.</p>
       <div class="box">
-        <div class="row"><span class="label">Previous plan</span><span class="value">${data.fromPlanName} (${data.fromInterval})</span></div>
-        <div class="row"><span class="label">New plan</span><span class="value">${data.toPlanName} (${data.toInterval})</span></div>
+        <div class="row"><span class="label">Previous plan</span><span class="value">${escapeHtml(data.fromPlanName)} (${escapeHtml(data.fromInterval)})</span></div>
+        <div class="row"><span class="label">New plan</span><span class="value">${escapeHtml(data.toPlanName)} (${escapeHtml(data.toInterval)})</span></div>
       </div>
       <div class="success">
         <strong>No charge today.</strong> ${money(data.creditUSD)} in unused time has been credited to your
@@ -97,23 +98,23 @@ export class SubscriptionNotificationsService {
     attemptNumber: number; maxAttempts: number; nextRetryDate: Date;
   }) {
     const html = shell('Payment failed', `
-      <p>Hi ${data.customerName},</p>
-      <p>We couldn't process your renewal payment for <strong>${data.storeName}</strong> — ${data.planName}.</p>
+      <p>Hi ${escapeHtml(data.customerName)},</p>
+      <p>We couldn't process your renewal payment for <strong>${escapeHtml(data.storeName)}</strong> — ${escapeHtml(data.planName)}.</p>
       <div class="danger">
         <strong>Attempt ${data.attemptNumber} of ${data.maxAttempts} failed</strong> for ${money(data.amountUSD)}.
       </div>
       <p>We'll automatically retry on <strong>${data.nextRetryDate.toDateString()}</strong>. To avoid interruption,
       please make sure your payment method is up to date before then.</p>
     `);
-    await this.send(to, `Action needed: payment failed for ${data.storeName}`, html);
+    await this.send(to, `Action needed: payment failed for ${escapeHtml(data.storeName)}`, html);
   }
 
   async sendRenewalReminder(to: string, data: {
     customerName: string; storeName: string; planName: string; amountUSD: number; renewalDate: Date; daysUntilRenewal: number;
   }) {
     const html = shell('Your subscription renews soon', `
-      <p>Hi ${data.customerName},</p>
-      <p>Your subscription to <strong>${data.storeName}</strong> — ${data.planName} will renew in
+      <p>Hi ${escapeHtml(data.customerName)},</p>
+      <p>Your subscription to <strong>${escapeHtml(data.storeName)}</strong> — ${escapeHtml(data.planName)} will renew in
       <strong>${data.daysUntilRenewal} day${data.daysUntilRenewal === 1 ? '' : 's'}</strong> (${data.renewalDate.toDateString()}).</p>
       <div class="box">
         <div class="row"><span class="label">Renewal amount</span><span class="value">${money(data.amountUSD)}</span></div>
@@ -121,18 +122,18 @@ export class SubscriptionNotificationsService {
       </div>
       <p style="text-align:center;color:#666;font-size:13px;">No action needed if your payment method is up to date.</p>
     `);
-    await this.send(to, `Your ${data.storeName} subscription renews in ${data.daysUntilRenewal} day${data.daysUntilRenewal === 1 ? '' : 's'}`, html);
+    await this.send(to, `Your ${escapeHtml(data.storeName)} subscription renews in ${data.daysUntilRenewal} day${data.daysUntilRenewal === 1 ? '' : 's'}`, html);
   }
 
   async sendSubscriptionCanceledDueToFailedPayments(to: string, data: {
     customerName: string; storeName: string; planName: string; maxAttempts: number;
   }) {
     const html = shell('Subscription canceled', `
-      <p>Hi ${data.customerName},</p>
-      <p>Your subscription to <strong>${data.storeName}</strong> — ${data.planName} has been canceled after
+      <p>Hi ${escapeHtml(data.customerName)},</p>
+      <p>Your subscription to <strong>${escapeHtml(data.storeName)}</strong> — ${escapeHtml(data.planName)} has been canceled after
       ${data.maxAttempts} failed payment attempts.</p>
       <div class="warning">You can resubscribe at any time from the store's page once your payment method is updated.</div>
     `);
-    await this.send(to, `Your subscription to ${data.storeName} was canceled`, html);
+    await this.send(to, `Your subscription to ${escapeHtml(data.storeName)} was canceled`, html);
   }
 }

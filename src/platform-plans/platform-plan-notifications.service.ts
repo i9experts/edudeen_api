@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { escapeHtml } from 'src/notifications/templates/notification-email.template';
 import { Injectable, Logger } from '@nestjs/common';
 import { EmailService } from '../otp/services/email.service';
 
@@ -65,11 +66,11 @@ export class PlatformPlanNotificationsService {
     sellerName: string; storeName: string; fromPlanName: string; toPlanName: string; amountUSD: number;
   }) {
     const html = shell('Your platform plan was changed', `
-      <p>Hi ${data.sellerName},</p>
-      <p>Your store <strong>${data.storeName}</strong>'s Edudeen platform plan has been updated.</p>
+      <p>Hi ${escapeHtml(data.sellerName)},</p>
+      <p>Your store <strong>${escapeHtml(data.storeName)}</strong>'s Edudeen platform plan has been updated.</p>
       <div class="box">
-        <div class="row"><span class="label">Previous plan</span><span class="value">${data.fromPlanName}</span></div>
-        <div class="row"><span class="label">New plan</span><span class="value">${data.toPlanName}</span></div>
+        <div class="row"><span class="label">Previous plan</span><span class="value">${escapeHtml(data.fromPlanName)}</span></div>
+        <div class="row"><span class="label">New plan</span><span class="value">${escapeHtml(data.toPlanName)}</span></div>
       </div>
       <div class="amount">${money(data.amountUSD)} charged</div>
       <p style="text-align:center;color:#666;font-size:13px;">This is a prorated charge for the remainder of your current billing period.</p>
@@ -81,11 +82,11 @@ export class PlatformPlanNotificationsService {
     sellerName: string; storeName: string; fromPlanName: string; toPlanName: string; creditUSD: number;
   }) {
     const html = shell('Your platform plan was changed', `
-      <p>Hi ${data.sellerName},</p>
-      <p>Your store <strong>${data.storeName}</strong>'s Edudeen platform plan has been updated.</p>
+      <p>Hi ${escapeHtml(data.sellerName)},</p>
+      <p>Your store <strong>${escapeHtml(data.storeName)}</strong>'s Edudeen platform plan has been updated.</p>
       <div class="box">
-        <div class="row"><span class="label">Previous plan</span><span class="value">${data.fromPlanName}</span></div>
-        <div class="row"><span class="label">New plan</span><span class="value">${data.toPlanName}</span></div>
+        <div class="row"><span class="label">Previous plan</span><span class="value">${escapeHtml(data.fromPlanName)}</span></div>
+        <div class="row"><span class="label">New plan</span><span class="value">${escapeHtml(data.toPlanName)}</span></div>
       </div>
       <div class="success">
         <strong>No charge today.</strong> ${money(data.creditUSD)} in unused time has been credited to your
@@ -97,11 +98,11 @@ export class PlatformPlanNotificationsService {
 
   async sendMovedToFreePlan(to: string, data: { sellerName: string; storeName: string; planName: string }) {
     const html = shell('Your plan is now free', `
-      <p>Hi ${data.sellerName},</p>
-      <p>Your store <strong>${data.storeName}</strong> is now on the free "${data.planName}" plan.</p>
+      <p>Hi ${escapeHtml(data.sellerName)},</p>
+      <p>Your store <strong>${escapeHtml(data.storeName)}</strong> is now on the free "${escapeHtml(data.planName)}" plan.</p>
       <div class="box">You can upgrade again any time from your seller dashboard — no long-term commitment either way.</div>
     `);
-    await this.send(to, `${data.storeName} moved to the free plan`, html);
+    await this.send(to, `${escapeHtml(data.storeName)} moved to the free plan`, html);
   }
 
   async sendPaymentFailed(to: string, data: {
@@ -109,39 +110,39 @@ export class PlatformPlanNotificationsService {
     attemptNumber: number; maxAttempts: number; nextRetryDate: Date;
   }) {
     const html = shell('Platform plan payment failed', `
-      <p>Hi ${data.sellerName},</p>
-      <p>We couldn't process your platform-plan payment for <strong>${data.storeName}</strong> — ${data.planName}.</p>
+      <p>Hi ${escapeHtml(data.sellerName)},</p>
+      <p>We couldn't process your platform-plan payment for <strong>${escapeHtml(data.storeName)}</strong> — ${escapeHtml(data.planName)}.</p>
       <div class="danger">
         <strong>Attempt ${data.attemptNumber} of ${data.maxAttempts} failed</strong> for ${money(data.amountUSD)}.
       </div>
       <p>We'll automatically retry on <strong>${data.nextRetryDate.toDateString()}</strong>. To avoid your store being
       moved to the free plan, please make sure your payment method is up to date before then.</p>
     `);
-    await this.send(to, `Action needed: payment failed for ${data.storeName}`, html);
+    await this.send(to, `Action needed: payment failed for ${escapeHtml(data.storeName)}`, html);
   }
 
   async sendDowngradedDueToFailedPayments(to: string, data: { sellerName: string; storeName: string; planName: string; maxAttempts: number }) {
     const html = shell('Your store was downgraded', `
-      <p>Hi ${data.sellerName},</p>
-      <p>Your store <strong>${data.storeName}</strong> has been moved to the free "${data.planName}" plan after
+      <p>Hi ${escapeHtml(data.sellerName)},</p>
+      <p>Your store <strong>${escapeHtml(data.storeName)}</strong> has been moved to the free "${escapeHtml(data.planName)}" plan after
       ${data.maxAttempts} failed payment attempts.</p>
       <div class="warning">Any features exclusive to your previous tier (staff seats, custom domain, loyalty program,
       etc.) are now paused until you upgrade again — your store and existing data are safe and unaffected.</div>
     `);
-    await this.send(to, `${data.storeName} was moved to the free plan after failed payments`, html);
+    await this.send(to, `${escapeHtml(data.storeName)} was moved to the free plan after failed payments`, html);
   }
 
   async sendTrialEndingSoon(to: string, data: { sellerName: string; storeName: string; planName: string; amountUSD: number; daysLeft: number; trialEndsAt: Date }) {
     const html = shell('Your trial is ending soon', `
-      <p>Hi ${data.sellerName},</p>
-      <p>Your <strong>${data.planName}</strong> trial for <strong>${data.storeName}</strong> ends in
+      <p>Hi ${escapeHtml(data.sellerName)},</p>
+      <p>Your <strong>${escapeHtml(data.planName)}</strong> trial for <strong>${escapeHtml(data.storeName)}</strong> ends in
       <strong>${data.daysLeft} day${data.daysLeft === 1 ? '' : 's'}</strong> (${data.trialEndsAt.toDateString()}).</p>
       <div class="box">
-        <div class="row"><span class="label">Plan after trial</span><span class="value">${data.planName}</span></div>
+        <div class="row"><span class="label">Plan after trial</span><span class="value">${escapeHtml(data.planName)}</span></div>
         <div class="row"><span class="label">Amount to be charged</span><span class="value">${money(data.amountUSD)}</span></div>
       </div>
       <p style="text-align:center;color:#666;font-size:13px;">No action needed if you want to continue — your card will be charged automatically when the trial ends.</p>
     `);
-    await this.send(to, `Your ${data.storeName} trial ends in ${data.daysLeft} day${data.daysLeft === 1 ? '' : 's'}`, html);
+    await this.send(to, `Your ${escapeHtml(data.storeName)} trial ends in ${data.daysLeft} day${data.daysLeft === 1 ? '' : 's'}`, html);
   }
 }

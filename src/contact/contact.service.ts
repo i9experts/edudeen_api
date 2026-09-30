@@ -1,3 +1,4 @@
+import { escapeHtml } from 'src/notifications/templates/notification-email.template';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -30,7 +31,7 @@ function acknowledgementEmailHtml(name: string): string {
 <body>
   <div class="container">
     <div class="header"><h1>We got your message</h1></div>
-    <div class="success">Hi ${name}, thanks for reaching out to ${APP_NAME} — our support team will get back to you soon, usually within 24 hours.</div>
+    <div class="success">Hi ${escapeHtml(name)}, thanks for reaching out to ${APP_NAME} — our support team will get back to you soon, usually within 24 hours.</div>
     <div class="footer"><p>© ${new Date().getFullYear()} ${APP_NAME}. All rights reserved.</p></div>
   </div>
 </body>
@@ -53,13 +54,21 @@ export class ContactService {
       message: dto.message.trim(),
     });
 
-    this.emailService
-      .sendMail(
-        submission.email,
-        `We got your message — ${APP_NAME}`,
-        acknowledgementEmailHtml(submission.name),
-      )
-      .catch(() => undefined);
+    // The acknowledgement goes to an address the (unauthenticated) submitter typed — cap it per address so the form
+    // can't be used to mail-bomb a third party. The submission itself is always stored.
+    const recentToSameAddress = await this.contactModel.countDocuments({
+      email: submission.email,
+      createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+    });
+    if (recentToSameAddress <= 2) {
+      this.emailService
+        .sendMail(
+          submission.email,
+          `We got your message — ${APP_NAME}`,
+          acknowledgementEmailHtml(submission.name),
+        )
+        .catch(() => undefined);
+    }
 
     return {
       success: true,
@@ -68,16 +77,13 @@ export class ContactService {
   }
 
   async findAll() {
-    const submissions = await this.contactModel
-      .find()
-      .sort({ createdAt: -1 })
-      .exec();
-
-    const stats = {
-      new: submissions.filter((s) => s.status === 'new').length,
-      read: submissions.filter((s) => s.status === 'read').length,
-      resolved: submissions.filter((s) => s.status === 'resolved').length,
-    };
+    // Bounded: the admin list used to load EVERY submission (a flood of spam made it unbounded) and count in memory.
+    const [submissions, byStatus] = await Promise.all([
+      this.contactModel.find().sort({ createdAt: -1 }).limit(500).exec(),
+      this.contactModel.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
+    ]);
+    const countOf = (status: string) => (byStatus.find((r: { _id: string; n: number }) => r._id === status)?.n as number | undefined) ?? 0;
+    const stats = { new: countOf('new'), read: countOf('read'), resolved: countOf('resolved') };
 
     return {
       success: true,

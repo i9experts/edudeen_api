@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { escapeHtml } from 'src/notifications/templates/notification-email.template';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DatabaseService } from 'src/database/databaseservice';
@@ -348,17 +349,21 @@ export class GiftCardsService {
     to: string, recipientName: string | null, storeName: string, code: string,
     currency: string, value: number, message: string | null,
   ) {
-    const greeting = recipientName ? `Hi ${recipientName},` : 'Hi,';
-    const noteBlock = message ? `<p style="font-style:italic;color:#555">"${message}"</p>` : '';
+    // recipientName / message are typed by the purchaser and storeName by the seller: escape them, or the platform's
+    // own mail identity relays arbitrary HTML (phishing links) to any address the purchaser names.
+    const safeStore = escapeHtml(storeName);
+    const greeting = recipientName ? `Hi ${escapeHtml(recipientName)},` : 'Hi,';
+    const noteBlock = message ? `<p style="font-style:italic;color:#555">"${escapeHtml(message)}"</p>` : '';
+    const subject = `You've received a ${currency} ${value} gift card from ${storeName}`.replace(/[\r\n]+/g, ' ');
     await this.emailService.sendMail(
       to,
-      `You've received a ${currency} ${value} gift card from ${storeName}`,
+      subject,
       `<div style="font-family:sans-serif">
         <p>${greeting}</p>
-        <p>You've received a gift card for <strong>${storeName}</strong>.</p>
+        <p>You've received a gift card for <strong>${safeStore}</strong>.</p>
         ${noteBlock}
-        <p style="font-size:24px;font-weight:bold;letter-spacing:1px;background:#f5f5f5;padding:16px;border-radius:8px;text-align:center">${code}</p>
-        <p>Enter this code at checkout on ${storeName}'s store to redeem it.</p>
+        <p style="font-size:24px;font-weight:bold;letter-spacing:1px;background:#f5f5f5;padding:16px;border-radius:8px;text-align:center">${escapeHtml(code)}</p>
+        <p>Enter this code at checkout on ${safeStore}'s store to redeem it.</p>
       </div>`,
     );
   }

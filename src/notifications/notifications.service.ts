@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { isValidObjectId } from 'mongoose';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { DatabaseService } from 'src/database/databaseservice';
@@ -133,6 +134,7 @@ export class NotificationsService {
   }
 
   async markRead(userId: string, id: string) {
+    if (!isValidObjectId(id)) throw new BadRequestException('Invalid notification id');
     const doc = await this.databaseService.repositories.notificationModel.findOneAndUpdate(
       { _id: id, recipientId: userId },
       { $set: { isRead: true, readAt: new Date() } },
@@ -150,6 +152,7 @@ export class NotificationsService {
   }
 
   async remove(userId: string, id: string) {
+    if (!isValidObjectId(id)) throw new BadRequestException('Invalid notification id');
     await this.databaseService.repositories.notificationModel.deleteOne({ _id: id, recipientId: userId });
     return { success: true, message: 'Notification deleted' };
   }
@@ -157,11 +160,20 @@ export class NotificationsService {
   // ── Device tokens ───────────────────────────────────────────────────────
 
   async registerDeviceToken(userId: string, role: string, fcmToken: string, platform: string) {
-    await this.databaseService.repositories.deviceTokenModel.findOneAndUpdate(
+    if (typeof fcmToken !== 'string' || !fcmToken.trim() || fcmToken.length > 1024) {
+      throw new BadRequestException('Invalid device token');
+    }
+    const { deviceTokenModel } = this.databaseService.repositories;
+    await deviceTokenModel.findOneAndUpdate(
       { fcmToken },
-      { $set: { userId, role, platform, lastUsedAt: new Date() } },
+      { $set: { userId, role, platform: String(platform ?? '').slice(0, 20), lastUsedAt: new Date() } },
       { upsert: true },
     );
+    // At most 10 devices per account (oldest dropped). Unbounded registration let one account collect thousands of
+    // tokens — FCM multicast accepts 500 per call, so a >500-token account stopped receiving pushes entirely.
+    const MAX_DEVICES = 10;
+    const stale = await deviceTokenModel.find({ userId }).sort({ lastUsedAt: -1 }).skip(MAX_DEVICES).select('_id').lean();
+    if (stale.length) await deviceTokenModel.deleteMany({ _id: { $in: stale.map((t) => t._id) } });
     return { success: true, message: 'Device token registered' };
   }
 

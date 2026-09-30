@@ -1,4 +1,6 @@
 /* eslint-disable prettier/prettier */
+import { csvLine, escapeRegex, searchTerm, plainString, parseDateParam } from 'src/common/query-safety.util';
+import { clampInt } from 'src/products/product-public-view.util';
 import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogCategory } from './schemas/activity-log.schema';
@@ -75,26 +77,27 @@ export class ActivityLogService {
   async findAll(sellerId: string, storeId: string, query: any) {
     await this.verifyStoreOwnership(storeId, sellerId);
 
-    const page = parseInt(query.page) || 1;
-    const limit = parseInt(query.limit) || 20;
+    const page = clampInt(query.page, 1, 1, 10_000);
+    const limit = clampInt(query.limit, 20, 1, 100);
     const skip = (page - 1) * limit;
 
     const filter: any = { storeId };
-    if (query.category) filter.category = query.category;
-    if (query.actorId) filter.actorId = query.actorId;
-    if (query.action) filter.action = query.action;
-    if (query.search) {
-      filter.$or = [
-        { action: { $regex: query.search, $options: 'i' } },
-        { description: { $regex: query.search, $options: 'i' } },
-        { actorName: { $regex: query.search, $options: 'i' } },
-      ];
+    if (plainString(query.category)) filter.category = query.category;
+    if (plainString(query.actorId)) filter.actorId = query.actorId;
+    if (plainString(query.action)) filter.action = query.action;
+    const term = searchTerm(query.search);
+    if (term) {
+      // Escaped + bounded: the raw value was a regex ("(a+)+$" pins Mongo's CPU) and could be an operator object.
+      const rx = { $regex: escapeRegex(term), $options: 'i' };
+      filter.$or = [{ action: rx }, { description: rx }, { actorName: rx }];
     }
-    if (query.from || query.to) {
+    const fromDate = parseDateParam(query.from, 'from');
+    const toDate = parseDateParam(query.to, 'to');
+    if (fromDate || toDate) {
       filter.createdAt = {};
-      if (query.from) filter.createdAt.$gte = new Date(query.from);
-      if (query.to) {
-        const t = new Date(query.to);
+      if (fromDate) filter.createdAt.$gte = fromDate;
+      if (toDate) {
+        const t = new Date(toDate);
         t.setHours(23, 59, 59, 999);
         filter.createdAt.$lte = t;
       }
@@ -165,25 +168,23 @@ export class ActivityLogService {
 
   private buildAdminFilter(query: any): Record<string, any> {
     const filter: Record<string, any> = {};
-    if (query.storeId) filter.storeId = query.storeId;
-    if (query.category) filter.category = query.category;
-    if (query.actorId) filter.actorId = query.actorId;
-    if (query.actorRole) filter.actorRole = query.actorRole;
-    if (query.action) filter.action = query.action;
-    if (query.targetType) filter.targetType = query.targetType;
-    if (query.isSecurityAlert !== undefined) filter.isSecurityAlert = query.isSecurityAlert === 'true' || query.isSecurityAlert === true;
-    if (query.search) {
-      filter.$or = [
-        { action: { $regex: query.search, $options: 'i' } },
-        { description: { $regex: query.search, $options: 'i' } },
-        { actorName: { $regex: query.search, $options: 'i' } },
-      ];
+    for (const key of ['storeId', 'category', 'actorId', 'actorRole', 'action', 'targetType'] as const) {
+      const v = plainString(query[key]);
+      if (v) filter[key] = v;
     }
-    if (query.from || query.to) {
+    if (query.isSecurityAlert !== undefined) filter.isSecurityAlert = query.isSecurityAlert === 'true' || query.isSecurityAlert === true;
+    const term = searchTerm(query.search);
+    if (term) {
+      const rx = { $regex: escapeRegex(term), $options: 'i' };
+      filter.$or = [{ action: rx }, { description: rx }, { actorName: rx }];
+    }
+    const fromDate = parseDateParam(query.from, 'from');
+    const toDate = parseDateParam(query.to, 'to');
+    if (fromDate || toDate) {
       filter.createdAt = {};
-      if (query.from) filter.createdAt.$gte = new Date(query.from);
-      if (query.to) {
-        const t = new Date(query.to);
+      if (fromDate) filter.createdAt.$gte = fromDate;
+      if (toDate) {
+        const t = new Date(toDate);
         t.setHours(23, 59, 59, 999);
         filter.createdAt.$lte = t;
       }
@@ -192,8 +193,8 @@ export class ActivityLogService {
   }
 
   async adminFindAll(query: any) {
-    const page = parseInt(query.page) || 1;
-    const limit = Math.min(200, parseInt(query.limit) || 50);
+    const page = clampInt(query.page, 1, 1, 10_000);
+    const limit = clampInt(query.limit, 50, 1, 200);
     const skip = (page - 1) * limit;
 
     const { activityLogModel } = this.databaseService.repositories;
@@ -226,13 +227,13 @@ export class ActivityLogService {
       l.action,
       l.actorName ?? l.actorId ?? '',
       l.actorRole ?? '',
-      (l.description ?? '').replace(/"/g, "'"),
+      l.description ?? '',
       l.isSecurityAlert ? 'yes' : 'no',
       l.ip ?? '',
     ]);
 
-    const escape = (v: string) => `"${String(v).replace(/"/g, '""')}"`;
-    return [header, ...rows].map((r) => r.map(escape).join(',')).join('\n');
+    // csvLine neutralises spreadsheet formulas (= + - @) — actor names and descriptions are user-influenced.
+    return [header, ...rows].map((r) => csvLine(r)).join('\n');
   }
 
   async exportCsv(sellerId: string, storeId: string, query: any): Promise<string> {
@@ -241,11 +242,13 @@ export class ActivityLogService {
     const { activityLogModel } = this.databaseService.repositories;
 
     const filter: any = { storeId };
-    if (query.category) filter.category = query.category;
-    if (query.from || query.to) {
+    if (plainString(query.category)) filter.category = query.category;
+    const exportFrom = parseDateParam(query.from, 'from');
+    const exportTo = parseDateParam(query.to, 'to');
+    if (exportFrom || exportTo) {
       filter.createdAt = {};
-      if (query.from) filter.createdAt.$gte = new Date(query.from);
-      if (query.to) filter.createdAt.$lte = new Date(query.to);
+      if (exportFrom) filter.createdAt.$gte = exportFrom;
+      if (exportTo) filter.createdAt.$lte = exportTo;
     }
 
     const logs = await activityLogModel.find(filter).sort({ createdAt: -1 }).limit(5000).lean();
@@ -257,11 +260,10 @@ export class ActivityLogService {
       l.action,
       l.actorName ?? l.actorId ?? '',
       l.actorRole ?? '',
-      (l.description ?? '').replace(/"/g, "'"),
+      l.description ?? '',
       l.ip ?? '',
     ]);
 
-    const escape = (v: string) => `"${String(v).replace(/"/g, '""')}"`;
-    return [header, ...rows].map((r) => r.map(escape).join(',')).join('\n');
+    return [header, ...rows].map((r) => csvLine(r)).join('\n');
   }
 }
