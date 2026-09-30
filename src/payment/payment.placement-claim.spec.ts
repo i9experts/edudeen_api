@@ -4,10 +4,10 @@ import { PaymentService } from './payment.service';
 
 // Simulates Mongo's atomic findOneAndUpdate on the checkout's claim marker:
 // the first caller flips orderPlacementStartedAt, every later caller matches nothing.
-function makeService(createOrderImpl?: () => Promise<any[]>) {
+function makeService(createOrderImpl?: () => Promise<any[]>, giftCardsService: any = {}, checkoutExtra: any = {}) {
   const checkout: any = {
     _id: 'c1', userId: 'u1', status: 'pending', expiredAt: null, currency: 'USD', totalAmount: 50,
-    orderPlacementStartedAt: null, fxSnapshots: [], items: [{ type: 'physical', storeId: 's1', variantId: 'v1', quantity: 1, name: 'Book' }],
+    orderPlacementStartedAt: null, fxSnapshots: [], ...checkoutExtra, items: [{ type: 'physical', storeId: 's1', variantId: 'v1', quantity: 1, name: 'Book' }],
   };
   const checkoutModel: any = {
     findOne: jest.fn().mockImplementation(async () => ({ ...checkout })),
@@ -26,7 +26,7 @@ function makeService(createOrderImpl?: () => Promise<any[]>) {
     paymentTransactionModel: { create: jest.fn().mockResolvedValue({}) },
     orderModel: {}, addressModel: {}, cartModel: {},
   };
-  const svc: any = new PaymentService({ repositories: repos } as any, {} as any, { get: jest.fn() } as any, {} as any, {} as any, {} as any, {} as any, { log: jest.fn() } as any, {} as any, {} as any, {} as any);
+  const svc: any = new PaymentService({ repositories: repos } as any, {} as any, { get: jest.fn() } as any, {} as any, {} as any, {} as any, {} as any, { log: jest.fn() } as any, giftCardsService, {} as any, {} as any);
   svc.createOrder = jest.fn().mockImplementation(createOrderImpl ?? (async () => [{ _id: 'o1' }]));
   svc.removeCheckedOutItemsFromCart = jest.fn().mockResolvedValue(undefined);
   svc.formatOrder = jest.fn((o) => o);
@@ -50,5 +50,23 @@ describe('COD placement is claimed atomically', () => {
     expect(checkout.orderPlacementStartedAt).toBeNull();
     await expect(svc.codPayment('u1', { checkoutId: 'c1' })).resolves.toBeDefined();
     expect(svc.createOrder).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('gift card balance is re-checked before an order is placed', () => {
+  const withCard = { giftCardCode: 'GC1', giftCardStoreId: 's1', giftCardDiscountTotalUSD: 40 };
+
+  it('COD is refused (and nothing placed) when the card was drained by another checkout', async () => {
+    const giftCards = { findRedeemable: jest.fn().mockResolvedValue({ balance: 10 }) };
+    const { svc } = makeService(undefined, giftCards, withCard);
+    await expect(svc.codPayment('u1', { checkoutId: 'c1' })).rejects.toThrow(/no longer has enough balance/);
+    expect(svc.createOrder).not.toHaveBeenCalled();
+  });
+
+  it('COD proceeds when the card still covers the discount', async () => {
+    const giftCards = { findRedeemable: jest.fn().mockResolvedValue({ balance: 40 }) };
+    const { svc } = makeService(undefined, giftCards, withCard);
+    await expect(svc.codPayment('u1', { checkoutId: 'c1' })).resolves.toBeDefined();
+    expect(svc.createOrder).toHaveBeenCalledTimes(1);
   });
 });

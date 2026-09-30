@@ -259,16 +259,58 @@ export class GiftCardsService {
    *  abandoned checkout must not burn a gift card's balance), mirroring the
    *  Coupon usageCount / RewardVoucher status pattern. */
   async redeemAtOrderPlacement(storeId: string, code: string, amount: number, checkoutId: string, orderId: string) {
-    const giftCard = await this.r.giftCardModel.findOneAndUpdate(
-      { storeId, code: code.toUpperCase(), status: 'active', balance: { $gte: amount } },
-      { $inc: { balance: -amount } },
-      { returnDocument: 'after' },
+    // Idempotent per checkout: a retried createOrder must not debit the card twice.
+    const already = await this.r.giftCardTransactionModel.exists({ storeId, checkoutId, type: 'redeem' });
+    if (already) return;
+
+    // Atomic, clamped debit: take min(balance, amount) in ONE update so two
+    // checkouts holding the same card can never drive it negative or both take
+    // the full amount. `returnDocument: 'before'` tells us what was really taken.
+    const before = await this.r.giftCardModel.findOneAndUpdate(
+      { storeId, code: code.toUpperCase(), status: 'active', balance: { $gt: 0 }, redeemedCheckoutIds: { $ne: checkoutId } },
+      [{
+        $set: {
+          balance: { $max: [0, { $round: [{ $subtract: ['$balance', amount] }, 2] }] },
+          redeemedCheckoutIds: { $concatArrays: [{ $ifNull: ['$redeemedCheckoutIds', []] }, [checkoutId]] },
+        },
+      }],
+      { returnDocument: 'before', updatePipeline: true },
     );
-    if (!giftCard) return; // already spent/disabled between apply and placement — the charge already succeeded, so silently skip rather than fail the whole order
+    if (!before) {
+      // Either the card is empty/disabled, or THIS checkout already debited it
+      // (a concurrent retry that lost the race) — the latter is not a shortfall.
+      const alreadyDebited = await this.r.giftCardModel.exists({
+        storeId, code: code.toUpperCase(), redeemedCheckoutIds: checkoutId,
+      });
+      if (alreadyDebited) return;
+    }
+
+    const available = before ? before.balance : 0;
+    const deducted = Math.round(Math.min(available, amount) * 100) / 100;
+    const shortfall = Math.round((amount - deducted) * 100) / 100;
+
+    if (shortfall > 0) {
+      // The order was already placed/paid with this discount applied and can't be
+      // rejected now — never swallow it: the card no longer covered the discount,
+      // so the store/platform absorbs `shortfall`. Surface it for review.
+      await this.activityLogService.log({
+        storeId,
+        category: 'marketing',
+        action: 'gift_card_shortfall',
+        description: `Gift card ${code.toUpperCase()} covered only ${deducted} of the ${amount} discount applied to checkout ${checkoutId} (shortfall ${shortfall})`,
+        actorId: 'system',
+        actorRole: 'system',
+        isSecurityAlert: true,
+        targetId: before ? String(before._id) : checkoutId,
+        targetType: before ? 'gift_card' : 'checkout',
+      });
+    }
+    if (!before) return; // nothing was left to debit
 
     await this.r.giftCardTransactionModel.create({
-      storeId, giftCardId: String(giftCard._id), type: 'redeem', amount: -amount,
-      balanceAfter: giftCard.balance, checkoutId, orderId, description: 'Applied at checkout',
+      storeId, giftCardId: String(before._id), type: 'redeem', amount: -deducted,
+      balanceAfter: Math.round((available - deducted) * 100) / 100, checkoutId, orderId,
+      description: shortfall > 0 ? `Applied at checkout (short by ${shortfall})` : 'Applied at checkout',
     });
   }
 

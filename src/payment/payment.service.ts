@@ -232,6 +232,7 @@ export class PaymentService {
     // summing, same rule as CheckoutService.convertedSubtotal, using this
     // checkout's own frozen fxSnapshots rather than a fresh rate.
     const chargeAmount = this.computeChargeAmount(checkout, useSplit ? 'digital_only' : 'full');
+    await this.assertGiftCardStillCovers(checkout);
     const paymentScope = useSplit ? 'digital_only' : 'full';
 
     const amountCents = Math.round(chargeAmount * 100);
@@ -897,6 +898,17 @@ export class PaymentService {
     );
   }
 
+  /** A gift card discount was computed when the code was applied; before we
+   *  take money / place an order, make sure the card still holds that much
+   *  (another checkout may have spent it in the meantime). */
+  private async assertGiftCardStillCovers(checkout: any) {
+    if (!(checkout.giftCardCode && checkout.giftCardStoreId && checkout.giftCardDiscountTotalUSD > 0)) return;
+    const card = await this.giftCardsService.findRedeemable(checkout.giftCardStoreId, checkout.giftCardCode);
+    if (!card || card.balance < checkout.giftCardDiscountTotalUSD) {
+      throw new BadRequestException('Your gift card no longer has enough balance — remove it or re-apply it, then try again');
+    }
+  }
+
   /** Exclusive, atomic claim for the "place order now" paths (COD, bank
    *  transfer). Only one concurrent request can win; the rest get a 409 instead
    *  of creating duplicate orders / double-decrementing stock / double-spending
@@ -988,6 +1000,7 @@ export class PaymentService {
       }
     }
 
+    await this.assertGiftCardStillCovers(checkout);
     await this.claimCheckoutForPlacement(checkoutId, userId);
 
     let orders: any[];
@@ -1107,6 +1120,7 @@ export class PaymentService {
       amountPKR = this.round(checkout.totalAmount * ratePerUSD);
     }
 
+    await this.assertGiftCardStillCovers(checkout);
     await this.claimCheckoutForPlacement(checkoutId, userId);
 
     let orders: any[];

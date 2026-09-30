@@ -59,6 +59,12 @@ export class GiftCard {
   @Prop({ type: Date, default: null })
   expiresAt: Date | null;
 
+  // Checkouts that already debited this card. Part of the SAME atomic update
+  // as the debit (see GiftCardsService.redeemAtOrderPlacement), which is what
+  // makes a concurrent retry for one checkout debit exactly once.
+  @Prop({ type: [String], default: [] })
+  redeemedCheckoutIds: string[];
+
   @Prop({ type: Boolean, default: false })
   isDelete: boolean;
 }
