@@ -616,10 +616,13 @@ export class PaymentService {
       cartModel,
     } = this.databaseService.repositories;
 
+    // 'failed' is claimable too: a PaymentIntent that first declined
+    // (payment_failed) can be retried by the buyer on the same intent and then
+    // SUCCEED — ignoring that would keep the money with no order and no refund.
     const transaction = await paymentTransactionModel.findOneAndUpdate(
       {
         stripePaymentIntentId: paymentIntentId,
-        status: 'pending',
+        status: { $in: ['pending', 'failed'] },
         isDelete: false,
       },
       { status: 'completed', paidAt: new Date() },
@@ -631,9 +634,21 @@ export class PaymentService {
         stripePaymentIntentId: paymentIntentId,
         isDelete: false,
       });
-      return existing?.status === 'completed'
-        ? { orderIds: existing.orderIds }
-        : null;
+      if (existing?.status === 'completed') return { orderIds: existing.orderIds };
+      // Stripe says this intent is paid but we have nothing we can attach it to.
+      // Never drop that silently — surface it for manual review / refund.
+      await this.activityLogService.log({
+        storeId: 'platform',
+        category: 'finance',
+        action: 'stripe_payment_without_transaction',
+        description: `Stripe PaymentIntent ${paymentIntentId} succeeded but no claimable payment transaction exists — buyer may be charged with no order`,
+        actorId: 'system',
+        actorRole: 'system',
+        isSecurityAlert: true,
+        targetId: paymentIntentId,
+        targetType: 'payment_intent',
+      });
+      return null;
     }
 
     const checkout = await checkoutModel.findOne({

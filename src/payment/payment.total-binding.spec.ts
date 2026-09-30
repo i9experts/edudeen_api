@@ -59,3 +59,39 @@ describe('CheckoutService mutators are frozen once payment has started', () => {
     await expect(call(svc('payment_pending'))).rejects.toThrow(/Payment has already been started/);
   });
 });
+
+describe('PaymentIntent that fails and then succeeds on the same intent', () => {
+  const build = (transaction: any, existing: any) => {
+    const paymentTransactionModel: any = {
+      findOneAndUpdate: jest.fn().mockResolvedValue(transaction),
+      findOne: jest.fn().mockResolvedValue(existing),
+      findByIdAndUpdate: jest.fn().mockResolvedValue({}),
+    };
+    const checkoutModel: any = { findOne: jest.fn().mockResolvedValue(null) };
+    const activity: any = { log: jest.fn().mockResolvedValue(undefined) };
+    const db: any = { repositories: { paymentTransactionModel, checkoutModel, orderModel: {}, addressModel: {}, cartModel: {} } };
+    const svc: any = new PaymentService(db, {} as any, { get: jest.fn() } as any, {} as any, {} as any, {} as any, {} as any, activity, {} as any, {} as any, {} as any);
+    return { svc, paymentTransactionModel, activity };
+  };
+
+  it('claims a transaction that a payment_failed event had marked failed', async () => {
+    const { svc, paymentTransactionModel } = build(null, null);
+    await svc.finalizePaymentIntent({ id: 'pi_1', amount: 1000, currency: 'usd' });
+    expect(paymentTransactionModel.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ stripePaymentIntentId: 'pi_1', status: { $in: ['pending', 'failed'] } }),
+      expect.anything(), expect.anything(),
+    );
+  });
+
+  it('raises a security alert (instead of silently dropping the charge) when a paid intent has no transaction', async () => {
+    const { svc, activity } = build(null, null);
+    expect(await svc.finalizePaymentIntent({ id: 'pi_orphan', amount: 1000, currency: 'usd' })).toBeNull();
+    expect(activity.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'stripe_payment_without_transaction', isSecurityAlert: true }));
+  });
+
+  it('a redelivered event for an already-completed transaction is idempotent and raises no alert', async () => {
+    const { svc, activity } = build(null, { status: 'completed', orderIds: ['o1'] });
+    expect(await svc.finalizePaymentIntent({ id: 'pi_1' })).toEqual({ orderIds: ['o1'] });
+    expect(activity.log).not.toHaveBeenCalled();
+  });
+});
