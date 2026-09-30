@@ -766,7 +766,8 @@ export class ProductsService {
   ) {
     const productModel = this.databaseService.repositories.productModel;
 
-    const term = (q || '').trim();
+    // Bounded: an unbounded term ran a regex scan over name+description for every request.
+    const term = (typeof q === 'string' ? q : '').trim().slice(0, 100);
     if (!term) {
       return {
         message: 'Search query is required',

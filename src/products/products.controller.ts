@@ -1,3 +1,4 @@
+import { clampInt, queryString } from './product-public-view.util';
 import {
   Controller,
   Get,
@@ -37,11 +38,14 @@ export class productController {
     @Query('sortBy') sortByQuery?: string,
     @Query('attributes') attributesQuery?: string,
   ) {
-    const page = Math.max(1, parseInt(pageQuery as string) || 1);
-    const limit = Math.min(
-      50,
-      Math.max(1, parseInt(limitQuery as string) || 10),
-    );
+    // Express/qs hands back arrays and objects for ?x[]=1 / ?x[$ne]=1 even though these are typed as strings.
+    id = queryString(id);
+    productType = queryString(productType);
+    educationLevel = queryString(educationLevel);
+    normalizedCustomLevel = queryString(normalizedCustomLevel);
+    campaignId = queryString(campaignId);
+    const page = clampInt(pageQuery, 1, 1, 1000);
+    const limit = clampInt(limitQuery, 10, 1, 50);
     const parseNum = (v?: string): number | undefined => {
       if (v === undefined) return undefined;
       const n = parseFloat(v);

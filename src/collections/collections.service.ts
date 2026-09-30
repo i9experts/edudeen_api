@@ -157,6 +157,8 @@ export class CollectionsService {
     }).lean();
     if (!collection) return [];
 
+    // A collection of a pending/suspended store resolves to nothing.
+    if (!(await this.r.storeModel.exists({ _id: storeId, status: 'active', isDelete: false }))) return [];
     if (collection.type === 'manual') {
       if (collection.productIds.length === 0) return [];
       // Preserve the seller's chosen order, but only ever include products

@@ -81,7 +81,9 @@ export class SeoResolutionService {
 
   private async resolveProduct(idOrSlug: string): Promise<ResolvedSeoMeta> {
     const { productModel, productVariantModel, categoryModel, storeModel } = this.db.repositories;
-    const product = await this.findByIdOrSlug(productModel, idOrSlug);
+    // Only LIVE products of LIVE stores have public SEO metadata (drafts, scheduled, deleted and suspended-store
+    // products used to be readable here: name, description, price).
+    const product = await this.findByIdOrSlug(productModel, idOrSlug, 'slug', { status: 'active' });
     if (!product) throw new NotFoundException('Product not found.');
 
     const [category, store, variants] = await Promise.all([
@@ -89,6 +91,7 @@ export class SeoResolutionService {
       storeModel.findById(product.storeId).lean(),
       productVariantModel.find({ productId: product._id.toString(), isDelete: false }).lean(),
     ]);
+    if (!store || (store as any).status !== 'active') throw new NotFoundException('Product not found.');
     const defaultVariant = (variants as any[]).find((v) => v.isDefault) ?? (variants as any[])[0] ?? null;
 
     const settings = await this.platformSeoService.getSettings();
@@ -188,7 +191,7 @@ export class SeoResolutionService {
 
   private async resolveStore(idOrSlug: string): Promise<ResolvedSeoMeta> {
     const { storeModel } = this.db.repositories;
-    const store = await this.findByIdOrSlug(storeModel, idOrSlug, 'slug');
+    const store = await this.findByIdOrSlug(storeModel, idOrSlug, 'slug', { status: 'active' });
     if (!store) throw new NotFoundException('Store not found.');
 
     const settings = await this.platformSeoService.getSettings();
@@ -226,12 +229,13 @@ export class SeoResolutionService {
   }
 
   /** Products/Stores are addressable by either Mongo _id or their unique slug — tries id first (cheap, indexed), falls back to slug. */
-  private async findByIdOrSlug(model: any, idOrSlug: string, slugField = 'slug') {
+  private async findByIdOrSlug(model: any, idOrSlug: string, slugField = 'slug', extra: Record<string, unknown> = {}) {
+    if (typeof idOrSlug !== 'string') return null;
     if (/^[a-f0-9]{24}$/i.test(idOrSlug)) {
-      const byId = await model.findOne({ _id: idOrSlug, isDelete: false }).lean();
+      const byId = await model.findOne({ _id: idOrSlug, isDelete: false, ...extra }).lean();
       if (byId) return byId;
     }
-    return model.findOne({ [slugField]: idOrSlug, isDelete: false }).lean();
+    return model.findOne({ [slugField]: idOrSlug, isDelete: false, ...extra }).lean();
   }
 }
 

@@ -1,15 +1,5 @@
 import { Type } from 'class-transformer';
-import {
-  ArrayMaxSize,
-  IsArray,
-  IsBoolean,
-  IsNumber,
-  IsOptional,
-  IsString,
-  MaxLength,
-  Min,
-  ValidateNested,
-} from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 
 export class VariantOptionDto {
   @IsString()
@@ -22,13 +12,15 @@ export class VariantOptionDto {
 }
 
 export class CreateVariantDto {
-  @IsNumber()
+  @IsNumber({ allowNaN: false, allowInfinity: false })
   @Min(0)
+  @Max(1_000_000)
   price: number;
 
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ allowNaN: false, allowInfinity: false })
   @Min(0)
+  @Max(1_000_000)
   compareAtPrice?: number;
 
   @IsOptional()
@@ -39,8 +31,9 @@ export class CreateVariantDto {
   options?: VariantOptionDto[];
 
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(0)
+  @Max(1_000_000)
   stock?: number;
 
   @IsOptional()
@@ -54,10 +47,13 @@ export class CreateVariantDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @ArrayMaxSize(20)
+  @MaxLength(2048, { each: true })
   images?: string[];
 
   @IsOptional()
   @IsString()
+  @MaxLength(64)
   sku?: string;
 
   @IsOptional()

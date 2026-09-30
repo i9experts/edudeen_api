@@ -59,7 +59,10 @@ export class SeoSitemapService {
   private async regenerateProducts(storeId?: string) {
     const { productModel } = this.db.repositories;
     const filter: Record<string, any> = { status: 'active', isDelete: false };
-    if (storeId) filter.storeId = storeId;
+    // Only products of LIVE stores are indexed (suspended/pending stores' products used to be listed).
+    const liveStores = await this.db.repositories.storeModel
+      .find({ status: 'active', isDelete: false, ...(storeId ? { _id: storeId } : {}) }).select('_id').lean();
+    filter.storeId = { $in: liveStores.map((st: { _id: { toString(): string } }) => st._id.toString()) };
 
     const cursor = productModel.find(filter).select('slug updatedAt').lean().cursor();
     const urls: Array<{ loc: string; lastmod?: Date }> = [];

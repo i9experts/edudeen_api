@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { clampInt, queryString } from '../products/product-public-view.util';
 import { Body, Controller, Delete, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from 'src/auth/guards/optional-jwt-auth.guard';
@@ -15,22 +16,23 @@ export class SearchController {
   @UseGuards(OptionalJwtAuthGuard)
   @Get('products')
   searchProducts(@Req() req: any, @Query() query: any) {
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(50, parseInt(query.limit) || 20);
-    return this.searchService.searchProducts(query.q ?? '', page, limit, req.user?.userId ?? null);
+    // Query values can arrive as arrays/objects (?q[]=a, ?q[$ne]=1): coerce, bound, never .trim() a non-string.
+    const page = clampInt(query.page, 1, 1, 1000);
+    const limit = clampInt(query.limit, 20, 1, 50);
+    return this.searchService.searchProducts(queryString(query.q, 100) ?? '', page, limit, req.user?.userId ?? null);
   }
 
   @Get('stores')
   searchStores(@Query() query: any) {
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(50, parseInt(query.limit) || 20);
-    return this.searchService.searchStores(query.q ?? '', page, limit);
+    const page = clampInt(query.page, 1, 1, 1000);
+    const limit = clampInt(query.limit, 20, 1, 50);
+    return this.searchService.searchStores(queryString(query.q, 100) ?? '', page, limit);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get('recent')
   getRecentSearches(@Req() req: any, @Query() query: any) {
-    const limit = Math.max(1, parseInt(query.limit) || 10);
+    const limit = clampInt(query.limit, 10, 1, 50);
     return this.searchService.getRecentSearches(req.user.userId, limit);
   }
 
