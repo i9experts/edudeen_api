@@ -662,6 +662,8 @@ export class CheckoutService {
       isDelete: false,
     });
     if (!checkout) throw new NotFoundException('Checkout not found');
+    if (checkout.status === 'payment_pending')
+      throw new BadRequestException('Payment has already been started for this checkout — start a new checkout to change it');
     if (checkout.status === 'completed')
       throw new BadRequestException('Checkout already completed');
     if (checkout.status === 'expired')
@@ -780,6 +782,8 @@ export class CheckoutService {
       isDelete: false,
     });
     if (!checkout) throw new NotFoundException('Checkout not found');
+    if (checkout.status === 'payment_pending')
+      throw new BadRequestException('Payment has already been started for this checkout — start a new checkout to change it');
     if (checkout.status === 'completed')
       throw new BadRequestException('Checkout already completed');
     if (checkout.status === 'cancelled')
@@ -965,6 +969,8 @@ export class CheckoutService {
       isDelete: false,
     });
     if (!checkout) throw new NotFoundException('Checkout not found');
+    if (checkout.status === 'payment_pending')
+      throw new BadRequestException('Payment has already been started for this checkout — start a new checkout to change it');
     if (checkout.status === 'completed')
       throw new BadRequestException('Checkout already completed');
     if (checkout.status === 'cancelled')
@@ -1036,6 +1042,8 @@ export class CheckoutService {
     const { checkoutModel } = this.databaseService.repositories;
     const checkout = await checkoutModel.findOne({ _id: checkoutId, userId, isDelete: false });
     if (!checkout) throw new NotFoundException('Checkout not found');
+    if (checkout.status === 'payment_pending')
+      throw new BadRequestException('Payment has already been started for this checkout — start a new checkout to change it');
     if (checkout.status === 'completed') throw new BadRequestException('Checkout already completed');
     if (checkout.status === 'cancelled') throw new BadRequestException('Checkout is cancelled');
     if (checkout.status === 'expired') throw new BadRequestException('Checkout has expired');
@@ -1102,6 +1110,8 @@ export class CheckoutService {
     const { checkoutModel } = this.databaseService.repositories;
     const checkout = await checkoutModel.findOne({ _id: checkoutId, userId, isDelete: false });
     if (!checkout) throw new NotFoundException('Checkout not found');
+    if (checkout.status === 'payment_pending')
+      throw new BadRequestException('Payment has already been started for this checkout — start a new checkout to change it');
     if (checkout.status === 'completed') throw new BadRequestException('Checkout already completed');
     if (checkout.status === 'cancelled') throw new BadRequestException('Checkout is cancelled');
     if (checkout.status === 'expired') throw new BadRequestException('Checkout has expired');

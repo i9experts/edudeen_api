@@ -127,6 +127,32 @@ export class PaymentService {
 
   /** Creates (or reuses) a Stripe PaymentIntent for a checkout and returns
    *  the client secret the app needs to present Stripe's PaymentSheet. */
+  /** The amount a Stripe charge for this checkout must be, derived from the
+   *  checkout's CURRENT items/total. Used at initiate time and again at
+   *  finalize time so a PaymentIntent can never be honoured for a total the
+   *  checkout no longer has. */
+  private computeChargeAmount(checkout: any, scope: 'full' | 'digital_only'): number {
+    if (scope !== 'digital_only') return checkout.totalAmount;
+    const digitalItems = (checkout.items as any[]).filter((i) => i.type === 'digital');
+    // digitalItems[].totalPrice is each item's OWN native seller currency
+    // (never converted at checkout-item level — only checkout.totalAmount
+    // is) — convert per line into checkout.currency with this checkout's own
+    // frozen fxSnapshots rather than a fresh rate.
+    return this.round(
+      digitalItems.reduce(
+        (sum: number, i: any) =>
+          sum +
+          this.exchangeRateService.convertWithSnapshots(
+            i.totalPrice,
+            i.currency ?? checkout.currency,
+            checkout.currency,
+            (checkout.fxSnapshots as any) ?? [],
+          ),
+        0,
+      ),
+    );
+  }
+
   async initiatePayment(userId: string, body: any) {
     const stripe = this.assertStripeConfigured();
 
@@ -204,21 +230,7 @@ export class PaymentService {
     // is) — must be converted per line into checkout.currency before
     // summing, same rule as CheckoutService.convertedSubtotal, using this
     // checkout's own frozen fxSnapshots rather than a fresh rate.
-    const chargeAmount = useSplit
-      ? this.round(
-          digitalItems.reduce(
-            (s: number, i: any) =>
-              s +
-              this.exchangeRateService.convertWithSnapshots(
-                i.totalPrice,
-                i.currency ?? checkout.currency,
-                checkout.currency,
-                (checkout.fxSnapshots as any) ?? [],
-              ),
-            0,
-          ),
-        )
-      : checkout.totalAmount;
+    const chargeAmount = this.computeChargeAmount(checkout, useSplit ? 'digital_only' : 'full');
     const paymentScope = useSplit ? 'digital_only' : 'full';
 
     const amountCents = Math.round(chargeAmount * 100);
@@ -638,7 +650,14 @@ export class PaymentService {
     // create an order from it and surface it as a security alert rather
     // than silently trusting either side.
     if (typeof paymentIntent.amount === 'number' && typeof paymentIntent.currency === 'string') {
-      const expectedAmountCents = Math.round(transaction.amount * 100);
+      // Bind to the checkout's CURRENT total, not just the snapshot stored
+      // at initiate time — both must agree with what Stripe actually charged.
+      const currentChargeCents = Math.round(
+        this.computeChargeAmount(checkout, transaction.paymentScope === 'digital_only' ? 'digital_only' : 'full') * 100,
+      );
+      const expectedAmountCents = currentChargeCents !== Math.round(transaction.amount * 100)
+        ? currentChargeCents
+        : Math.round(transaction.amount * 100);
       const expectedCurrency = (checkout.currency || 'USD').toUpperCase();
       const actualCurrency = paymentIntent.currency.toUpperCase();
       if (paymentIntent.amount !== expectedAmountCents || actualCurrency !== expectedCurrency) {
