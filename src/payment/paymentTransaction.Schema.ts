@@ -96,7 +96,5 @@ export class PaymentTransaction {
 export const PaymentTransactionSchema =
   SchemaFactory.createForClass(PaymentTransaction);
 
-PaymentTransactionSchema.index({ userId: 1 });
-PaymentTransactionSchema.index({ checkoutId: 1 });
 PaymentTransactionSchema.index({ orderIds: 1 });
 PaymentTransactionSchema.index({ stripePaymentIntentId: 1 });
