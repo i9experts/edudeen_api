@@ -27,7 +27,7 @@ interface AdminRequest {
   ip?: string;
   headers: Record<string, string | undefined>;
 }
-const auditMeta = (req: AdminRequest) => (auditMeta(req));
+const auditMeta = (req: AdminRequest) => ({ adminId: req.user.userId, ip: req.ip, userAgent: req.headers['user-agent'] });
 
 @Controller('api/categories')
 export class CategoriesController {
