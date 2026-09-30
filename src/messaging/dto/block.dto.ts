@@ -1,10 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsEnum, IsOptional } from 'class-validator';
+import { IsEnum, IsMongoId, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class BlockDto {
   @ApiProperty({ example: '665user001' })
-  @IsString()
-  @IsNotEmpty()
+  @IsMongoId()
   targetId: string;
 
   @ApiProperty({ enum: ['user', 'seller'] })
@@ -14,5 +13,6 @@ export class BlockDto {
   @ApiProperty({ required: false, example: 'Spam messages' })
   @IsOptional()
   @IsString()
+  @MaxLength(300)
   reason?: string;
 }

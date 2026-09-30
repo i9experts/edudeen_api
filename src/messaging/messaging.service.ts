@@ -77,7 +77,8 @@ export class MessagingService {
   async startOrGetConversation(buyerId: string, dto: StartConversationDto) {
     const { storeId } = dto;
     const store = await this.db.repositories.storeModel.findById(storeId);
-    if (!store || store.isDelete) throw new NotFoundException('Store not found');
+    // Only live stores can be messaged (pending/suspended/rejected stores used to receive conversations).
+    if (!store || store.isDelete || store.status !== 'active') throw new NotFoundException('Store not found');
     if (store.sellerId.toString() === buyerId) throw new BadRequestException('You cannot message your own store');
 
     // Check if buyer is blocked by seller or vice versa
@@ -258,9 +259,19 @@ export class MessagingService {
     const iAmBuyer = conv.buyerId.toString() === userId;
     const senderRole = role === 'admin' ? 'admin' : iAmBuyer ? 'user' : 'seller';
 
-    // Block check
+    // Block check — the mirrored flags AND the Block collection (the flags can drift, e.g. a block created from
+    // the other role, or before the conversation existed).
     if (conv.blockedByBuyer || conv.blockedBySeller) {
       throw new ForbiddenException('Cannot send message — conversation is blocked');
+    }
+    if (role !== 'admin') {
+      const blocked = await this.blkModel.exists({
+        $or: [
+          { blockerId: conv.buyerId.toString(), targetId: conv.sellerId.toString() },
+          { blockerId: conv.sellerId.toString(), targetId: conv.buyerId.toString() },
+        ],
+      });
+      if (blocked) throw new ForbiddenException('Cannot send message — conversation is blocked');
     }
 
     // Validate content
@@ -274,10 +285,35 @@ export class MessagingService {
       throw new BadRequestException('attachments are required for this message type');
     }
 
+    // Attachments must point at OUR Cloudinary account, not any host that happens to match the DTO's shape.
+    if (dto.attachments?.length) {
+      const cloud = process.env.CLOUDINARY_CLOUD_NAME;
+      for (const a of dto.attachments) {
+        if (cloud && !a.url.startsWith(`https://res.cloudinary.com/${cloud}/`)) {
+          throw new BadRequestException('Attachment must be a file uploaded through the app');
+        }
+      }
+    }
+
+    // A reply quote is rebuilt from the real parent message in THIS conversation; the client only names it.
+    let replyToSnapshot: any = null;
+    if (dto.replyTo?.messageId) {
+      const parent: any = await this.msgModel.findOne({ _id: dto.replyTo.messageId, conversationId }).lean();
+      if (!parent) throw new BadRequestException('The message you are replying to was not found in this conversation');
+      replyToSnapshot = {
+        messageId: parent._id.toString(),
+        text: parent.text ? String(parent.text).slice(0, 200) : null,
+        type: parent.type,
+        senderId: parent.senderId,
+        senderRole: parent.senderRole,
+      };
+    }
+
     // Auto-fetch product details for product share
     let productShareSnapshot: any = null;
     if (dto.type === 'product_share') {
-      const product = await this.db.repositories.productModel.findById(dto.productShare!.productId);
+      // Only a live product can be shared (drafts / removed products used to be shareable by id).
+      const product = await this.db.repositories.productModel.findOne({ _id: dto.productShare!.productId, status: 'active', isDelete: false });
       if (!product) throw new NotFoundException('Product not found');
 
       // Get lowest variant price
@@ -307,8 +343,9 @@ export class MessagingService {
       text: dto.text?.trim() || null,
       attachments: dto.attachments || [],
       productShare: productShareSnapshot,
-      replyTo: dto.replyTo || null,
-      forwardedFrom: dto.isForwarded && dto.forwardedFrom ? dto.forwardedFrom : null,
+      replyTo: replyToSnapshot,
+      // The claimed ORIGINAL sender of a forwarded message can't be verified server-side, so it is not stored.
+      forwardedFrom: null,
       status: 'sent',
       spamScore: score,
       isFlagged: score >= 3,
@@ -535,6 +572,9 @@ export class MessagingService {
 
   async blockUser(blockerId: string, blockerRole: string, dto: BlockDto) {
     if (blockerId === dto.targetId) throw new BadRequestException('Cannot block yourself');
+    const { userModel, sellerModel } = this.db.repositories;
+    const targetExists = (await userModel.exists({ _id: dto.targetId })) || (await sellerModel.exists({ _id: dto.targetId }));
+    if (!targetExists) throw new NotFoundException('User not found');
 
     const existing = await this.blkModel.findOne({ blockerId, targetId: dto.targetId });
     if (existing) throw new ConflictException('User is already blocked');
@@ -547,18 +587,10 @@ export class MessagingService {
       reason: dto.reason || null,
     });
 
-    // Mirror block state into any existing conversation
-    if (blockerRole === 'user') {
-      await this.convModel.updateMany(
-        { buyerId: blockerId, sellerId: dto.targetId },
-        { $set: { blockedByBuyer: true } },
-      );
-    } else if (blockerRole === 'seller') {
-      await this.convModel.updateMany(
-        { sellerId: blockerId, buyerId: dto.targetId },
-        { $set: { blockedBySeller: true } },
-      );
-    }
+    // Mirror block state into any existing conversation. The side is decided by who is the buyer / seller IN that
+    // conversation, not by the blocker's account role (one account can be a buyer at one store and a seller at another).
+    await this.convModel.updateMany({ buyerId: blockerId, sellerId: dto.targetId }, { $set: { blockedByBuyer: true } });
+    await this.convModel.updateMany({ sellerId: blockerId, buyerId: dto.targetId }, { $set: { blockedBySeller: true } });
     return block;
   }
 
@@ -566,23 +598,30 @@ export class MessagingService {
     const block = await this.blkModel.findOneAndDelete({ blockerId, targetId });
     if (!block) throw new NotFoundException('Block not found');
 
-    // Unblock in conversation
-    if (block.blockerRole === 'user') {
-      await this.convModel.updateMany(
-        { buyerId: blockerId, sellerId: targetId },
-        { $set: { blockedByBuyer: false } },
-      );
-    } else if (block.blockerRole === 'seller') {
-      await this.convModel.updateMany(
-        { sellerId: blockerId, buyerId: targetId },
-        { $set: { blockedBySeller: false } },
-      );
-    }
+    // Unblock in conversation (both possible sides — see blockUser)
+    await this.convModel.updateMany({ buyerId: blockerId, sellerId: targetId }, { $set: { blockedByBuyer: false } });
+    await this.convModel.updateMany({ sellerId: blockerId, buyerId: targetId }, { $set: { blockedBySeller: false } });
 
     return { unblocked: true };
   }
 
   async reportTarget(reporterId: string, reporterRole: string, dto: ReportDto) {
+    // The reporter must be able to see what they report (a participant of the conversation / message / a
+    // counterpart) — reports used to accept any id, letting users flood admins or brigade a seller.
+    if (dto.targetType === 'conversation') {
+      const conv = await this.convModel.findById(dto.targetId).lean();
+      if (!conv || (conv.buyerId.toString() !== reporterId && conv.sellerId.toString() !== reporterId)) throw new NotFoundException('Nothing to report');
+    } else if (dto.targetType === 'message') {
+      const msg = await this.msgModel.findById(dto.targetId).lean();
+      const conv = msg ? await this.convModel.findById(msg.conversationId).lean() : null;
+      if (!conv || (conv.buyerId.toString() !== reporterId && conv.sellerId.toString() !== reporterId)) throw new NotFoundException('Nothing to report');
+    } else {
+      const shared = await this.convModel.exists({ $or: [{ buyerId: reporterId, sellerId: dto.targetId }, { sellerId: reporterId, buyerId: dto.targetId }] });
+      if (!shared) throw new NotFoundException('Nothing to report');
+    }
+    const duplicate = await this.rptModel.exists({ reporterId, targetType: dto.targetType, targetId: dto.targetId, status: 'pending' });
+    if (duplicate) throw new ConflictException('You have already reported this — it is awaiting review');
+
     const report = await this.rptModel.create({
       reporterId,
       reporterRole,

@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsEnum, IsOptional, MaxLength } from 'class-validator';
+import { IsEnum, IsMongoId, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class ReportDto {
   @ApiProperty({ enum: ['user', 'message', 'conversation'] })
@@ -8,8 +8,7 @@ export class ReportDto {
   targetType: string;
 
   @ApiProperty({ example: '665message001' })
-  @IsString()
-  @IsNotEmpty()
+  @IsMongoId()
   targetId: string;
 
   @ApiProperty({ example: 'Spam', enum: ['spam', 'harassment', 'inappropriate_content', 'fraud', 'other'] })

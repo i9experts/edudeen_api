@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { Throttle } from '@nestjs/throttler';
 import {
   Controller, Get, Post, Patch, Delete,
   Body, Param, Query, Req, UseGuards,
@@ -33,6 +34,7 @@ export class MessagingController {
   // DIFFERENT store as a customer (see the self-message guard in the service).
   @UseGuards(RolesGuard)
   @Roles('user', 'seller')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('conversations')
   startConversation(@Req() req: any, @Body() dto: StartConversationDto) {
     return this.messagingService.startOrGetConversation(req.user.userId, dto);
@@ -95,6 +97,7 @@ export class MessagingController {
   // MESSAGES  (nested under a conversation)
   // ═══════════════════════════════════════════════════════════════════════════
 
+  @Throttle({ default: { limit: 40, ttl: 60_000 } })
   @Post('conversations/:convId/messages')
   sendMessage(@Req() req: any, @Param('convId') convId: string, @Body() dto: SendMessageDto) {
     return this.messagingService.sendMessage(req.user.userId, req.user.role, convId, dto);
@@ -116,10 +119,11 @@ export class MessagingController {
   // ATTACHMENTS
   // ═══════════════════════════════════════════════════════════════════════════
 
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('conversations/:convId/attachments')
   @UseInterceptors(FileInterceptor('file', {
     storage: memoryStorage(),
-    limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
+    limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB (was 100 MB, held in memory)
   }))
   uploadAttachment(
     @Req() req: any,
@@ -153,6 +157,7 @@ export class MessagingController {
   // MODERATION
   // ═══════════════════════════════════════════════════════════════════════════
 
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('block')
   blockUser(@Req() req: any, @Body() dto: BlockDto) {
     return this.messagingService.blockUser(req.user.userId, req.user.role, dto);
@@ -163,6 +168,7 @@ export class MessagingController {
     return this.messagingService.unblockUser(req.user.userId, targetId);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 3_600_000 } })
   @Post('report')
   reportTarget(@Req() req: any, @Body() dto: ReportDto) {
     return this.messagingService.reportTarget(req.user.userId, req.user.role, dto);

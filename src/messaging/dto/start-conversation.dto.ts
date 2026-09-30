@@ -1,10 +1,9 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty } from 'class-validator';
+import { IsMongoId, IsNotEmpty, IsString } from 'class-validator';
 
 export class StartConversationDto {
   @ApiProperty({ example: '665store001', description: 'Store to open a conversation with' })
-  @IsString()
-  @IsNotEmpty()
+  @IsMongoId()
   storeId: string;
 }
