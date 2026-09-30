@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { reserveInvoiceRefund, releaseInvoiceRefund, invoiceRefundKey } from 'src/common/invoice-refund.util';
 import {
   Injectable, NotFoundException, ForbiddenException,
   BadRequestException, ConflictException, Logger,
@@ -212,6 +213,12 @@ export class SubscriptionsService {
    */
   private async creditSellerPayout(invoice: any) {
     if (invoice.payoutCredited) return;
+    // Claim the flag atomically FIRST (the in-memory copy above can be stale): exactly one caller proceeds.
+    const claimed = await this.invoiceModel.findOneAndUpdate(
+      { _id: invoice._id, payoutCredited: { $ne: true } },
+      { $set: { payoutCredited: true } },
+    );
+    if (!claimed) return;
     try {
       const platformCommissionUSD = this.round(invoice.amountUSD * this.platformCommissionRate);
       const sellerPayoutUSD = this.round(invoice.amountUSD - platformCommissionUSD);
@@ -224,9 +231,12 @@ export class SubscriptionsService {
 
       await this.invoiceModel.updateOne(
         { _id: invoice._id },
-        { $set: { platformCommissionUSD, sellerPayoutUSD, payoutCredited: true } },
+        { $set: { platformCommissionUSD, sellerPayoutUSD } },
       );
     } catch (err: any) {
+      // Release the claim so a later retry can credit the seller (recordSubscriptionRevenue is idempotent
+      // per invoice, so a retry after a partial failure cannot double-credit).
+      await this.invoiceModel.updateOne({ _id: invoice._id }, { $set: { payoutCredited: false } }).catch(() => undefined);
       this.logger.error(`Failed to credit seller payout for invoice ${invoice.invoiceNumber}: ${err?.message}`);
     }
   }
@@ -560,16 +570,18 @@ export class SubscriptionsService {
       throw new BadRequestException(`Refund amount must be between $0.01 and $${remaining.toFixed(2)} (already refunded: $${(invoice.refundedAmountUSD ?? 0).toFixed(2)})`);
     }
 
-    const result = await this.gateway.refund(invoice.providerChargeId, refundAmount, reason);
+    // Reserve the amount atomically BEFORE calling the provider so two concurrent refunds can never
+    // together exceed what was paid; roll the reservation back if the provider declines.
+    const before = await reserveInvoiceRefund(this.invoiceModel, invoiceId, refundAmount);
+    if (!before) throw new BadRequestException('This refund exceeds the refundable amount (or the invoice was just refunded) — reload and try again');
+    const result = await this.gateway.refund(invoice.providerChargeId, refundAmount, reason, invoiceRefundKey(invoiceId, before.refundedAmountUSD ?? 0, refundAmount));
     if (!result.success) {
+      await releaseInvoiceRefund(this.invoiceModel, invoiceId, refundAmount);
       throw new BadRequestException(`Refund failed: ${result.failureReason ?? 'declined by payment provider'}`);
     }
-
-    invoice.refundedAmountUSD = this.round((invoice.refundedAmountUSD ?? 0) + refundAmount);
-    invoice.status = invoice.refundedAmountUSD >= invoice.amountUSD ? 'refunded' : 'partially_refunded';
-    invoice.refundedAt = new Date();
-    invoice.providerRefundId = result.providerRefundId ?? invoice.providerRefundId;
-    await invoice.save();
+    if (result.providerRefundId) await this.invoiceModel.updateOne({ _id: invoiceId }, { $set: { providerRefundId: result.providerRefundId } });
+    const refreshed = await this.invoiceModel.findById(invoiceId);
+    if (refreshed) invoice.set(refreshed.toObject());
 
     const sub = await this.subModel.findById(invoice.subscriptionId);
     if (sub) {
@@ -1682,11 +1694,17 @@ export class SubscriptionsService {
         const creditToApply = this.round(Math.min(sub.creditBalanceUSD ?? 0, sub.amountUSD));
         const chargeAmount = this.round(sub.amountUSD - creditToApply);
 
+        // Deterministic per billing period (see the platform-plan renewal for why): a crash between
+        // the charge and sub.save(), or a second instance, must not charge the buyer twice.
+        const idempotencyKey = `sub_renew_${subId}_${new Date(sub.nextBillingDate as Date).getTime()}`;
         const charge = chargeAmount > 0
-          ? await this.gateway.chargeSubscription(subId, chargeAmount)
+          ? await this.gateway.chargeSubscription(subId, chargeAmount, { providerCustomerId: (sub as any).stripeCustomerId ?? undefined, idempotencyKey })
           : { success: true, providerChargeId: null as string | null, paymentMethodType: 'manual' }; // fully covered by credit — no real charge needed
 
-        const invoice = await this.invoiceModel.create({
+        const alreadyInvoiced = charge.providerChargeId
+          ? await this.invoiceModel.findOne({ providerChargeId: charge.providerChargeId, subscriptionId: subId })
+          : null;
+        const invoice = alreadyInvoiced ?? await this.invoiceModel.create({
           subscriptionId: subId,
           storeId: sub.storeId,
           sellerId: sub.sellerId,
@@ -1701,14 +1719,16 @@ export class SubscriptionsService {
           countryCode: sub.billingCountry ?? null,
         });
 
-        await this.recordPaymentAttempt({
-          subscriptionId: subId, storeId: sub.storeId, sellerId: sub.sellerId, customerId: sub.customerId,
-          attemptType: 'renewal', outcome: charge.success ? 'success' : 'failed',
-          amountUSD: chargeAmount,
-          failureReason: charge.success ? null : ((charge as any).failureReason ?? 'Payment declined'),
-          failureCode: (charge as any).failureCode ?? null,
-          invoiceId: (invoice as any)._id.toString(), providerChargeId: charge.providerChargeId,
-        });
+        if (!alreadyInvoiced) {
+          await this.recordPaymentAttempt({
+            subscriptionId: subId, storeId: sub.storeId, sellerId: sub.sellerId, customerId: sub.customerId,
+            attemptType: 'renewal', outcome: charge.success ? 'success' : 'failed',
+            amountUSD: chargeAmount,
+            failureReason: charge.success ? null : ((charge as any).failureReason ?? 'Payment declined'),
+            failureCode: (charge as any).failureCode ?? null,
+            invoiceId: (invoice as any)._id.toString(), providerChargeId: charge.providerChargeId,
+          });
+        }
 
         if (charge.success) {
           const periodEnd = this.addPeriod(now, sub.billingInterval as 'monthly' | 'yearly');
@@ -1851,14 +1871,28 @@ export class SubscriptionsService {
 
   /** Manual redemption of digital-download/service credits — the actual "spend" side of the `credits` benefit. */
   async spendCredit(customerId: string, storeId: string, creditType: 'download' | 'service', amount: number, reason: string) {
-    if (amount <= 0) throw new BadRequestException('amount must be positive');
-    const wallet = await this.creditWalletModel.findOne({ customerId, storeId, creditType });
-    if (!wallet || wallet.balance < amount) throw new BadRequestException('Insufficient credit balance');
-
-    wallet.balance = this.round(wallet.balance - amount);
-    wallet.totalSpent = this.round(wallet.totalSpent + amount);
-    wallet.ledger.push({ type: 'spend', amount: -amount, balanceAfter: wallet.balance, reason, referenceId: null, createdAt: new Date() });
-    await wallet.save();
+    if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException('amount must be positive');
+    if (!['download', 'service'].includes(creditType)) throw new BadRequestException('Invalid creditType');
+    // One atomic update (guard + decrement + capped ledger entry). The old read-check-save let two
+    // parallel spends both pass against the same balance, and a non-numeric amount could turn it into NaN.
+    const after = { $round: [{ $subtract: ['$balance', amount] }, 2] };
+    const wallet = await this.creditWalletModel.findOneAndUpdate(
+      { customerId, storeId, creditType, balance: { $gte: amount } },
+      [{
+        $set: {
+          balance: after,
+          totalSpent: { $round: [{ $add: [{ $ifNull: ['$totalSpent', 0] }, amount] }, 2] },
+          ledger: {
+            $slice: [
+              { $concatArrays: [{ $ifNull: ['$ledger', []] }, [{ type: 'spend', amount: -amount, balanceAfter: after, reason: { $literal: reason }, referenceId: null, createdAt: '$$NOW' }]] },
+              -500,
+            ],
+          },
+        },
+      }],
+      { returnDocument: 'after', updatePipeline: true },
+    );
+    if (!wallet) throw new BadRequestException('Insufficient credit balance');
 
     return { success: true, data: wallet };
   }

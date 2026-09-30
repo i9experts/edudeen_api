@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsNumber, Min } from 'class-validator';
+import { IsEnum, IsOptional, IsInt, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
 // 'extra_staff_seat' is no longer sold: staff seats only existed for the POS
@@ -17,6 +17,6 @@ export class PurchaseAddonDto {
   addonType: (typeof ADDON_TYPES)[number];
 
   @ApiProperty({ required: false, default: 1, description: 'Units to purchase (e.g. 2 = 1000 extra AI credits at $10/500)' })
-  @IsOptional() @Type(() => Number) @IsNumber() @Min(1)
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100)
   quantity?: number;
 }

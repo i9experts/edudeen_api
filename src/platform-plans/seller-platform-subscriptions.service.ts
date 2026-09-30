@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { reserveInvoiceRefund, releaseInvoiceRefund, invoiceRefundKey } from 'src/common/invoice-refund.util';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { DatabaseService } from 'src/database/databaseservice';
@@ -115,6 +116,13 @@ export class SellerPlatformSubscriptionsService {
   private async downgradeToFree(sub: any): Promise<any | null> {
     const freePlan = await this.planModel.findOne({ isFree: true, status: 'active', isDelete: false });
     if (!freePlan) return null;
+    // A store on the free plan must not keep being billed by Stripe (dunning exhausted
+    // locally while Stripe's own retries continue, then a late success revived a paid charge).
+    if (sub.providerSubscriptionId) {
+      await this.gateway.cancelProviderSubscription(sub.providerSubscriptionId).catch(() => undefined);
+      sub.providerSubscriptionId = null;
+    }
+    sub.pendingPlanChange = null;
     sub.platformPlanId = (freePlan as any)._id.toString();
     sub.amountUSD = 0;
     sub.status = 'active';
@@ -368,16 +376,16 @@ export class SellerPlatformSubscriptionsService {
       throw new BadRequestException(`Refund amount must be between $0.01 and $${remaining.toFixed(2)}`);
     }
 
-    const result = await this.gateway.refund(invoice.providerChargeId, refundAmount, reason);
+    const before = await reserveInvoiceRefund(this.invoiceModel, invoiceId, refundAmount);
+    if (!before) throw new BadRequestException('This refund exceeds the refundable amount (or the invoice was just refunded) — reload and try again');
+    const result = await this.gateway.refund(invoice.providerChargeId, refundAmount, reason, invoiceRefundKey(invoiceId, before.refundedAmountUSD ?? 0, refundAmount));
     if (!result.success) {
+      await releaseInvoiceRefund(this.invoiceModel, invoiceId, refundAmount);
       throw new BadRequestException(`Refund failed: ${result.failureReason ?? 'declined by payment provider'}`);
     }
-
-    invoice.refundedAmountUSD = this.round((invoice.refundedAmountUSD ?? 0) + refundAmount);
-    invoice.status = invoice.refundedAmountUSD >= invoice.amountUSD ? 'refunded' : 'partially_refunded';
-    invoice.refundedAt = new Date();
-    invoice.providerRefundId = result.providerRefundId ?? invoice.providerRefundId;
-    await invoice.save();
+    if (result.providerRefundId) await this.invoiceModel.updateOne({ _id: invoiceId }, { $set: { providerRefundId: result.providerRefundId } });
+    const refreshed = await this.invoiceModel.findById(invoiceId);
+    if (refreshed) invoice.set(refreshed.toObject());
 
     this.activityLogService.log({
       storeId: invoice.storeId, category: 'platform_plans', action: 'invoice_refunded',
@@ -461,22 +469,39 @@ export class SellerPlatformSubscriptionsService {
           sub._id.toString(), `Platform: ${newPlan.name}`, newAmountUSD, newInterval,
           { providerCustomerId: seller.stripeCustomerId, providerPriceId, idempotencyKey, metadata: { kind: PLATFORM_PLAN_STRIPE_METADATA_KIND, storeId } },
         );
-        sub.providerSubscriptionId = created.providerSubscriptionId;
         sub.stripeCustomerId = seller.stripeCustomerId;
-        sub.status = created.status === 'active' ? 'active' : 'past_due';
+        sub.paymentProvider = 'stripe';
 
-        sub.platformPlanId = newPlanId;
-        sub.billingInterval = newInterval;
-        sub.amountUSD = this.round(newAmountUSD);
-        sub.currentPeriodStart = now;
-        sub.currentPeriodEnd = this.addPeriod(now, newInterval);
-        sub.nextBillingDate = sub.currentPeriodEnd;
-        sub.planHistory = [...(sub.planHistory ?? []), historyEntry];
+        if (created.status === 'active') {
+          // Stripe already collected payment (saved card, no extra authentication) — safe to apply now.
+          sub.providerSubscriptionId = created.providerSubscriptionId;
+          sub.status = 'active';
+          sub.pendingPlanChange = null;
+          sub.platformPlanId = newPlanId;
+          sub.billingInterval = newInterval;
+          sub.amountUSD = this.round(newAmountUSD);
+          sub.currentPeriodStart = now;
+          sub.currentPeriodEnd = this.addPeriod(now, newInterval);
+          sub.nextBillingDate = sub.currentPeriodEnd;
+          sub.planHistory = [...(sub.planHistory ?? []), historyEntry];
+        } else {
+          // Payment not confirmed yet: do NOT switch the plan. Entitlements read platformPlanId, so
+          // switching it here handed out the paid plan to anyone who abandoned the payment sheet.
+          // The plan is applied by handleInvoicePaymentSucceeded once Stripe reports the invoice paid.
+          const stale = sub.pendingPlanChange?.providerSubscriptionId;
+          if (stale && stale !== created.providerSubscriptionId) {
+            await this.gateway.cancelProviderSubscription(stale).catch(() => undefined);
+          }
+          sub.pendingPlanChange = {
+            platformPlanId: String(newPlanId), billingInterval: newInterval, amountUSD: this.round(newAmountUSD),
+            providerSubscriptionId: created.providerSubscriptionId, historyEntry, requestedAt: now,
+          };
+        }
         await sub.save();
 
         this.activityLogService.log({
           storeId, category: 'platform_plans', action: 'plan_changed',
-          description: `Store moved to "${newPlan.name}" (awaiting Stripe payment confirmation)`,
+          description: created.status === 'active' ? `Store moved to "${newPlan.name}"` : `Upgrade to "${newPlan.name}" started (plan applies once Stripe confirms payment)`,
           actorId: sellerId, actorRole: 'seller', targetId: sub._id.toString(), targetType: 'seller_platform_subscription',
         });
 
@@ -708,6 +733,7 @@ export class SellerPlatformSubscriptionsService {
     const due = await this.subModel.find({
       status: { $in: ['active', 'past_due'] },
       paymentProvider: 'manual',
+      providerSubscriptionId: null, // Stripe-billed stores renew via Stripe's own invoices, never this cron
       amountUSD: { $gt: 0 }, // free-plan stores never "renew" a charge
       cancelAtPeriodEnd: { $ne: true }, // a scheduled cancellation reverts to free at period end instead of renewing
       nextBillingDate: { $lte: now },
@@ -719,11 +745,17 @@ export class SellerPlatformSubscriptionsService {
       try {
         const creditToApply = this.round(Math.min(sub.creditBalanceUSD ?? 0, sub.amountUSD));
         const chargeAmount = this.round(sub.amountUSD - creditToApply);
+        // Deterministic per billing period: a crash after the charge but before sub.save() (or two
+        // instances) re-issues the SAME key, so the provider returns the original charge instead of
+        // charging again. (It used to be Date.now()-based, i.e. never deduplicated.)
+        const idempotencyKey = `platform_renew_${sub._id.toString()}_${new Date(sub.nextBillingDate as Date).getTime()}`;
         const charge = chargeAmount > 0
-          ? await this.gateway.chargeSubscription(sub._id.toString(), chargeAmount)
+          ? await this.gateway.chargeSubscription(sub._id.toString(), chargeAmount, { providerCustomerId: sub.stripeCustomerId ?? undefined, idempotencyKey })
           : { success: true, providerChargeId: null as string | null, paymentMethodType: 'manual' };
 
-        const invoice = await this.invoiceModel.create({
+        // Same charge already turned into an invoice by an interrupted earlier attempt → reuse it.
+        const existing = charge.providerChargeId ? await this.invoiceModel.findOne({ providerChargeId: charge.providerChargeId, storeId: sub.storeId }) : null;
+        const invoice = existing ?? await this.invoiceModel.create({
           storeId: sub.storeId, sellerId: sub.sellerId, platformPlanId: sub.platformPlanId,
           invoiceNumber: await this.generateInvoiceNumber(), type: 'recurring',
           amountUSD: chargeAmount, status: charge.success ? 'paid' : 'failed',
@@ -731,12 +763,14 @@ export class SellerPlatformSubscriptionsService {
           paymentMethodType: (charge as any).paymentMethodType ?? 'manual',
         });
 
-        await this.recordAttempt({
-          storeId: sub.storeId, sellerId: sub.sellerId, attemptType: 'renewal',
-          outcome: charge.success ? 'success' : 'failed', amountUSD: chargeAmount,
-          failureReason: charge.success ? null : ((charge as any).failureReason ?? 'Payment declined'),
-          invoiceId: invoice._id.toString(), providerChargeId: charge.providerChargeId,
-        });
+        if (!existing) {
+          await this.recordAttempt({
+            storeId: sub.storeId, sellerId: sub.sellerId, attemptType: 'renewal',
+            outcome: charge.success ? 'success' : 'failed', amountUSD: chargeAmount,
+            failureReason: charge.success ? null : ((charge as any).failureReason ?? 'Payment declined'),
+            invoiceId: invoice._id.toString(), providerChargeId: charge.providerChargeId,
+          });
+        }
 
         if (charge.success) {
           const periodEnd = this.addPeriod(now, sub.billingInterval as 'monthly' | 'yearly');
@@ -864,9 +898,28 @@ export class SellerPlatformSubscriptionsService {
   async handleInvoicePaymentSucceeded(invoice: any): Promise<void> {
     const providerSubscriptionId: string | undefined = typeof invoice.subscription === 'string' ? invoice.subscription : invoice.subscription?.id;
     if (!providerSubscriptionId) return;
-    const sub = await this.subModel.findOne({ providerSubscriptionId, isDelete: false });
+    const sub = await this.subModel.findOne({
+      isDelete: false,
+      $or: [{ providerSubscriptionId }, { 'pendingPlanChange.providerSubscriptionId': providerSubscriptionId }],
+    });
     if (!sub) return; // not one of ours — belongs to the buyer-VIP-plan system instead
     if (await this.invoiceModel.exists({ stripeInvoiceId: invoice.id })) return; // duplicate webhook delivery
+
+    // Payment for a purchase that was waiting on Stripe confirmation: NOW the plan changes.
+    const pending = sub.pendingPlanChange;
+    if (pending && pending.providerSubscriptionId === providerSubscriptionId) {
+      sub.platformPlanId = pending.platformPlanId;
+      sub.billingInterval = pending.billingInterval;
+      sub.amountUSD = pending.amountUSD;
+      sub.providerSubscriptionId = pending.providerSubscriptionId;
+      sub.paymentProvider = 'stripe';
+      sub.planHistory = [...(sub.planHistory ?? []), pending.historyEntry as any];
+      sub.pendingPlanChange = null;
+      sub.creditBalanceUSD = 0;
+      sub.cancelAtPeriodEnd = false;
+      sub.canceledAt = null;
+      sub.cancelReason = null;
+    }
 
     const amountUSD = this.round((invoice.amount_paid ?? 0) / 100);
     const line = invoice.lines?.data?.[0];
@@ -904,8 +957,14 @@ export class SellerPlatformSubscriptionsService {
   async handleInvoicePaymentFailed(invoice: any): Promise<void> {
     const providerSubscriptionId: string | undefined = typeof invoice.subscription === 'string' ? invoice.subscription : invoice.subscription?.id;
     if (!providerSubscriptionId) return;
-    const sub = await this.subModel.findOne({ providerSubscriptionId, isDelete: false });
+    const sub = await this.subModel.findOne({
+      isDelete: false,
+      $or: [{ providerSubscriptionId }, { 'pendingPlanChange.providerSubscriptionId': providerSubscriptionId }],
+    });
     if (!sub) return; // not one of ours
+    // The FIRST payment of a not-yet-applied upgrade failed: the store never had that plan, so
+    // there is nothing to dun or downgrade — it just stays on its current plan.
+    if (sub.pendingPlanChange?.providerSubscriptionId === providerSubscriptionId) return;
     const amountUSD = this.round((invoice.amount_due ?? 0) / 100);
     await this.applyDunningFailure(sub, amountUSD);
     await sub.save();

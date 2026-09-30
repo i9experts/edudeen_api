@@ -231,7 +231,7 @@ export class StripePaymentProvider implements IPaymentGateway {
     return { url: session.url ?? '', sessionId: session.id };
   }
 
-  async refund(providerChargeId: string, amountUSD: number, reason?: string): Promise<RefundResult> {
+  async refund(providerChargeId: string, amountUSD: number, reason?: string, idempotencyKey?: string): Promise<RefundResult> {
     try {
       const validReasons = ['duplicate', 'fraudulent', 'requested_by_customer'] as const;
       const stripeReason = (validReasons as readonly string[]).includes(reason ?? '')
@@ -246,7 +246,7 @@ export class StripePaymentProvider implements IPaymentGateway {
           amount: Math.round(amountUSD * 100),
           reason: stripeReason,
         },
-        { idempotencyKey: `refund_${providerChargeId}_${Math.round(amountUSD * 100)}` },
+        { idempotencyKey: idempotencyKey ?? `refund_${providerChargeId}_${Math.round(amountUSD * 100)}` },
       );
       return { success: true, providerRefundId: refund.id };
     } catch (err: any) {

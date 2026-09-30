@@ -51,6 +51,13 @@ export class SellerPlatformSubscription {
 
   @Prop({ type: String, enum: ['manual', 'stripe'], default: 'manual' }) paymentProvider: string;
   @Prop({ type: String, default: null }) providerSubscriptionId: string | null;
+  // A paid-plan purchase that is waiting for Stripe to confirm payment. Entitlements keep
+  // following `platformPlanId` (the CURRENT plan) until the invoice is actually paid —
+  // abandoning the payment sheet must not grant the paid plan.
+  @Prop({ type: Object, default: null }) pendingPlanChange: {
+    platformPlanId: string; billingInterval: string; amountUSD: number;
+    providerSubscriptionId: string; historyEntry: Record<string, unknown>; requestedAt: Date;
+  } | null;
   @Prop({ type: String, default: null }) stripeCustomerId: string | null;
 
   @Prop({ default: false }) isDelete: boolean;
@@ -62,3 +69,4 @@ SellerPlatformSubscriptionSchema.index({ sellerId: 1 });
 SellerPlatformSubscriptionSchema.index({ platformPlanId: 1 });
 SellerPlatformSubscriptionSchema.index({ nextBillingDate: 1, status: 1 });
 SellerPlatformSubscriptionSchema.index({ providerSubscriptionId: 1 });
+SellerPlatformSubscriptionSchema.index({ 'pendingPlanChange.providerSubscriptionId': 1 }, { sparse: true });

@@ -5,6 +5,9 @@ import { BadRequestException, InternalServerErrorException } from '@nestjs/commo
 import * as bcrypt from 'bcrypt';
 import { AuthService } from './auth.service';
 
+// bcrypt hashing is CPU-bound; on a loaded CI/dev machine the 5s default is too tight (assertions unchanged).
+jest.setTimeout(30_000);
+
 const SECRET = 'test-secret';
 process.env.JWT_SECRET = SECRET;
 const hashOtp = (o: string) => (AuthService as any).hashOtp(o);

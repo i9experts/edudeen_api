@@ -104,8 +104,8 @@ export class PaymentGatewayService implements IPaymentGateway, OnModuleInit {
     return this.provider.createCheckoutSession(params);
   }
 
-  refund(providerChargeId: string, amountUSD: number, reason?: string): Promise<RefundResult> {
-    return this.provider.refund(providerChargeId, amountUSD, reason);
+  refund(providerChargeId: string, amountUSD: number, reason?: string, idempotencyKey?: string): Promise<RefundResult> {
+    return this.provider.refund(providerChargeId, amountUSD, reason, idempotencyKey);
   }
 
   updateProviderSubscriptionPrice(

@@ -92,7 +92,14 @@ export class EntitlementsService {
 
   async getLimits(storeId: string): Promise<PlatformPlanLimits> {
     const plan = await this.resolvePlan(storeId);
-    return (plan?.limits as PlatformPlanLimits) ?? FALLBACK_LIMITS;
+    if (!plan?.limits) return FALLBACK_LIMITS;
+    // Fail CLOSED on gaps: a plan document that omits a limit (e.g. an admin-created plan predating
+    // maxActiveStoreBanners/maxActivePromotions) used to read as `undefined`, and `count >= undefined`
+    // is never true — i.e. unlimited. Missing values now take the restrictive fallback instead.
+    const defined = Object.fromEntries(
+      Object.entries(plan.limits as Record<string, unknown>).filter(([k, v]) => v !== undefined && (v !== null || k === 'slaUptimePercent')),
+    );
+    return { ...FALLBACK_LIMITS, ...defined } as PlatformPlanLimits;
   }
 
   async getTransactionFeeRate(storeId: string): Promise<number> {

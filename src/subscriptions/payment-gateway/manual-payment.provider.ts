@@ -64,7 +64,7 @@ export class ManualPaymentProvider implements IPaymentGateway {
     return { url: '', sessionId: this.fakeId('manual_cs') };
   }
 
-  async refund(providerChargeId: string, amountUSD: number): Promise<RefundResult> {
+  async refund(providerChargeId: string, amountUSD: number, _reason?: string, _idempotencyKey?: string): Promise<RefundResult> {
     console.log(`[ManualPayment] Simulated refund: $${amountUSD.toFixed(2)} USD | chargeId=${providerChargeId}`);
     return { success: true, providerRefundId: this.fakeId('manual_re') };
   }

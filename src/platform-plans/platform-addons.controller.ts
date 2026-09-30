@@ -30,7 +30,8 @@ export class PlatformAddonsController {
   @Post(':storeId/addons')
   @UsePipes(new ValidationPipe({ transform: true }))
   purchaseAddon(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: PurchaseAddonDto) {
-    return this.addonsService.purchaseAddon(req.user.userId, storeId, dto);
+    const key = req.headers?.['idempotency-key'];
+    return this.addonsService.purchaseAddon(req.user.userId, storeId, dto, typeof key === 'string' && key.length <= 200 ? key : undefined);
   }
 
   @ApiBearerAuth()

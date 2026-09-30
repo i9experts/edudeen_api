@@ -1461,6 +1461,16 @@ export class FinanceService {
     sellerPayoutUSD: number, platformCommissionUSD: number, description: string,
   ) {
     await this.withTransaction(async (session) => {
+      // Idempotent per invoice (same reasoning as recordSale): a retried or racing call
+      // must never credit the seller twice for one subscription payment.
+      const alreadyRecorded = await this.txModel.exists({
+        storeId, referenceId: invoiceId, referenceType: 'subscription_invoice', type: 'sale',
+      }).session(session);
+      if (alreadyRecorded) {
+        this.logger.warn(`recordSubscriptionRevenue skipped — invoice ${invoiceId} / store ${storeId} already recorded`);
+        return;
+      }
+
       const balance = await this.getOrCreateBalance(storeId, sellerId, 'USD', session);
       const balanceBefore = balance.availableBalance;
 

@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { SpendCreditDto } from './dto/spend-credit.dto';
 import {
   Controller, Get, Post, Patch, Delete,
   Param, Body, Query, Req, Res, UseGuards, UseInterceptors, UsePipes, ValidationPipe,
@@ -89,7 +90,7 @@ export class SubscriptionsController {
   spendCredit(
     @Req() req: any,
     @Param('storeId') storeId: string,
-    @Body() body: { creditType: 'download' | 'service'; amount: number; reason: string },
+    @Body() body: SpendCreditDto,
   ) {
     return this.subscriptionsService.spendCredit(req.user.userId, storeId, body.creditType, body.amount, body.reason);
   }

@@ -83,7 +83,7 @@ export class PlatformAddonsService {
     }
   }
 
-  async purchaseAddon(sellerId: string, storeId: string, dto: PurchaseAddonDto) {
+  async purchaseAddon(sellerId: string, storeId: string, dto: PurchaseAddonDto, idempotencyKey?: string) {
     await this.verifyStoreOwnership(storeId, sellerId);
     const pricing = ADDON_PRICING[dto.addonType];
     if (!pricing) throw new BadRequestException('Unknown add-on type');
@@ -92,8 +92,11 @@ export class PlatformAddonsService {
     const totalPriceUSD = this.round(pricing.priceUSD * quantity);
 
     const sub = await this.db.repositories.sellerPlatformSubscriptionModel.findOne({ storeId, isDelete: false });
+    // With a client Idempotency-Key the Stripe charge is deduplicated too (a double-click or a retry
+    // after a timeout used to create a second charge AND a second credit pack — the key was Date.now()-based).
     const charge = await this.gateway.chargeSubscription(`addon_${storeId}_${dto.addonType}_${Date.now()}`, totalPriceUSD, {
       providerCustomerId: sub?.stripeCustomerId ?? undefined,
+      ...(idempotencyKey ? { idempotencyKey: `addon_${storeId}_${dto.addonType}_${idempotencyKey}` } : {}),
     });
     if (!charge.success) {
       throw new BadRequestException(`Payment of $${totalPriceUSD.toFixed(2)} failed — ${charge.failureReason ?? 'declined'}`);
@@ -109,7 +112,17 @@ export class PlatformAddonsService {
 
     // Immediate effects
     if (dto.addonType === 'extra_ai_credits') {
-      await this.aiCreditsService.grant(storeId, sellerId, quantity * 500, `Purchased ${quantity} × 500 AI credits`, 'purchase');
+      try {
+        await this.aiCreditsService.grant(storeId, sellerId, quantity * 500, `Purchased ${quantity} × 500 AI credits`, 'purchase');
+      } catch (err: any) {
+        // The card was charged and the purchase row exists but the credits didn't land — never silent.
+        this.logger.error(`AI credit grant failed after charge ${charge.providerChargeId}: ${err?.message}`);
+        await this.activityLogService.log({
+          storeId, category: 'platform_plans', action: 'addon_credits_grant_failed',
+          description: `Charged ${charge.providerChargeId} for ${quantity} × 500 AI credits but the wallet grant failed — grant manually`,
+          actorRole: 'system', isSecurityAlert: true, targetId: (addon as any)._id.toString(), targetType: 'platform_addon_purchase',
+        });
+      }
     }
     if (dto.addonType === 'priority_marketplace_placement') {
       await this.syncPriorityPlacementBadge(storeId);
@@ -180,6 +193,9 @@ export class PlatformAddonsService {
         const sub = await this.db.repositories.sellerPlatformSubscriptionModel.findOne({ storeId: addon.storeId });
         const charge = await this.gateway.chargeSubscription(`addon_renewal_${addon._id}`, addon.priceUSD, {
           providerCustomerId: sub?.stripeCustomerId ?? undefined,
+          // Per billing period: a crash before addon.save() re-runs with the same key and Stripe returns
+          // the original charge rather than billing the seller again next tick.
+          idempotencyKey: `addon_renew_${addon._id}_${new Date(addon.nextBillingDate as Date).getTime()}`,
         });
 
         if (charge.success) {

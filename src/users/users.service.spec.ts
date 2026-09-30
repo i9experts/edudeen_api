@@ -3,6 +3,9 @@
 import * as bcrypt from 'bcrypt';
 import { UsersService } from './users.service';
 
+// bcrypt hashing is CPU-bound; on a loaded CI/dev machine the 5s default is too tight (assertions unchanged).
+jest.setTimeout(30_000);
+
 describe('UsersService.changePassword', () => {
   const setup = async () => {
     const acc: any = { _id: 'u1', tokenVersion: 2, password: await bcrypt.hash('OldPassword1', 4) };

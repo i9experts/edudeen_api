@@ -109,7 +109,7 @@ export interface IPaymentGateway {
     metadata?: Record<string, string>;
   }): Promise<CheckoutSessionResult>;
 
-  refund(providerChargeId: string, amountUSD: number, reason?: string): Promise<RefundResult>;
+  refund(providerChargeId: string, amountUSD: number, reason?: string, idempotencyKey?: string): Promise<RefundResult>;
 
   /** Swaps the price on an already-running provider subscription (upgrade/downgrade), with provider-native proration. */
   updateProviderSubscriptionPrice(
