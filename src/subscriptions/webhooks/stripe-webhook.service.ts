@@ -55,10 +55,18 @@ export class StripeWebhookService {
       });
     } catch (err: any) {
       if (err?.code === 11000) {
-        this.logger.log(`Duplicate Stripe webhook delivery ignored: ${event.id} (${event.type})`);
-        return { received: true, duplicate: true };
+        // A duplicate is only safe to ignore if the first delivery actually got processed. If it is
+        // still 'received', that delivery's enqueue failed (queue/Redis down → 500 → Stripe retry):
+        // re-enqueue instead of dropping the event for good. The BullMQ jobId keeps this idempotent.
+        const existing = await webhookEventModel.findOne({ provider: 'stripe', providerEventId: event.id }).select('status').lean<{ status: string }>();
+        if (existing?.status !== 'received') {
+          this.logger.log(`Duplicate Stripe webhook delivery ignored: ${event.id} (${event.type})`);
+          return { received: true, duplicate: true };
+        }
+        this.logger.warn(`Stripe webhook ${event.id} (${event.type}) was recorded but never processed — re-enqueuing`);
+      } else {
+        throw err;
       }
-      throw err;
     }
 
     await this.webhookQueue.add(STRIPE_WEBHOOK_JOB, { eventId: event.id, type: event.type }, {
