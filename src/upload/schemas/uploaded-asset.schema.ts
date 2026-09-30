@@ -1,11 +1,13 @@
-/* eslint-disable prettier/prettier */
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 
 export type UploadedAssetDocument = UploadedAsset & Document;
 
 /** What a private upload is FOR. Derived server-side from the upload folder — never from a client field. */
-export const UPLOADED_ASSET_KINDS = ['digital_product', 'kyc_document'] as const;
+export const UPLOADED_ASSET_KINDS = [
+  'digital_product',
+  'kyc_document',
+] as const;
 export type UploadedAssetKind = (typeof UPLOADED_ASSET_KINDS)[number];
 
 /**
@@ -20,7 +22,8 @@ export class UploadedAsset {
   @Prop({ type: String, required: true, unique: true }) publicId: string;
   @Prop({ type: String, required: true }) ownerId: string;
   @Prop({ type: String, required: true }) ownerRole: string;
-  @Prop({ type: String, enum: UPLOADED_ASSET_KINDS, required: true }) kind: UploadedAssetKind;
+  @Prop({ type: String, enum: UPLOADED_ASSET_KINDS, required: true })
+  kind: UploadedAssetKind;
   @Prop({ type: String, required: true }) resourceType: string;
   @Prop({ type: String, default: null }) fileName: string | null;
   @Prop({ type: Number, default: null }) fileSize: number | null;

@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import { isValidObjectId } from 'mongoose';
 import { sanitizeDigitalForPublicView } from 'src/products/product-public-view.util';
 import {
