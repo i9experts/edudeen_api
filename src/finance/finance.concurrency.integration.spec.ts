@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument -- integration test */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/unbound-method -- mock-heavy tests */
 /**
  * Runs the REAL FinanceService against a REAL MongoDB replica set and fires the
  * same operation concurrently. Opt-in (needs transactions):
@@ -14,6 +14,9 @@ import { TransactionSchema } from './schemas/transaction.schema';
 import { PayoutSchema } from './schemas/payout.schema';
 
 const URI = process.env.TEST_MONGO_REPLSET_URI;
+
+// These suites drop their database when done — never point them at anything that isn't a throwaway test DB.
+if (URI && !/(_it|test)/i.test(new URL(URI).pathname)) throw new Error('Refusing to run: the test database name must contain "_it" or "test"');
 const d = URI ? describe : describe.skip;
 
 d('FinanceService — concurrency on a real replica set', () => {

@@ -4,7 +4,8 @@ import { createClient, RedisClientType } from 'redis';
 
 // Releases a lock only if we still own it (value matches our token), so a job
 // that outlived its TTL can never delete a lock another instance now holds.
-const RELEASE_LOCK_SCRIPT = 'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end';
+const RELEASE_LOCK_SCRIPT =
+  'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end';
 
 @Injectable()
 export class RedisService implements OnModuleInit, OnModuleDestroy {
@@ -92,7 +93,12 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     } finally {
       await this.client
         .eval(RELEASE_LOCK_SCRIPT, { keys: [lockKey], arguments: [token] })
-        .catch((err) => console.error(`[RedisService] failed to release lock ${lockKey}:`, err));
+        .catch((err) =>
+          console.error(
+            `[RedisService] failed to release lock ${lockKey}:`,
+            err,
+          ),
+        );
     }
   }
 }

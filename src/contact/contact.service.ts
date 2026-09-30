@@ -5,7 +5,10 @@ import {
   ContactSubmission,
   ContactSubmissionDocument,
 } from './schemas/contact-submission.schema';
-import { CreateContactSubmissionDto, UpdateContactStatusDto } from './dto/contact.dto';
+import {
+  CreateContactSubmissionDto,
+  UpdateContactStatusDto,
+} from './dto/contact.dto';
 import { EmailService } from '../otp/services/email.service';
 
 const APP_NAME = process.env.APP_NAME || 'Edudeen';
@@ -86,7 +89,11 @@ export class ContactService {
 
   async updateStatus(id: string, dto: UpdateContactStatusDto) {
     const submission = await this.contactModel
-      .findByIdAndUpdate(id, { status: dto.status }, { returnDocument: 'after' })
+      .findByIdAndUpdate(
+        id,
+        { status: dto.status },
+        { returnDocument: 'after' },
+      )
       .exec();
 
     if (!submission) {

@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument -- mock-heavy / integration tests */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/unbound-method -- mock-heavy tests */
 /**
  * Unit tests always run. The "real MongoDB" block runs only when
  * TEST_MONGO_REPLSET_URI (or TEST_MONGO_URI) is set:
@@ -54,6 +54,9 @@ describe('GiftCardsService.redeemAtOrderPlacement — unit', () => {
 });
 
 const URI = process.env.TEST_MONGO_URI ?? process.env.TEST_MONGO_REPLSET_URI;
+
+// These suites drop their database when done — never point them at anything that isn't a throwaway test DB.
+if (URI && !/(_it|test)/i.test(new URL(URI).pathname)) throw new Error('Refusing to run: the test database name must contain "_it" or "test"');
 (URI ? describe : describe.skip)('GiftCardsService.redeemAtOrderPlacement — real MongoDB', () => {
   let conn: mongoose.Connection, GC: mongoose.Model<any>, TX: mongoose.Model<any>, svc: GiftCardsService, activity: any;
   beforeAll(async () => {

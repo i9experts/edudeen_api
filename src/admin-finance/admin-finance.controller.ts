@@ -15,6 +15,8 @@ import { ManualPayoutDto } from './dto/manual-payout.dto';
 import { AdminFinanceExportQueryDto } from './dto/admin-finance-export-query.dto';
 import { VerifyPayoutMethodDto } from './dto/verify-payout-method.dto';
 
+interface AdminReq { user: { userId: string }; ip?: string; headers: Record<string, string | undefined> }
+
 @ApiTags('Admin Finance')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -110,12 +112,12 @@ export class AdminFinanceController {
   }
 
   @Post('process-clearing')
-  triggerClearingBalances(@Req() req: any) {
+  triggerClearingBalances(@Req() req: AdminReq) {
     return this.adminFinanceService.triggerClearingBalances({ adminId: req.user.userId, ip: req.ip, userAgent: req.headers['user-agent'] });
   }
 
   @Post('process-scheduled-payouts')
-  triggerScheduledPayouts(@Req() req: any) {
+  triggerScheduledPayouts(@Req() req: AdminReq) {
     return this.adminFinanceService.triggerScheduledPayouts({ adminId: req.user.userId, ip: req.ip, userAgent: req.headers['user-agent'] });
   }
 

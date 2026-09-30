@@ -975,9 +975,9 @@ export class FinanceService {
 
   /** Distinguishes "no such payout" from "already actioned" after a failed atomic claim. */
   private async throwPayoutNotActionable(payoutId: string, verb: string): Promise<never> {
-    const existing = await this.payoutModel.findById(payoutId).select('status').lean();
+    const existing = await this.payoutModel.findById(payoutId).select('status').lean<{ status: string }>();
     if (!existing) throw new NotFoundException('Payout not found');
-    throw new BadRequestException(`Cannot ${verb} a payout with status "${(existing as any).status}"`);
+    throw new BadRequestException(`Cannot ${verb} a payout with status "${existing.status}"`);
   }
 
   /**
@@ -990,10 +990,10 @@ export class FinanceService {
     // The method may have been edited (back to pending_verification) or deleted
     // after the seller requested this payout — never wire money to a destination
     // nobody has verified. The admin can reject instead.
-    const pending = await this.payoutModel.findOne({ _id: payoutId, status: { $in: ['pending', 'processing'] } }).select('payoutMethodId').lean();
-    if (pending && (pending as any).payoutMethodId !== 'admin-manual') {
-      const method = await this.methodModel.findById((pending as any).payoutMethodId).select('status').lean();
-      if (!method || (method as any).status !== 'active') {
+    const pending = await this.payoutModel.findOne({ _id: payoutId, status: { $in: ['pending', 'processing'] } }).select('payoutMethodId').lean<{ payoutMethodId: string }>();
+    if (pending && pending.payoutMethodId !== 'admin-manual') {
+      const method = await this.methodModel.findById(pending.payoutMethodId).select('status').lean<{ status: string }>();
+      if (!method || method.status !== 'active') {
         throw new BadRequestException('The payout method is no longer verified — reject this payout, or have the seller re-verify the method');
       }
     }
@@ -1033,32 +1033,31 @@ export class FinanceService {
 
   /** Rejects a pending/processing payout and returns the deducted funds to the seller's available balance via a reversing ledger entry (the original ledger history is never edited). */
   async adminRejectPayout(payoutId: string, adminId: string, reason: string, ip?: string, userAgent?: string) {
-    let payout: any;
-    await this.withTransaction(async (session) => {
+    const payout = await this.withTransaction(async (session) => {
       // Claim first, inside the transaction: a concurrent reject/approve either
       // wins the claim (and we find nothing to do) or conflicts and retries.
       // Nothing is credited unless THIS call moved the payout to 'failed'.
-      payout = await this.payoutModel.findOneAndUpdate(
+      const claimed = await this.payoutModel.findOneAndUpdate(
         { _id: payoutId, status: { $in: ['pending', 'processing'] } },
         { $set: { status: 'failed', failureReason: reason, processedAt: new Date() } },
         { returnDocument: 'after', session },
       );
-      if (!payout) await this.throwPayoutNotActionable(payoutId, 'reject');
+      if (!claimed) return this.throwPayoutNotActionable(payoutId, 'reject');
 
-      const currency = payout.currency || 'USD';
-      const balance = await this.getOrCreateBalance(payout.storeId, payout.sellerId, currency, session);
+      const currency = claimed.currency || 'USD';
+      const balance = await this.getOrCreateBalance(claimed.storeId, claimed.sellerId, currency, session);
       const balanceBefore = balance.availableBalance;
-      balance.availableBalance = this.round(balance.availableBalance + payout.amount);
-      balance.totalPayouts = this.round(balance.totalPayouts - payout.amount);
+      balance.availableBalance = this.round(balance.availableBalance + claimed.amount);
+      balance.totalPayouts = this.round(balance.totalPayouts - claimed.amount);
       this.reevaluateDebtFlag(balance);
       await balance.save({ session });
 
       const tx = new this.txModel({
-        storeId: payout.storeId,
-        sellerId: payout.sellerId,
+        storeId: claimed.storeId,
+        sellerId: claimed.sellerId,
         currency,
         type: 'adjustment',
-        amount: payout.amount,
+        amount: claimed.amount,
         balanceBefore,
         balanceAfter: balance.availableBalance,
         description: `Payout rejected — funds returned (${reason})`,
@@ -1068,6 +1067,7 @@ export class FinanceService {
         metadata: { rejectedBy: adminId, reason },
       });
       await tx.save({ session });
+      return claimed;
     });
 
     this.activityLogService.log({
@@ -1096,48 +1096,48 @@ export class FinanceService {
 
   /** Re-attempts a previously-rejected payout — re-deducts the balance (rejecting already refunded it) and puts it back into `processing`. */
   async adminRetryFailedPayout(payoutId: string, adminId: string, ip?: string, userAgent?: string) {
-    let payout: any;
-    await this.withTransaction(async (session) => {
+    const payout = await this.withTransaction(async (session) => {
       // Claim inside the transaction so two concurrent retries can't both
       // re-deduct; if the balance check below throws, the claim rolls back too.
-      payout = await this.payoutModel.findOneAndUpdate(
+      const claimed = await this.payoutModel.findOneAndUpdate(
         { _id: payoutId, status: 'failed' },
         { $set: { status: 'processing', failureReason: null, processedAt: null } },
         { returnDocument: 'after', session },
       );
-      if (!payout) {
+      if (!claimed) {
         if (!(await this.payoutModel.exists({ _id: payoutId }))) throw new NotFoundException('Payout not found');
         throw new BadRequestException('Only failed payouts can be retried');
       }
 
-      const currency = payout.currency || 'USD';
-      const balance = await this.getOrCreateBalance(payout.storeId, payout.sellerId, currency, session);
-      if (payout.amount > balance.availableBalance) {
+      const currency = claimed.currency || 'USD';
+      const balance = await this.getOrCreateBalance(claimed.storeId, claimed.sellerId, currency, session);
+      if (claimed.amount > balance.availableBalance) {
         throw new BadRequestException(
-          `Cannot retry — available balance (${currency} ${balance.availableBalance.toFixed(2)}) is less than the payout amount (${currency} ${payout.amount.toFixed(2)})`,
+          `Cannot retry — available balance (${currency} ${balance.availableBalance.toFixed(2)}) is less than the payout amount (${currency} ${claimed.amount.toFixed(2)})`,
         );
       }
 
       const balanceBefore = balance.availableBalance;
-      balance.availableBalance = this.round(balance.availableBalance - payout.amount);
-      balance.totalPayouts = this.round(balance.totalPayouts + payout.amount);
+      balance.availableBalance = this.round(balance.availableBalance - claimed.amount);
+      balance.totalPayouts = this.round(balance.totalPayouts + claimed.amount);
       await balance.save({ session });
 
       const tx = new this.txModel({
-        storeId: payout.storeId,
-        sellerId: payout.sellerId,
+        storeId: claimed.storeId,
+        sellerId: claimed.sellerId,
         currency,
         type: 'payout',
-        amount: -payout.amount,
+        amount: -claimed.amount,
         balanceBefore,
         balanceAfter: balance.availableBalance,
-        description: `Payout retry — ${payout.payoutMethodSnapshot?.bankName || payout.payoutMethodSnapshot?.type || 'payout method'}`,
+        description: `Payout retry — ${claimed.payoutMethodSnapshot?.bankName || claimed.payoutMethodSnapshot?.type || 'payout method'}`,
         referenceId: payoutId,
         referenceType: 'payout',
         status: 'completed',
         metadata: { retriedBy: adminId },
       });
       await tx.save({ session });
+      return claimed;
     });
 
     this.activityLogService.log({
