@@ -4,6 +4,7 @@ import {
   Post,
   Put,
   Delete,
+  Patch,
   Body,
   Param,
   Req,
@@ -13,6 +14,7 @@ import {
 import { CategoriesService } from './categories.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
+import { ReorderCategoriesDto } from './dto/reorder-categories.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -42,5 +44,27 @@ export class CategoriesController {
   @Get('category/:id')
   async getCategoryById(@Param('id') id: string) {
     return this.categoriesService.getCategoryWithChildren(id);
+  }
+
+  // ── Admin taxonomy management (declared reorder before :id routes) ──
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Patch('reorder')
+  async reorder(@Req() req: any, @Body() dto: ReorderCategoriesDto) {
+    return this.categoriesService.reorderCategories(dto, { adminId: req.user.userId, ip: req.ip, userAgent: req.headers['user-agent'] });
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Patch('category/:id')
+  async update(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateCategoryDto) {
+    return this.categoriesService.updateCategory(id, dto, { adminId: req.user.userId, ip: req.ip, userAgent: req.headers['user-agent'] });
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Delete('category/:id')
+  async remove(@Req() req: any, @Param('id') id: string, @Query('reassignTo') reassignTo?: string) {
+    return this.categoriesService.deleteCategory(id, reassignTo, { adminId: req.user.userId, ip: req.ip, userAgent: req.headers['user-agent'] });
   }
 }

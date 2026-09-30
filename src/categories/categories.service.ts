@@ -12,11 +12,132 @@ import { Model, isValidObjectId } from 'mongoose';
 import { DatabaseService } from 'src/database/databaseservice';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
+import { ReorderCategoriesDto } from './dto/reorder-categories.dto';
 import { generateUniqueSlug } from 'src/common/slug.util';
+import { ActivityLogService } from 'src/activity-log/activity-log.service';
+
+export interface AdminAuditMeta { adminId: string; ip?: string; userAgent?: string }
 
 @Injectable()
 export class CategoriesService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly activityLogService: ActivityLogService,
+  ) {}
+
+  private audit(action: string, description: string, meta: AdminAuditMeta, targetId?: string, metadata?: object) {
+    this.activityLogService.log({
+      storeId: 'platform',
+      category: 'settings',
+      action,
+      description,
+      actorId: meta.adminId,
+      actorRole: 'admin',
+      targetId,
+      targetType: 'category',
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      metadata: metadata ?? null,
+    });
+  }
+
+  // ── Admin: update / reorder / soft-delete ─────────────────────────────
+
+  /** Admin-only edit. Only the fields below can change — slug stays fixed
+   *  (it's a public URL) and parentId can't be moved here. */
+  async updateCategory(id: string, dto: UpdateCategoryDto, meta: AdminAuditMeta) {
+    if (!isValidObjectId(id)) throw new BadRequestException('Invalid category id');
+    const categoryModel = this.databaseService.repositories.categoryModel;
+    const category = await categoryModel.findOne({ _id: id, isDelete: false });
+    if (!category) throw new NotFoundException('Category not found');
+
+    const set: Record<string, any> = {};
+    if (dto.name !== undefined && dto.name.trim() !== category.name) {
+      const name = dto.name.trim();
+      if (!name) throw new BadRequestException('Category name cannot be empty');
+      const clash = await categoryModel.findOne({
+        name, parentId: category.parentId ?? null, isDelete: false, _id: { $ne: id },
+      });
+      if (clash) throw new ConflictException('A category with this name already exists here');
+      set.name = name;
+    }
+    if (dto.description !== undefined) set.description = dto.description;
+    if (dto.image !== undefined) set.image = dto.image;
+    if (dto.sortOrder !== undefined) set.sortOrder = dto.sortOrder;
+    if (dto.isActive !== undefined) set.status = dto.isActive ? 'active' : 'inactive';
+    if (Object.keys(set).length === 0) throw new BadRequestException('Nothing to update');
+
+    const updated = await categoryModel.findByIdAndUpdate(id, { $set: set }, { returnDocument: 'after' });
+    this.audit('category_updated', `Updated category "${category.name}"`, meta, id, { changed: Object.keys(set) });
+    return { success: true, message: 'Category updated successfully', data: updated };
+  }
+
+  /** Bulk display-order update (admin drag-and-drop). */
+  async reorderCategories(dto: ReorderCategoriesDto, meta: AdminAuditMeta) {
+    const categoryModel = this.databaseService.repositories.categoryModel;
+    const ids = dto.items.map((i) => i.id);
+    if (new Set(ids).size !== ids.length) throw new BadRequestException('Duplicate category ids');
+    const found = await categoryModel.countDocuments({ _id: { $in: ids }, isDelete: false });
+    if (found !== ids.length) throw new NotFoundException('One or more categories were not found');
+
+    await categoryModel.bulkWrite(
+      dto.items.map((i) => ({ updateOne: { filter: { _id: i.id }, update: { $set: { sortOrder: i.sortOrder } } } })),
+    );
+    this.audit('category_reordered', `Reordered ${ids.length} categories`, meta, undefined, { items: dto.items });
+    return { success: true, message: 'Categories reordered successfully', data: { updated: ids.length } };
+  }
+
+  /** Soft delete. Refuses while the category still has subcategories or is
+   *  referenced by products/stores; `reassignTo` (a same-level category)
+   *  moves those references first instead. */
+  async deleteCategory(id: string, reassignTo: string | undefined, meta: AdminAuditMeta) {
+    if (!isValidObjectId(id)) throw new BadRequestException('Invalid category id');
+    const repos = this.databaseService.repositories;
+    const category = await repos.categoryModel.findOne({ _id: id, isDelete: false });
+    if (!category) throw new NotFoundException('Category not found');
+
+    const children = await repos.categoryModel.countDocuments({ parentId: id, isDelete: false });
+    if (children > 0) {
+      throw new ConflictException(`Category has ${children} subcategor${children === 1 ? 'y' : 'ies'} — delete or move them first`);
+    }
+
+    const isRoot = !category.parentId;
+    const productFilter = isRoot ? { categoryId: id } : { subCategoryId: id };
+    const storeFilter = { categoryId: id, isDelete: false };
+    const [productCount, storeCount] = await Promise.all([
+      repos.productModel.countDocuments({ ...productFilter, isDelete: false }),
+      isRoot ? repos.storeModel.countDocuments(storeFilter) : Promise.resolve(0),
+    ]);
+
+    let reassigned: { products: number; stores: number } | null = null;
+    if (productCount + storeCount > 0) {
+      if (!reassignTo) {
+        throw new ConflictException(
+          `Category is still used by ${productCount} product(s) and ${storeCount} store(s). Pass ?reassignTo=<categoryId> to move them.`,
+        );
+      }
+      if (!isValidObjectId(reassignTo) || reassignTo === id) throw new BadRequestException('Invalid reassignTo category');
+      const target = await repos.categoryModel.findOne({ _id: reassignTo, isDelete: false, status: 'active' });
+      if (!target) throw new BadRequestException('reassignTo category not found or inactive');
+      // Same level, and a subcategory may only move within its own root so a
+      // product's subCategoryId always stays a child of its categoryId.
+      if ((target.parentId ?? null) !== (category.parentId ?? null)) {
+        throw new BadRequestException(
+          isRoot ? 'reassignTo must be another main category' : 'reassignTo must be a subcategory of the same main category',
+        );
+      }
+      const field = isRoot ? 'categoryId' : 'subCategoryId';
+      const p = await repos.productModel.updateMany({ ...productFilter, isDelete: false }, { $set: { [field]: reassignTo } });
+      const st = isRoot
+        ? await repos.storeModel.updateMany(storeFilter, { $set: { categoryId: reassignTo } })
+        : { modifiedCount: 0 };
+      reassigned = { products: p.modifiedCount, stores: st.modifiedCount };
+    }
+
+    await repos.categoryModel.updateOne({ _id: id }, { $set: { isDelete: true, status: 'inactive' } });
+    this.audit('category_deleted', `Deleted category "${category.name}"`, meta, id, { reassignTo: reassignTo ?? null, reassigned });
+    return { success: true, message: 'Category deleted successfully', data: { reassigned } };
+  }
 
   async addCategory(
     userId: string,

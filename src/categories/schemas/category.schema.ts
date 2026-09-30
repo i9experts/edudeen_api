@@ -12,8 +12,8 @@ export class Category {
   name: string;
 
   // URL-safe handle for the public marketplace path (/marketplace/:slug).
-  // Generated once at creation (see CategoriesService.addCategory) — there
-  // is no rename/update-category endpoint today, so this never changes.
+  // Generated once at creation (see CategoriesService.addCategory) and never
+  // regenerated — updateCategory renames the category but keeps the URL stable.
   @Prop({ type: String, unique: true, sparse: true })
   slug: string;
 

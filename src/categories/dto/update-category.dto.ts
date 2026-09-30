@@ -1,5 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
+  IsInt,
+  Min,
+  Max,
   IsString,
   IsOptional,
   MaxLength,
@@ -48,4 +51,11 @@ export class UpdateCategoryDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiProperty({ required: false, example: 3, description: 'Display order (ascending)' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100000)
+  sortOrder?: number;
 }
