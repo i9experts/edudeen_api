@@ -30,6 +30,11 @@ export class AiCreditTransaction {
   @Prop({ type: String, enum: ['held', 'captured', 'refunded'], default: 'held' })
   status: string;
 
+  // false between creating the hold row and the wallet deduction succeeding, so
+  // a crash in that window can never cause credits to be refunded that were
+  // never taken. Legacy rows (no field) were deducted first, hence default true.
+  @Prop({ type: Boolean, default: true }) deducted: boolean;
+
   @Prop({ type: String, required: true }) generationId: string;
   @Prop({ type: String, default: null }) note: string | null;
 }
@@ -37,3 +42,4 @@ export class AiCreditTransaction {
 export const AiCreditTransactionSchema = SchemaFactory.createForClass(AiCreditTransaction);
 AiCreditTransactionSchema.index({ storeId: 1, createdAt: -1 });
 AiCreditTransactionSchema.index({ generationId: 1 });
+AiCreditTransactionSchema.index({ status: 1, createdAt: 1 });

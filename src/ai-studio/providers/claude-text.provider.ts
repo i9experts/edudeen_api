@@ -29,7 +29,9 @@ export class ClaudeTextGenerationProvider implements TextGenerationAdapter {
   private readonly client: Anthropic;
 
   constructor(apiKey: string, private readonly models: ClaudeModelConfig) {
-    this.client = new Anthropic({ apiKey });
+    // The SDK defaults (10 min timeout, 2 retries) let one hung call hold a seller's
+    // credits for many minutes and multiply provider cost on retries.
+    this.client = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 });
   }
 
   async generate(request: TextGenerationRequest): Promise<TextGenerationResult> {

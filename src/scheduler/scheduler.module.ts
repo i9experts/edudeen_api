@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { AiStudioModule } from '../ai-studio/ai-studio.module';
 import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SchedulerService } from './scheduler.service';
@@ -12,7 +13,7 @@ import { ExchangeRateModule } from '../exchange-rate/exchange-rate.module';
 import { AdminFinanceModule } from '../admin-finance/admin-finance.module';
 
 @Module({
-  imports: [ScheduleModule.forRoot(), SubscriptionsModule, FinanceModule, RedisModule, SeoModule, AdminMarketingModule, PromotionsModule, ExchangeRateModule, AdminFinanceModule],
+  imports: [ScheduleModule.forRoot(), SubscriptionsModule, FinanceModule, RedisModule, SeoModule, AdminMarketingModule, PromotionsModule, ExchangeRateModule, AdminFinanceModule, AiStudioModule],
   providers: [SchedulerService],
 })
 export class SchedulerModule {}

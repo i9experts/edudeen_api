@@ -4,7 +4,7 @@ import {
   IsNotEmpty, IsOptional, IsString, IsUrl, Matches, Max, MaxLength, Min,
   ValidateIf, IsDefined,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 
 export const TONES = ['professional', 'friendly', 'academic'] as const;
 export const CAMPAIGN_GOALS = ['promo', 'newsletter', 'abandoned_cart', 'new_arrival', 'restock', 'thank_you'] as const;
@@ -22,6 +22,9 @@ export class GenerateListingDto extends BaseGenerateDto {
 
   /** Accepts a single string or string[] per the contract. */
   @IsDefined()
+  @Transform(({ value }) => (Array.isArray(value) ? value : typeof value === 'string' ? value.slice(0, 500) : null))
+  @ValidateIf((o) => Array.isArray(o.keywords))
+  @ArrayMaxSize(30) @IsString({ each: true }) @MaxLength(100, { each: true })
   keywords: string | string[];
 
   @IsIn(TONES)
@@ -42,7 +45,7 @@ export class GenerateSeoDto extends BaseGenerateDto {
   @IsOptional() @IsString() @MaxLength(5000)
   description?: string;
 
-  @IsOptional() @IsArray() @ArrayMaxSize(30) @IsString({ each: true })
+  @IsOptional() @IsArray() @ArrayMaxSize(30) @IsString({ each: true }) @MaxLength(60, { each: true })
   currentTags?: string[];
 }
 
@@ -64,7 +67,7 @@ export class GenerateWorksheetDto extends BaseGenerateDto {
   @IsString() @IsNotEmpty() @MaxLength(60)
   gradeLevel: string;
 
-  @IsArray() @ArrayNotEmpty() @ArrayMaxSize(10) @IsString({ each: true })
+  @IsArray() @ArrayNotEmpty() @ArrayMaxSize(10) @IsString({ each: true }) @MaxLength(100, { each: true })
   topics: string[];
 
   @Type(() => Number) @IsInt() @Min(1) @Max(40)
@@ -83,7 +86,7 @@ export class GenerateWorksheetTrialDto {
   @IsString() @IsNotEmpty() @MaxLength(60)
   gradeLevel: string;
 
-  @IsArray() @ArrayNotEmpty() @ArrayMaxSize(5) @IsString({ each: true })
+  @IsArray() @ArrayNotEmpty() @ArrayMaxSize(5) @IsString({ each: true }) @MaxLength(100, { each: true })
   topics: string[];
 
   @Type(() => Number) @IsInt() @Min(1) @Max(6)

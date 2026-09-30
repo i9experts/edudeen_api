@@ -21,6 +21,12 @@ export class AiCreditsWallet {
   @Prop({ type: Number, default: 0 }) balance: number;
   @Prop({ type: Number, default: 0 }) monthlyAllowance: number; // from the store's current PlatformPlan
   @Prop({ type: Date, default: null }) lastResetAt: Date | null;
+  // Portion of `balance` that came from purchased packs. The monthly reset
+  // tops the plan allowance back up but must not wipe what the seller paid for
+  // (monthly credits are spent first). Absent on legacy wallets = 0.
+  @Prop({ type: Number, default: 0 }) purchasedBalance: number;
+  // 'YYYY-MM' of the last reset — makes the monthly reset idempotent per period.
+  @Prop({ type: String, default: null }) lastResetPeriod: string | null;
 
   @Prop({ type: [Object], default: [] }) ledger: Array<{
     type: 'grant' | 'spend' | 'reset' | 'purchase';

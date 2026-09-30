@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { AiStudioCreditsService } from '../ai-studio/ai-studio-credits.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { DatabaseService } from 'src/database/databaseservice';
@@ -30,6 +31,7 @@ export class SchedulerService {
     private readonly redis: RedisService,
     private readonly sellerPlatformSubscriptionsService: SellerPlatformSubscriptionsService,
     private readonly aiCreditsService: AiCreditsService,
+    private readonly aiStudioCredits: AiStudioCreditsService,
     private readonly platformAddonsService: PlatformAddonsService,
     private readonly seoSitemapService: SeoSitemapService,
     private readonly seoMonitoringService: SeoMonitoringService,
@@ -244,6 +246,16 @@ export class SchedulerService {
 
   // Runs on the 1st of every month at 03:00 — resets every store's AI-credit
   // balance to its current plan's monthly allowance.
+  // Refunds AI Studio generations whose in-process provider call died with the
+  // process (restart/crash) — otherwise those credits stay 'held' forever.
+  @Cron('*/10 * * * *')
+  async recoverStaleAiStudioHolds() {
+    await this.runLocked('ai-studio-stale-holds', 5 * 60_000, async () => {
+      const { refunded } = await this.aiStudioCredits.reapStaleHolds();
+      if (refunded > 0) this.logger.log(`Recovered ${refunded} stale AI Studio hold(s)`);
+    });
+  }
+
   @Cron('0 3 1 * *')
   async resetAiCreditsMonthly() {
     await this.runLocked('ai-credits-monthly-reset', 30 * 60_000, async () => {

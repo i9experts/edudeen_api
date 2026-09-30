@@ -64,15 +64,25 @@ export class SeoAiService {
     await this.entitlements.assertFeatureAllowed(storeId, 'seoAiSuggestionsAllowed', 'AI-generated SEO suggestions');
     await this.aiCredits.deduct(storeId, sellerId, AI_SEO_SUGGESTION_CREDIT_COST, `AI SEO suggestion — ${entityType} ${entityId}`);
 
-    const suggestion = await this.aiProvider.generateSuggestion({
-      entityType,
-      name: context.name,
-      description: context.description,
-      categoryName: context.categoryName,
-      storeName: context.storeName,
-    });
+    // Credits were taken up front; if the provider (or applying its result) fails, the
+    // seller must not pay for nothing — give them back before surfacing the error.
+    let suggestion;
+    try {
+      suggestion = await this.aiProvider.generateSuggestion({
+        entityType,
+        name: context.name,
+        description: context.description,
+        categoryName: context.categoryName,
+        storeName: context.storeName,
+      });
 
-    await this.seoContent.applySeoSuggestion(entityType, entityId, suggestion, true);
+      await this.seoContent.applySeoSuggestion(entityType, entityId, suggestion, true);
+    } catch (err) {
+      await this.aiCredits
+        .grant(storeId, sellerId, AI_SEO_SUGGESTION_CREDIT_COST, `AI SEO suggestion refund — generation failed (${entityType} ${entityId})`)
+        .catch(() => undefined);
+      throw err;
+    }
 
     await this.db.repositories.seoAiSuggestionLogModel.create({
       storeId, sellerId, entityType, entityId, suggestion, accepted: true, creditsCost: AI_SEO_SUGGESTION_CREDIT_COST,

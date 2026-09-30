@@ -46,5 +46,7 @@ import { ImageEnhanceService } from './providers/image-enhance.service';
     PricingDataService,
     ImageEnhanceService,
   ],
+  // The scheduler recovers stale credit holds (see SchedulerService.recoverStaleAiStudioHolds).
+  exports: [AiStudioCreditsService],
 })
 export class AiStudioModule {}

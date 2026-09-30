@@ -66,9 +66,17 @@ export class AiStudioCreditsService {
     const amount = this.costOf(tool);
     if (amount === 0) return '';
 
+    // Record the hold FIRST (deducted:false), then take the credits, then flag it.
+    // Old order (deduct, then create the row) lost credits with no record if the
+    // process died in between; this order can never refund credits that were
+    // never taken (reapers/refund only give back rows flagged deducted).
+    const txn = await this.txnModel.create({
+      storeId, sellerId, toolUsed: tool, creditsCharged: amount, status: 'held', generationId, deducted: false,
+    });
     try {
       await this.aiCredits.deduct(storeId, sellerId, amount, `AI Studio hold: ${tool} (generation ${generationId})`);
     } catch (error) {
+      await this.txnModel.deleteOne({ _id: txn._id, deducted: false });
       if (error instanceof BadRequestException) {
         const balance = await this.aiCredits.getBalance(storeId);
         throw new HttpException({
@@ -80,10 +88,7 @@ export class AiStudioCreditsService {
       }
       throw error;
     }
-
-    const txn = await this.txnModel.create({
-      storeId, sellerId, toolUsed: tool, creditsCharged: amount, status: 'held', generationId,
-    });
+    await this.txnModel.updateOne({ _id: txn._id }, { $set: { deducted: true } });
     return txn._id.toString();
   }
 
@@ -93,7 +98,9 @@ export class AiStudioCreditsService {
     await this.txnModel.updateOne({ _id: txnId, status: 'held' }, { $set: { status: 'captured' } });
   }
 
-  /** Provider call failed/timed out — never charge for a failed generation. */
+  /** Provider call failed/timed out — never charge for a failed generation.
+   *  Idempotent: only the caller that flips held→refunded grants the credits, and if the
+   *  grant itself fails the row goes back to 'held' so a retry/reaper can finish the job. */
   async refund(txnId: string, reason: string): Promise<void> {
     if (!txnId) return;
     const txn = await this.txnModel.findOneAndUpdate(
@@ -102,8 +109,31 @@ export class AiStudioCreditsService {
       { returnDocument: 'after' },
     );
     if (!txn) return; // already captured/refunded — nothing to give back
-    await this.aiCredits.grant(txn.storeId, txn.sellerId, txn.creditsCharged, `AI Studio auto-refund: ${reason}`);
+    if (txn.deducted === false) return; // credits were never taken — nothing to return
+    try {
+      await this.aiCredits.grant(txn.storeId, txn.sellerId, txn.creditsCharged, `AI Studio auto-refund: ${reason}`);
+    } catch (err) {
+      await this.txnModel.updateOne({ _id: txnId, status: 'refunded' }, { $set: { status: 'held', note: `refund failed: ${(err as Error).message}` } });
+      throw err;
+    }
     this.logger.log(`Refunded ${txn.creditsCharged} credits to store ${txn.storeId} (${reason})`);
+  }
+
+  /** Recovers holds stranded by a crash/restart mid-generation (the in-process provider call is gone,
+   *  so the seller must not pay for it). Run by the scheduler. */
+  async reapStaleHolds(olderThanMs = 15 * 60_000, limit = 200): Promise<{ refunded: number }> {
+    const cutoff = new Date(Date.now() - olderThanMs);
+    const stale = await this.txnModel.find({ status: 'held', createdAt: { $lt: cutoff } }).select('_id').limit(limit).lean<Array<{ _id: { toString(): string } }>>();
+    let refunded = 0;
+    for (const row of stale) {
+      try {
+        await this.refund(row._id.toString(), 'stale hold recovered (generation never completed)');
+        refunded++;
+      } catch (err) {
+        this.logger.error(`Failed to recover stale hold ${row._id.toString()}: ${(err as Error).message}`);
+      }
+    }
+    return { refunded };
   }
 
   /** Balance + monthly usage for the "750 credits remaining" UI. */

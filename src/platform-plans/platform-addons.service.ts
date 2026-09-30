@@ -109,7 +109,7 @@ export class PlatformAddonsService {
 
     // Immediate effects
     if (dto.addonType === 'extra_ai_credits') {
-      await this.aiCreditsService.grant(storeId, sellerId, quantity * 500, `Purchased ${quantity} × 500 AI credits`);
+      await this.aiCreditsService.grant(storeId, sellerId, quantity * 500, `Purchased ${quantity} × 500 AI credits`, 'purchase');
     }
     if (dto.addonType === 'priority_marketplace_placement') {
       await this.syncPriorityPlacementBadge(storeId);
