@@ -60,7 +60,12 @@ export class SchedulerService {
       await fn();
     });
     if (result === 'lock_not_acquired') {
-      this.logger.debug(`Skipped "${jobName}" — another instance already holds the lock (or Redis is unavailable)`);
+      if (this.redis.isConnected) {
+        this.logger.debug(`Skipped "${jobName}" — another instance already holds the lock`);
+      } else {
+        // Fail-closed is intentional (never run money jobs unprotected), but it must be visible.
+        this.logger.warn(`Skipped "${jobName}" — Redis is unavailable, job did not run`);
+      }
     }
   }
 
@@ -324,7 +329,7 @@ export class SchedulerService {
   // or unreachable provider never blocks a live checkout.
   @Cron('0 3 * * *')
   async refreshExchangeRates() {
-    await this.runLocked('fx-refresh', 60_000, async () => {
+    await this.runLocked('fx-refresh', 600_000, async () => {
       await this.exchangeRateService.refreshFromProvider();
     });
   }
@@ -362,7 +367,7 @@ export class SchedulerService {
   // go unnoticed indefinitely.
   @Cron('15 2 * * *')
   async runReconciliation() {
-    await this.runLocked('finance-reconciliation', 60_000, async () => {
+    await this.runLocked('finance-reconciliation', 600_000, async () => {
       await this.adminFinanceService.runAndPersistReconciliation(1);
     });
   }

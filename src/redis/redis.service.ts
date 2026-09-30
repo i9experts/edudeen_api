@@ -1,5 +1,10 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { createClient, RedisClientType } from 'redis';
+
+// Releases a lock only if we still own it (value matches our token), so a job
+// that outlived its TTL can never delete a lock another instance now holds.
+const RELEASE_LOCK_SCRIPT = 'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end';
 
 @Injectable()
 export class RedisService implements OnModuleInit, OnModuleDestroy {
@@ -11,6 +16,14 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     this.client = createClient({ url: redisUrl });
     this.client.on('error', (err) => {
       console.error('Redis Client Error', err);
+      this._isConnected = false;
+    });
+    // node-redis reconnects on its own; without these the flag stayed false
+    // forever after one transient error and every cron was skipped until restart.
+    this.client.on('ready', () => {
+      this._isConnected = true;
+    });
+    this.client.on('end', () => {
       this._isConnected = false;
     });
   }
@@ -67,7 +80,8 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   ): Promise<'ran' | 'lock_not_acquired'> {
     if (!this._isConnected) return 'lock_not_acquired';
     const ttlSeconds = Math.ceil(ttlMs / 1000);
-    const acquired = await this.client.set(lockKey, '1', {
+    const token = randomUUID();
+    const acquired = await this.client.set(lockKey, token, {
       NX: true,
       EX: ttlSeconds,
     });
@@ -76,7 +90,9 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       await fn();
       return 'ran';
     } finally {
-      await this.client.del(lockKey);
+      await this.client
+        .eval(RELEASE_LOCK_SCRIPT, { keys: [lockKey], arguments: [token] })
+        .catch((err) => console.error(`[RedisService] failed to release lock ${lockKey}:`, err));
     }
   }
 }

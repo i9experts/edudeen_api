@@ -327,7 +327,7 @@ export class ExchangeRateService {
     for (const currency of SUPPORTED_CURRENCIES) {
       if (currency === 'USD') continue;
       try {
-        const res = await fetch(`https://api.frankfurter.app/latest?from=USD&to=${currency}`);
+        const res = await fetch(`https://api.frankfurter.app/latest?from=USD&to=${currency}`, { signal: AbortSignal.timeout(10_000) });
         if (!res.ok) throw new Error(`Provider returned HTTP ${res.status}`);
         const data = (await res.json()) as { rates?: Record<string, number> };
         const rate = data?.rates?.[currency];
