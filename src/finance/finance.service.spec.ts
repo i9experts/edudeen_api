@@ -323,6 +323,7 @@ describe('FinanceService', () => {
 
   describe('adminApprovePayout', () => {
     it('only one approve wins; a reject-after-approve cannot refund money that was wired', async () => {
+      payoutModel.findOne = jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ payoutMethodId: 'admin-manual' }) }) });
       payoutModel.findOneAndUpdate.mockResolvedValueOnce({ _id: 'p1', storeId: STORE_ID, sellerId: SELLER_ID, amount: 40, currency: 'PKR', status: 'completed' }).mockResolvedValueOnce(null);
       payoutModel.findById = jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ status: 'completed' }) }) });
       await service.adminApprovePayout('p1', 'admin-1');
@@ -623,6 +624,50 @@ describe('FinanceService', () => {
       await service.updatePayoutMethod(SELLER_ID, STORE_ID, 'm1', { accountHolder: 'Someone Else Entirely' } as any);
 
       expect(method.accountTitleMismatchFlagged).toBe(true);
+    });
+  });
+
+  describe('payout hardening', () => {
+    const selLean = (v: any) => ({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(v) }) });
+
+    it('rejects a payout request with more than 2 decimals or a non-positive amount', async () => {
+      methodModel.findById.mockResolvedValue({ storeId: STORE_ID, status: 'active', currency: 'USD' });
+      await expect(service.requestPayout(SELLER_ID, STORE_ID, { amount: 10.005, payoutMethodId: 'm1' } as any)).rejects.toThrow(/2 decimal/);
+      await expect(service.requestPayout(SELLER_ID, STORE_ID, { amount: -5, payoutMethodId: 'm1' } as any)).rejects.toThrow(/positive/);
+      await expect(service.requestPayout(SELLER_ID, STORE_ID, { amount: NaN, payoutMethodId: 'm1' } as any)).rejects.toThrow(BadRequestException);
+    });
+
+    it('approve refuses when the payout method was edited back to pending_verification after the request', async () => {
+      payoutModel.findOne = jest.fn().mockReturnValue(selLean({ payoutMethodId: 'm1' }));
+      methodModel.findById.mockReturnValue(selLean({ status: 'pending_verification' }));
+      await expect(service.adminApprovePayout('p1', 'admin-1')).rejects.toThrow(/no longer verified/);
+      expect(payoutModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('approve refuses when the payout method was deleted', async () => {
+      payoutModel.findOne = jest.fn().mockReturnValue(selLean({ payoutMethodId: 'gone' }));
+      methodModel.findById.mockReturnValue(selLean(null));
+      await expect(service.adminApprovePayout('p1', 'admin-1')).rejects.toThrow(/no longer verified/);
+    });
+
+    it('changing a verified method\'s currency sends it back to verification', async () => {
+      const method: any = { _id: 'm1', storeId: STORE_ID, status: 'active', currency: 'USD', bankName: 'B', accountLast4: '1234', verifiedByAdminId: 'a', verifiedAt: new Date(), save: jest.fn() };
+      methodModel.findOne.mockResolvedValue(method);
+      jest.spyOn(service as any, 'checkAccountTitleMismatch').mockResolvedValue({ flagged: false, note: null });
+      await service.updatePayoutMethod(SELLER_ID, STORE_ID, 'm1', { currency: 'PKR' } as any);
+      expect(method.status).toBe('pending_verification');
+      expect(method.verifiedAt).toBeNull();
+    });
+
+    it('manual payout refuses an unverified method and a repeat of an identical payout within a minute', async () => {
+      storeModel.findById.mockResolvedValue({ _id: STORE_ID, sellerId: SELLER_ID, isDelete: false });
+      methodModel.findOne.mockResolvedValue({ status: 'pending_verification', currency: 'USD', type: 'bank' });
+      await expect(service.adminCreateManualPayout(STORE_ID, 'admin-1', 25, 'm1', undefined)).rejects.toThrow(/not verified/);
+
+      methodModel.findOne.mockResolvedValue({ status: 'active', currency: 'USD', type: 'bank', bankName: 'B' });
+      balanceModel.findOne.mockResolvedValue(makeBalance({ availableBalance: 500 }));
+      payoutModel.exists = jest.fn().mockReturnValue({ session: jest.fn().mockResolvedValue({ _id: 'earlier' }) });
+      await expect(service.adminCreateManualPayout(STORE_ID, 'admin-1', 25, 'm1', undefined)).rejects.toThrow(/refusing to pay twice/);
     });
   });
 });

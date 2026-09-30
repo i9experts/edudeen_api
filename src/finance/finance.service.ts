@@ -434,8 +434,19 @@ export class FinanceService {
     return payout;
   }
 
+  /** Money amounts must be finite and have at most 2 decimals; anything else
+   *  (10.005, 0.1+0.2 artefacts) would let the ledger and the payout row drift. */
+  private normalizeAmount(raw: number): number {
+    if (!Number.isFinite(raw) || raw <= 0) throw new BadRequestException('Amount must be a positive number');
+    if (Math.abs(raw * 100 - Math.round(raw * 100)) > 1e-6) {
+      throw new BadRequestException('Amount can have at most 2 decimal places');
+    }
+    return this.round(raw);
+  }
+
   async requestPayout(sellerId: string, storeId: string, dto: RequestPayoutDto) {
     await this.verifyStoreOwnership(sellerId, storeId);
+    const amount = this.normalizeAmount(dto.amount);
 
     const method = await this.methodModel.findById(dto.payoutMethodId);
     if (!method || method.storeId !== storeId) throw new NotFoundException('Payout method not found');
@@ -449,12 +460,12 @@ export class FinanceService {
 
     const currency = method.currency || 'USD';
     const minimum = await this.adminConfigService.getPayoutMinimum(currency);
-    if (dto.amount < minimum) {
+    if (amount < minimum) {
       throw new BadRequestException(`Minimum payout amount is ${currency} ${minimum.toFixed(2)}`);
     }
 
     return this.withTransaction((session) =>
-      this.debitAndCreatePayout(session, storeId, sellerId, currency, dto.amount, method, dto.notes ?? null, 'seller_manual'),
+      this.debitAndCreatePayout(session, storeId, sellerId, currency, amount, method, dto.notes ?? null, 'seller_manual'),
     );
   }
 
@@ -662,7 +673,11 @@ export class FinanceService {
       (dto.bankName !== undefined && dto.bankName !== method.bankName) ||
       (!!dto.accountNumber && dto.accountNumber.slice(-4) !== method.accountLast4) ||
       (dto.routingNumber !== undefined && dto.routingNumber !== method.routingNumber) ||
-      (dto.externalAccountId !== undefined && dto.externalAccountId !== method.externalAccountId);
+      (dto.externalAccountId !== undefined && dto.externalAccountId !== method.externalAccountId) ||
+      // Currency decides WHICH wallet this method pays out of — flipping it on an
+      // already-verified method must send it back to review. (accountHolder alone
+      // is deliberately not a destination change; checkAccountTitleMismatch covers it.)
+      (dto.currency !== undefined && dto.currency !== method.currency);
 
     if (dto.bankName !== undefined)    method.bankName    = dto.bankName;
     if (dto.accountHolder !== undefined) method.accountHolder = dto.accountHolder;
@@ -972,6 +987,17 @@ export class FinanceService {
    * was actually sent via their bank/PayPal/Stripe dashboard. It does not itself move money.
    */
   async adminApprovePayout(payoutId: string, adminId: string, ip?: string, userAgent?: string) {
+    // The method may have been edited (back to pending_verification) or deleted
+    // after the seller requested this payout — never wire money to a destination
+    // nobody has verified. The admin can reject instead.
+    const pending = await this.payoutModel.findOne({ _id: payoutId, status: { $in: ['pending', 'processing'] } }).select('payoutMethodId').lean();
+    if (pending && (pending as any).payoutMethodId !== 'admin-manual') {
+      const method = await this.methodModel.findById((pending as any).payoutMethodId).select('status').lean();
+      if (!method || (method as any).status !== 'active') {
+        throw new BadRequestException('The payout method is no longer verified — reject this payout, or have the seller re-verify the method');
+      }
+    }
+
     // Atomic claim: only one caller can move the payout out of pending/processing,
     // so a double-click or a racing reject/approve can never both act on it.
     const payout = await this.payoutModel.findOneAndUpdate(
@@ -1145,7 +1171,7 @@ export class FinanceService {
     ip?: string, userAgent?: string,
   ) {
     const store = await this.verifyStoreExistsForAdmin(storeId);
-    if (amount <= 0) throw new BadRequestException('Amount must be greater than zero');
+    amount = this.normalizeAmount(amount);
 
     let methodSnapshot: { type: string; bankName: string | null; accountLast4?: string } = {
       type: 'manual', bankName: null, accountLast4: 'ADMIN',
@@ -1155,6 +1181,7 @@ export class FinanceService {
     if (payoutMethodId) {
       const method = await this.methodModel.findOne({ _id: payoutMethodId, storeId });
       if (!method) throw new NotFoundException('Payout method not found');
+      if (method.status !== 'active') throw new BadRequestException('Payout method is not verified/active');
       methodSnapshot = { type: method.type, bankName: method.bankName, accountLast4: method.accountLast4 ?? undefined };
       resolvedMethodId = payoutMethodId;
       currency = method.currency || 'USD';
@@ -1164,6 +1191,16 @@ export class FinanceService {
       const balance = await this.getOrCreateBalance(storeId, store.sellerId, currency, session);
       if (amount > balance.availableBalance) {
         throw new BadRequestException(`Insufficient balance — available: ${currency} ${balance.availableBalance.toFixed(2)}`);
+      }
+      // Duplicate guard: a double-click / retry issuing the same manual payout
+      // within a minute. Concurrent calls both touch this balance doc, so the
+      // transaction serialises them and the second one lands here.
+      const duplicate = await this.payoutModel.exists({
+        storeId, amount, currency, payoutMethodId: resolvedMethodId, status: 'completed',
+        createdAt: { $gte: new Date(Date.now() - 60_000) },
+      }).session(session);
+      if (duplicate) {
+        throw new ConflictException('An identical manual payout was just issued — refusing to pay twice');
       }
 
       const balanceBefore = balance.availableBalance;
@@ -1202,7 +1239,7 @@ export class FinanceService {
       storeId,
       category: 'finance',
       action: 'manual_payout_issued',
-      description: `Admin issued a manual payout of $${amount.toFixed(2)}`,
+      description: `Admin issued a manual payout of ${currency} ${amount.toFixed(2)}`,
       actorId: adminId,
       actorRole: 'admin',
       targetId: (payout as any)._id.toString(),
