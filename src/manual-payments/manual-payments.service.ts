@@ -29,6 +29,9 @@ function sellerPayoutCurrency(so: any, order: any): string {
   return so.settlementCurrency ?? order.currency ?? 'USD';
 }
 
+const PROOF_FOLDER = 'private/payment-proofs';
+const PROOF_URL_TTL_SECONDS = 10 * 60;
+
 @Injectable()
 export class ManualPaymentsService {
   constructor(
@@ -43,6 +46,39 @@ export class ManualPaymentsService {
 
   private get proofModel() { return this.db.repositories.manualPaymentProofModel; }
   private get orderModel() { return this.db.repositories.orderModel; }
+
+  /** Signed, short-lived view URL for a private proof; legacy proofs keep
+   *  their stored public URL. Never persisted. */
+  private proofViewUrl(proof: any): string | null {
+    if (proof?.proofPublicId) {
+      return this.uploadService.generateSignedUrl(
+        proof.proofPublicId, proof.proofResourceType ?? 'image', PROOF_URL_TTL_SECONDS, undefined, true,
+      );
+    }
+    return proof?.proofImageUrl ?? null;
+  }
+
+  /** Response shape: `proofImageUrl` stays populated (signed for private
+   *  proofs) so existing clients keep working; the storage ids are hidden. */
+  private presentProof(proof: any) {
+    const plain = typeof proof?.toObject === 'function' ? proof.toObject() : proof;
+    const { proofPublicId, proofResourceType, ...rest } = plain;
+    return { ...rest, proofImageUrl: this.proofViewUrl(plain) };
+  }
+
+  /** Owner-only signed URL for viewing a proof. */
+  async getOwnProofUrl(userId: string, proofId: string) {
+    const proof = await this.proofModel.findOne({ _id: proofId, userId }).lean();
+    if (!proof) throw new NotFoundException('Payment proof not found');
+    return { url: this.proofViewUrl(proof), expiresInSeconds: proof.proofPublicId ? PROOF_URL_TTL_SECONDS : null };
+  }
+
+  /** Admin signed URL for viewing any proof. */
+  async adminGetProofUrl(proofId: string) {
+    const proof = await this.proofModel.findById(proofId).lean();
+    if (!proof) throw new NotFoundException('Payment proof not found');
+    return { url: this.proofViewUrl(proof), expiresInSeconds: proof.proofPublicId ? PROOF_URL_TTL_SECONDS : null };
+  }
 
   async getBankDetails() {
     const config = await this.adminConfigService.getManualPaymentConfig();
@@ -69,7 +105,7 @@ export class ManualPaymentsService {
     if (!file) throw new BadRequestException('A payment proof image (screenshot or receipt) is required');
 
     const { orders, amountUSD, amountPKR, fxRate } = await this.paymentService.manualBankTransferPayment(userId, dto.checkoutId);
-    const upload = await this.uploadService.uploadFile(file);
+    const upload = await this.uploadService.uploadPrivateFile(file, PROOF_FOLDER);
 
     const proof = await this.proofModel.create({
       userId,
@@ -78,7 +114,8 @@ export class ManualPaymentsService {
       amountUSD,
       amountPKR,
       fxRateUsed: fxRate,
-      proofImageUrl: upload.url,
+      proofPublicId: upload.publicId,
+      proofResourceType: upload.resourceType,
       transactionReference: dto.transactionReference ?? null,
       senderName: dto.senderName ?? null,
       status: 'pending',
@@ -96,7 +133,7 @@ export class ManualPaymentsService {
       .catch(() => {});
 
     return {
-      proof,
+      proof: this.presentProof(proof),
       orders: orders.map((o: any) => ({ orderId: o._id, orderNumber: o.orderNumber, totalAmount: o.totalAmount, currency: o.currency })),
       message: "We're verifying your payment — you'll be notified once it's confirmed.",
     };
@@ -111,9 +148,11 @@ export class ManualPaymentsService {
     }
     if (!file) throw new BadRequestException('A payment proof image (screenshot or receipt) is required');
 
-    const upload = await this.uploadService.uploadFile(file);
+    const upload = await this.uploadService.uploadPrivateFile(file, PROOF_FOLDER);
 
-    proof.proofImageUrl = upload.url;
+    proof.proofPublicId = upload.publicId;
+    proof.proofResourceType = upload.resourceType;
+    proof.proofImageUrl = null; // supersedes any legacy public URL
     proof.transactionReference = dto.transactionReference ?? proof.transactionReference;
     proof.senderName = dto.senderName ?? proof.senderName;
     proof.status = 'pending';
@@ -123,17 +162,18 @@ export class ManualPaymentsService {
     proof.reuploadCount = (proof.reuploadCount ?? 0) + 1;
     await proof.save();
 
-    return proof;
+    return this.presentProof(proof);
   }
 
   async getProofStatus(userId: string, proofId: string) {
     const proof = await this.proofModel.findOne({ _id: proofId, userId }).lean();
     if (!proof) throw new NotFoundException('Payment proof not found');
-    return proof;
+    return this.presentProof(proof);
   }
 
   async getMyProofs(userId: string) {
-    return this.proofModel.find({ userId }).sort({ createdAt: -1 }).lean();
+    const proofs = await this.proofModel.find({ userId }).sort({ createdAt: -1 }).lean();
+    return proofs.map((p: any) => this.presentProof(p));
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -159,7 +199,7 @@ export class ManualPaymentsService {
 
     return {
       proofs: (proofs as any[]).map((p) => ({
-        ...p,
+        ...this.presentProof(p),
         buyerName: userMap.get(p.userId)?.name ?? 'Unknown buyer',
         buyerEmail: userMap.get(p.userId)?.email ?? '',
       })),
@@ -170,7 +210,7 @@ export class ManualPaymentsService {
   async adminGetById(proofId: string) {
     const proof = await this.proofModel.findById(proofId).lean();
     if (!proof) throw new NotFoundException('Payment proof not found');
-    return proof;
+    return this.presentProof(proof);
   }
 
   async adminApprove(proofId: string, adminId: string, ip?: string, userAgent?: string) {
@@ -244,7 +284,7 @@ export class ManualPaymentsService {
       })
       .catch(() => {});
 
-    return proof;
+    return this.presentProof(proof);
   }
 
   async adminReject(proofId: string, adminId: string, reason: string, ip?: string, userAgent?: string) {
@@ -283,6 +323,6 @@ export class ManualPaymentsService {
       })
       .catch(() => {});
 
-    return proof;
+    return this.presentProof(proof);
   }
 }

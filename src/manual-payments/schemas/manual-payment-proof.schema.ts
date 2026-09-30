@@ -25,7 +25,12 @@ export class ManualPaymentProof {
   @Prop({ type: Number, required: true }) amountPKR: number;
   @Prop({ type: Number, required: true }) fxRateUsed: number;
 
+  // Legacy proofs were uploaded publicly and only have `proofImageUrl`. New
+  // proofs are private: `proofPublicId` (+ resource type) is the source of
+  // truth and a short-lived signed URL is minted on read.
   @Prop({ type: String, default: null }) proofImageUrl: string | null;
+  @Prop({ type: String, default: null }) proofPublicId: string | null;
+  @Prop({ type: String, default: null }) proofResourceType: string | null;
   @Prop({ type: String, default: null }) transactionReference: string | null;
   @Prop({ type: String, default: null }) senderName: string | null;
 

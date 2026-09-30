@@ -21,6 +21,12 @@ export class AdminManualPaymentsController {
     return { success: true, data };
   }
 
+  @Get(':proofId/proof-url')
+  async getProofUrl(@Param('proofId') proofId: string) {
+    const data = await this.manualPaymentsService.adminGetProofUrl(proofId);
+    return { success: true, data };
+  }
+
   @Get(':proofId')
   async getById(@Param('proofId') proofId: string) {
     const data = await this.manualPaymentsService.adminGetById(proofId);

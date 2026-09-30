@@ -137,7 +137,7 @@ export class UploadService {
   }
 
   // ── SIGNED URL generate ──
-  generateSignedUrl(publicId: string, resourceType: string = 'raw', expirySeconds: number = 3600, fileName?: string): string {
+  generateSignedUrl(publicId: string, resourceType: string = 'raw', expirySeconds: number = 3600, fileName?: string, inline = false): string {
     const expiresAt = Math.floor(Date.now() / 1000) + expirySeconds;
     const safeFileName = fileName
       ? fileName.replace(/[^a-zA-Z0-9._-]/g, '_')
@@ -148,7 +148,7 @@ export class UploadService {
       type: 'private',
       resource_type: resourceType as any,
       expires_at: expiresAt,
-      flags: safeFileName ? `attachment:${safeFileName}` : 'attachment',
+      ...(inline ? {} : { flags: safeFileName ? `attachment:${safeFileName}` : 'attachment' }),
     });
   }
 

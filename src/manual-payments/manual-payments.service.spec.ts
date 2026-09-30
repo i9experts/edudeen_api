@@ -39,7 +39,11 @@ describe('ManualPaymentsService', () => {
 
     const db = { repositories: { manualPaymentProofModel: proofModel, orderModel, userModel } } as unknown as DatabaseService;
 
-    uploadService = { uploadFile: jest.fn().mockResolvedValue({ url: 'https://cdn.example.com/proof.jpg', publicId: 'p1', resourceType: 'image' }) } as any;
+    uploadService = {
+      uploadFile: jest.fn(),
+      uploadPrivateFile: jest.fn().mockResolvedValue({ publicId: 'private/payment-proofs/p1', resourceType: 'image' }),
+      generateSignedUrl: jest.fn().mockReturnValue('https://signed.example.com/proof.jpg?sig=x'),
+    } as any;
     paymentService = { manualBankTransferPayment: jest.fn() } as any;
     financeService = { recordSale: jest.fn().mockResolvedValue(undefined) } as any;
     adminConfigService = { getManualPaymentConfig: jest.fn().mockResolvedValue({ enabled: true, usdToPkrRate: 278, bankName: 'Meezan' }) } as any;
@@ -75,12 +79,15 @@ describe('ManualPaymentsService', () => {
       const result = await service.submitPayment(USER_ID, { checkoutId: 'c1', transactionReference: 'TXN1' } as any, FAKE_FILE);
 
       expect(paymentService.manualBankTransferPayment).toHaveBeenCalledWith(USER_ID, 'c1');
-      expect(uploadService.uploadFile).toHaveBeenCalledWith(FAKE_FILE);
+      expect(uploadService.uploadFile).not.toHaveBeenCalled(); // proofs must never go through the public upload
+      expect(uploadService.uploadPrivateFile).toHaveBeenCalledWith(FAKE_FILE, 'private/payment-proofs');
       expect(proofModel.create).toHaveBeenCalledWith(expect.objectContaining({
         userId: USER_ID, checkoutId: 'c1', amountUSD: 100, amountPKR: 27800, fxRateUsed: 278,
-        proofImageUrl: 'https://cdn.example.com/proof.jpg', transactionReference: 'TXN1', status: 'pending',
+        proofPublicId: 'private/payment-proofs/p1', transactionReference: 'TXN1', status: 'pending',
       }));
       expect(result.proof._id).toBe('proof-1');
+      expect(result.proof.proofImageUrl).toBe('https://signed.example.com/proof.jpg?sig=x'); // clients still get a usable URL
+      expect((result.proof as any).proofPublicId).toBeUndefined(); // storage id not leaked
       expect(notificationsService.notify).toHaveBeenCalled();
     });
   });
@@ -105,7 +112,9 @@ describe('ManualPaymentsService', () => {
       expect(proof.status).toBe('pending');
       expect(proof.rejectionReason).toBeNull();
       expect(proof.reuploadCount).toBe(2);
-      expect(proof.proofImageUrl).toBe('https://cdn.example.com/proof.jpg');
+      expect(proof.proofPublicId).toBe('private/payment-proofs/p1');
+      expect(proof.proofImageUrl).toBeNull();
+      expect(uploadService.uploadFile).not.toHaveBeenCalled();
       expect(proof.save).toHaveBeenCalled();
     });
   });
@@ -149,6 +158,37 @@ describe('ManualPaymentsService', () => {
       expect(proof.status).toBe('rejected');
       expect(proof.rejectionReason).toBe('Amount mismatch');
       expect(notificationsService.notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'manual_payment_rejected' }));
+    });
+  });
+
+  describe('proof viewing', () => {
+    const lean = (v: any) => ({ lean: jest.fn().mockResolvedValue(v) });
+
+    it('owner: mints a short-lived signed URL, inline, for a private proof', async () => {
+      proofModel.findOne.mockReturnValue(lean({ proofPublicId: 'private/payment-proofs/p1', proofResourceType: 'image' }));
+      const res = await service.getOwnProofUrl(USER_ID, 'proof-1');
+      expect(proofModel.findOne).toHaveBeenCalledWith({ _id: 'proof-1', userId: USER_ID }); // scoped to caller
+      expect(uploadService.generateSignedUrl).toHaveBeenCalledWith('private/payment-proofs/p1', 'image', 600, undefined, true);
+      expect(res.url).toContain('signed.example.com');
+    });
+
+    it("owner: another buyer's proof is a 404", async () => {
+      proofModel.findOne.mockReturnValue(lean(null));
+      await expect(service.getOwnProofUrl('someone-else', 'proof-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('legacy proof with only a public URL keeps working (no signing)', async () => {
+      proofModel.findOne.mockReturnValue(lean({ proofImageUrl: 'https://res.cloudinary.com/old/proof.jpg' }));
+      const res = await service.getOwnProofUrl(USER_ID, 'proof-1');
+      expect(res.url).toBe('https://res.cloudinary.com/old/proof.jpg');
+      expect(uploadService.generateSignedUrl).not.toHaveBeenCalled();
+    });
+
+    it('admin: can view any proof; unknown id is a 404', async () => {
+      proofModel.findById.mockReturnValue(lean({ proofPublicId: 'x', proofResourceType: 'image' }));
+      expect((await service.adminGetProofUrl('proof-1')).url).toContain('signed.example.com');
+      proofModel.findById.mockReturnValue(lean(null));
+      await expect(service.adminGetProofUrl('nope')).rejects.toThrow(NotFoundException);
     });
   });
 });

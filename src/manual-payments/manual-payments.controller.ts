@@ -53,6 +53,13 @@ export class ManualPaymentsController {
     return { success: true, data };
   }
 
+  // Signed, short-lived view URL — owner only (the lookup is scoped to the caller).
+  @Get(':proofId/proof-url')
+  async getProofUrl(@Req() req: any, @Param('proofId') proofId: string) {
+    const data = await this.manualPaymentsService.getOwnProofUrl(req.user.userId, proofId);
+    return { success: true, data };
+  }
+
   @Get(':proofId')
   async getProofStatus(@Req() req: any, @Param('proofId') proofId: string) {
     const data = await this.manualPaymentsService.getProofStatus(req.user.userId, proofId);
