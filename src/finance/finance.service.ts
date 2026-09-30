@@ -789,7 +789,7 @@ export class FinanceService {
         transactionCount: txCount,
         generatedAt: new Date(),
       },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
 
     return report;

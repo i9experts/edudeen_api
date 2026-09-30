@@ -153,14 +153,14 @@ export class StoreBannerService {
       set.status = computeInitialStatus(dto.startAt as string | undefined, dto.endAt as string | undefined);
     }
 
-    const updated = await this.storeBannerModel.findByIdAndUpdate(bannerId, { $set: set }, { new: true, runValidators: true });
+    const updated = await this.storeBannerModel.findByIdAndUpdate(bannerId, { $set: set }, { returnDocument: 'after', runValidators: true });
     this.log(storeId, 'store_banner_updated', 'Updated a store banner', sellerId, bannerId);
     return { success: true, message: 'Store banner updated', data: updated };
   }
 
   async pause(storeId: string, sellerId: string, bannerId: string) {
     await this.findOwned(storeId, sellerId, bannerId);
-    const updated = await this.storeBannerModel.findByIdAndUpdate(bannerId, { $set: { status: 'paused' } }, { new: true });
+    const updated = await this.storeBannerModel.findByIdAndUpdate(bannerId, { $set: { status: 'paused' } }, { returnDocument: 'after' });
     this.log(storeId, 'store_banner_paused', 'Paused a store banner', sellerId, bannerId);
     return { success: true, message: 'Store banner paused', data: updated };
   }
@@ -170,7 +170,7 @@ export class StoreBannerService {
     if (banner.endAt && banner.endAt.getTime() < Date.now()) {
       throw new BadRequestException('This banner already passed its end date — update endAt before resuming');
     }
-    const updated = await this.storeBannerModel.findByIdAndUpdate(bannerId, { $set: { status: 'active' } }, { new: true });
+    const updated = await this.storeBannerModel.findByIdAndUpdate(bannerId, { $set: { status: 'active' } }, { returnDocument: 'after' });
     this.log(storeId, 'store_banner_resumed', 'Resumed a store banner', sellerId, bannerId);
     return { success: true, message: 'Store banner resumed', data: updated };
   }

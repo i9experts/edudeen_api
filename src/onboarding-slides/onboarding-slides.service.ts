@@ -97,7 +97,7 @@ export class OnboardingSlidesService {
     const slide = await this.slideModel.findById(id);
     if (!slide) throw new NotFoundException('Onboarding slide not found');
 
-    const updated = await this.slideModel.findByIdAndUpdate(id, { $set: dto }, { new: true, runValidators: true });
+    const updated = await this.slideModel.findByIdAndUpdate(id, { $set: dto }, { returnDocument: 'after', runValidators: true });
     return { success: true, message: 'Onboarding slide updated successfully', data: updated };
   }
 

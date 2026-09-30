@@ -104,7 +104,7 @@ export class MessagingService {
           isPriority,
         },
       },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
 
     // Restore if soft-deleted by buyer
@@ -333,7 +333,7 @@ export class MessagingService {
       ...(iAmBuyer ? { deletedByBuyer: false } : { deletedBySeller: false }),
       // Restore for the other side too (message reactivates conversation)
       ...(iAmBuyer ? { deletedBySeller: false } : { deletedByBuyer: false }),
-    }, { new: true }).lean();
+    }, { returnDocument: 'after' }).lean();
 
     this.gateway.emitNewMessage(conversationId, message);
     if (updatedConv) {
@@ -476,7 +476,7 @@ export class MessagingService {
     // Reset unread counter for current user's side (by actual participancy
     // in this conversation, not JWT role — see assertConversationAccess).
     const unreadReset = conv.buyerId.toString() === userId ? { buyerUnread: 0 } : { sellerUnread: 0 };
-    const updatedConv = await this.convModel.findByIdAndUpdate(conversationId, { $set: unreadReset }, { new: true }).lean();
+    const updatedConv = await this.convModel.findByIdAndUpdate(conversationId, { $set: unreadReset }, { returnDocument: 'after' }).lean();
 
     this.gateway.emitMessagesSeen(conversationId, userId, lastMessageId);
     // Without this, the reader's own inbox list (this tab or any other) never

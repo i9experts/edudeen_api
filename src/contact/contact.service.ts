@@ -86,7 +86,7 @@ export class ContactService {
 
   async updateStatus(id: string, dto: UpdateContactStatusDto) {
     const submission = await this.contactModel
-      .findByIdAndUpdate(id, { status: dto.status }, { new: true })
+      .findByIdAndUpdate(id, { status: dto.status }, { returnDocument: 'after' })
       .exec();
 
     if (!submission) {

@@ -81,7 +81,7 @@ export class AddressService {
       const updated = await this.databaseService.repositories.addressModel.findOneAndUpdate(
         { _id: addressId, userId },
         { $set: body },
-        { new: true },
+        { returnDocument: 'after' },
       );
 
       if (!updated) {
@@ -159,7 +159,7 @@ async getDefaultAddress(userId: string) {
       const deleted = await this.databaseService.repositories.addressModel.findOneAndUpdate(
         { _id: addressId, userId },
         { $set: { isDelete: true } },
-        { new: true },
+        { returnDocument: 'after' },
       );
 
       if (!deleted) {
@@ -203,7 +203,7 @@ async getDefaultAddress(userId: string) {
       const updated = await this.databaseService.repositories.addressModel.findByIdAndUpdate(
         addressId,
         { isDefault: true },
-        { new: true },
+        { returnDocument: 'after' },
       );
 
       return {

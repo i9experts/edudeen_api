@@ -96,7 +96,7 @@ export class MarketingService {
     if (dto.expiresAt !== undefined) update.expiresAt = new Date(dto.expiresAt);
     if (dto.isActive !== undefined) update.isActive = dto.isActive;
 
-    const updated = await this.r.couponModel.findByIdAndUpdate(couponId, update, { new: true });
+    const updated = await this.r.couponModel.findByIdAndUpdate(couponId, update, { returnDocument: 'after' });
 
     this.activityLogService.log({
       storeId,

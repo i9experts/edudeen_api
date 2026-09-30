@@ -62,7 +62,7 @@ export class StorePagesService {
           status: 'draft',
         },
       },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     );
   }
 
@@ -140,26 +140,26 @@ export class StorePagesService {
     if (dto.seo?.noindex !== undefined) set['seo.noindex'] = dto.seo.noindex;
     if (dto.seo?.keywords !== undefined) set['seo.keywords'] = dto.seo.keywords;
 
-    const updated = await this.storePageModel.findByIdAndUpdate(pageId, { $set: set }, { new: true });
+    const updated = await this.storePageModel.findByIdAndUpdate(pageId, { $set: set }, { returnDocument: 'after' });
     return { success: true, message: 'Page updated', data: updated };
   }
 
   async updateSections(storeId: string, sellerId: string, pageId: string, dto: UpdateSectionsDto) {
     await this.findOwnedPage(storeId, sellerId, pageId);
     validateSections(dto.sections);
-    const updated = await this.storePageModel.findByIdAndUpdate(pageId, { $set: { sections: dto.sections } }, { new: true });
+    const updated = await this.storePageModel.findByIdAndUpdate(pageId, { $set: { sections: dto.sections } }, { returnDocument: 'after' });
     return { success: true, message: 'Sections updated', data: updated };
   }
 
   async publish(storeId: string, sellerId: string, pageId: string) {
     await this.findOwnedPage(storeId, sellerId, pageId);
-    const updated = await this.storePageModel.findByIdAndUpdate(pageId, { $set: { status: 'published' } }, { new: true });
+    const updated = await this.storePageModel.findByIdAndUpdate(pageId, { $set: { status: 'published' } }, { returnDocument: 'after' });
     return { success: true, message: 'Page published', data: updated };
   }
 
   async unpublish(storeId: string, sellerId: string, pageId: string) {
     await this.findOwnedPage(storeId, sellerId, pageId);
-    const updated = await this.storePageModel.findByIdAndUpdate(pageId, { $set: { status: 'draft' } }, { new: true });
+    const updated = await this.storePageModel.findByIdAndUpdate(pageId, { $set: { status: 'draft' } }, { returnDocument: 'after' });
     return { success: true, message: 'Page unpublished', data: updated };
   }
 

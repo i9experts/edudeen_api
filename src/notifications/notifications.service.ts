@@ -136,7 +136,7 @@ export class NotificationsService {
     const doc = await this.databaseService.repositories.notificationModel.findOneAndUpdate(
       { _id: id, recipientId: userId },
       { $set: { isRead: true, readAt: new Date() } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     return { success: true, data: doc };
   }
@@ -192,7 +192,7 @@ export class NotificationsService {
     const doc = await this.databaseService.repositories.notificationPreferenceModel.findOneAndUpdate(
       { userId },
       { $set: update, $setOnInsert: { role } },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
     return { success: true, data: doc };
   }

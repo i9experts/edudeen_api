@@ -99,7 +99,7 @@ export class AiStudioCreditsService {
     const txn = await this.txnModel.findOneAndUpdate(
       { _id: txnId, status: 'held' },
       { $set: { status: 'refunded', note: reason } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (!txn) return; // already captured/refunded — nothing to give back
     await this.aiCredits.grant(txn.storeId, txn.sellerId, txn.creditsCharged, `AI Studio auto-refund: ${reason}`);

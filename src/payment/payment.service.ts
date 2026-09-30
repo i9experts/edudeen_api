@@ -610,7 +610,7 @@ export class PaymentService {
         isDelete: false,
       },
       { status: 'completed', paidAt: new Date() },
-      { new: true },
+      { returnDocument: 'after' },
     );
 
     if (!transaction) {

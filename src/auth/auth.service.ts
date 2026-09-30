@@ -749,7 +749,7 @@ export class AuthService {
         .findByIdAndUpdate(
           userId,
           { $set: dto },
-          { new: true, runValidators: true },
+          { returnDocument: 'after', runValidators: true },
         )
         .select('-password -otp -otpExpiresAt');
 

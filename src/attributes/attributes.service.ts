@@ -126,7 +126,7 @@ export class AttributesService {
     const definition = await model.findOneAndUpdate(
       { _id: id, isDelete: false },
       { isDelete: true },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (!definition) {
       throw new NotFoundException('Attribute definition not found');

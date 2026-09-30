@@ -383,7 +383,7 @@ export class LoyaltyService {
     const member = await this.r.loyaltyMemberModel.findOneAndUpdate(
       { storeId, userId, pointsBalance: { $gte: reward.pointsCost } },
       { $inc: { pointsBalance: -reward.pointsCost }, $set: { lastActivityAt: new Date() } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (!member) throw new BadRequestException('Insufficient points balance');
 

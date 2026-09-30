@@ -45,7 +45,7 @@ export class AdminConfigService {
 
   private async getRawConfig() {
     if (this.cached && this.cached.expiresAt > Date.now()) return this.cached.config;
-    const config = await this.model.findOneAndUpdate({}, {}, { upsert: true, new: true, setDefaultsOnInsert: true });
+    const config = await this.model.findOneAndUpdate({}, {}, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
     this.cached = { config, expiresAt: Date.now() + this.CACHE_TTL_MS };
     return config;
   }
@@ -124,7 +124,7 @@ export class AdminConfigService {
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) set[`featureFlags.${key}`] = value;
     }
-    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
     this.invalidateCache();
     await this.logChange('feature_flags_updated', `Feature flags updated: ${JSON.stringify(dto)}`, meta);
     return { success: true, message: 'Feature flags updated', data: config };
@@ -134,7 +134,7 @@ export class AdminConfigService {
     const set: Record<string, unknown> = {};
     if (dto.monthlyCreditLimit !== undefined) set['aiConfig.monthlyCreditLimit'] = dto.monthlyCreditLimit;
     if (dto.aiModel !== undefined) set['aiConfig.aiModel'] = dto.aiModel;
-    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
     this.invalidateCache();
     await this.logChange('ai_config_updated', `AI config updated: ${JSON.stringify(dto)}`, meta);
     return { success: true, message: 'AI config updated', data: config };
@@ -145,7 +145,7 @@ export class AdminConfigService {
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) set[`emailConfig.${key}`] = value;
     }
-    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
     this.invalidateCache();
     await this.logChange('email_config_updated', `Email config updated: ${JSON.stringify(dto)}`, meta);
     return { success: true, message: 'Email config updated', data: config };
@@ -156,7 +156,7 @@ export class AdminConfigService {
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) set[`placementLimits.${key}`] = value;
     }
-    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
     this.invalidateCache();
     await this.logChange('placement_limits_updated', `Placement visible-count limits updated: ${JSON.stringify(dto)}`, meta);
     return { success: true, message: 'Placement limits updated', data: config };
@@ -167,7 +167,7 @@ export class AdminConfigService {
     for (const [placement, rateCard] of Object.entries(dto)) {
       if (rateCard !== undefined) set[`promotionPricing.${placement}`] = rateCard;
     }
-    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
     this.invalidateCache();
     await this.logChange('promotion_pricing_updated', `Promotion pricing updated for: ${Object.keys(dto).join(', ')}`, meta);
     return { success: true, message: 'Promotion pricing updated', data: config };
@@ -178,7 +178,7 @@ export class AdminConfigService {
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) set[`payoutConfig.${key}`] = value;
     }
-    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
     this.invalidateCache();
     await this.logChange('payout_config_updated', `Payout config updated: ${JSON.stringify(dto)}`, meta);
     return { success: true, message: 'Payout config updated', data: config };
@@ -189,7 +189,7 @@ export class AdminConfigService {
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) set[`manualPaymentConfig.${key}`] = value;
     }
-    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
     this.invalidateCache();
     // Bank account numbers/IBAN intentionally omitted from the audit description — full values are in `dto`/DB, not duplicated into the activity log.
     await this.logChange('manual_payment_config_updated', `Manual payment config updated (enabled=${config.manualPaymentConfig?.enabled}, rate=${config.manualPaymentConfig?.usdToPkrRate})`, meta);
@@ -201,7 +201,7 @@ export class AdminConfigService {
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) set[`fxConfig.${key}`] = value;
     }
-    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
     this.invalidateCache();
     await this.logChange('fx_config_updated', `FX config updated: ${JSON.stringify(dto)}`, meta);
     return { success: true, message: 'FX config updated', data: config };
@@ -211,7 +211,7 @@ export class AdminConfigService {
     const config = await this.model.findOneAndUpdate(
       {},
       { $set: { maintenanceMode } },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     );
     this.invalidateCache();
     await this.logChange('maintenance_mode_toggled', `Maintenance mode set to ${maintenanceMode}`, {

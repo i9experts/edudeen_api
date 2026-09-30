@@ -87,7 +87,7 @@ export class SeoIntegrationsService {
           lastError: null,
         },
       },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
 
     await this.activityLog.log({

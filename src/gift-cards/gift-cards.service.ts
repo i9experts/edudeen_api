@@ -69,7 +69,7 @@ export class GiftCardsService {
     const settings = await this.r.giftCardSettingsModel.findOneAndUpdate(
       { storeId },
       { $set: dto },
-      { new: true },
+      { returnDocument: 'after' },
     );
     return { success: true, message: 'Gift card settings updated', data: settings };
   }
@@ -126,7 +126,7 @@ export class GiftCardsService {
     const giftCard = await this.r.giftCardModel.findOneAndUpdate(
       { _id: giftCardId, storeId, isDelete: false },
       { status: 'disabled' },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (!giftCard) throw new NotFoundException('Gift card not found');
 
@@ -262,7 +262,7 @@ export class GiftCardsService {
     const giftCard = await this.r.giftCardModel.findOneAndUpdate(
       { storeId, code: code.toUpperCase(), status: 'active', balance: { $gte: amount } },
       { $inc: { balance: -amount } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (!giftCard) return; // already spent/disabled between apply and placement — the charge already succeeded, so silently skip rather than fail the whole order
 

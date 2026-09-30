@@ -48,7 +48,7 @@ export class TestimonialsService {
   }
 
   async update(id: string, dto: UpdateTestimonialDto) {
-    const testimonial = await this.testimonialModel.findByIdAndUpdate(id, dto, { new: true }).exec();
+    const testimonial = await this.testimonialModel.findByIdAndUpdate(id, dto, { returnDocument: 'after' }).exec();
     if (!testimonial) throw new NotFoundException('Testimonial not found');
     return { success: true, message: 'Testimonial updated successfully', data: testimonial };
   }

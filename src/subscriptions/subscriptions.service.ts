@@ -91,7 +91,7 @@ export class SubscriptionsService {
     const counter = await this.counterModel.findOneAndUpdate(
       { _id: key },
       { $inc: { seq: 1 } },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
     return `INV-${y}${m}-${String(counter.seq).padStart(6, '0')}`;
   }
@@ -244,7 +244,7 @@ export class SubscriptionsService {
           $setOnInsert: { subscriptionId: (sub)._id?.toString?.() ?? sub._id },
           $inc: { balance: benefit.creditsPerCycle, totalGranted: benefit.creditsPerCycle },
         },
-        { upsert: true, new: true },
+        { upsert: true, returnDocument: 'after' },
       );
       wallet.ledger.push({
         type: 'grant', amount: benefit.creditsPerCycle, balanceAfter: wallet.balance,
@@ -1878,7 +1878,7 @@ export class SubscriptionsService {
     const updated = await this.db.repositories.subscriptionNotificationPreferenceModel.findOneAndUpdate(
       { customerId },
       { $set: { customerId, ...dto } },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
     return { success: true, data: updated };
   }

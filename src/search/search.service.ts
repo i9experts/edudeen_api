@@ -55,7 +55,7 @@ export class SearchService {
     await recentSearchModel.findOneAndUpdate(
       { userId, query },
       { $set: { displayQuery }, $inc: { count: 1 } },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
 
     // Prune beyond the cap so the collection can't grow unbounded per user.
@@ -108,7 +108,7 @@ export class SearchService {
     await recentlyViewedModel.findOneAndUpdate(
       { userId, productId },
       { $inc: { viewCount: 1 } },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
 
     const extras = await recentlyViewedModel

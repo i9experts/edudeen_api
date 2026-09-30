@@ -855,7 +855,7 @@ export class StoreService {
     const updated = await this.databaseService.repositories.storeModel.findByIdAndUpdate(
       store._id,
       updateData,
-      { new: true },
+      { returnDocument: 'after' },
     );
 
     return {
@@ -885,7 +885,7 @@ export class StoreService {
     const updated = await this.databaseService.repositories.storeModel.findByIdAndUpdate(
       storeId,
       updateData,
-      { new: true },
+      { returnDocument: 'after' },
     );
 
     return { success: true, message: 'Builder config saved', data: updated };
@@ -1552,7 +1552,7 @@ export class StoreService {
     if (Object.keys(update).length === 0) throw new BadRequestException('Nothing to update');
 
     const customer = await userModel
-      .findByIdAndUpdate(customerId, update, { new: true, runValidators: true })
+      .findByIdAndUpdate(customerId, update, { returnDocument: 'after', runValidators: true })
       .select('-password -otp -otpExpiresAt');
 
     if (!customer) throw new NotFoundException('Customer not found');

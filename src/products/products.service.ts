@@ -1517,7 +1517,7 @@ export class ProductsService {
     const updatedProduct =
       Object.keys(productUpdate).length > 0
         ? await productModel.findByIdAndUpdate(productId, productUpdate, {
-            new: true,
+            returnDocument: 'after',
           })
         : product;
 
@@ -1535,7 +1535,7 @@ export class ProductsService {
       updatedVariant = await productVariantModel.findOneAndUpdate(
         { productId, isDefault: true, isDelete: false },
         variantUpdate,
-        { new: true },
+        { returnDocument: 'after' },
       );
     }
 

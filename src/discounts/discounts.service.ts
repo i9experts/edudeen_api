@@ -81,7 +81,7 @@ export class DiscountsService {
     const discount = await this.r.automaticDiscountModel.findOneAndUpdate(
       { _id: discountId, storeId, isDelete: false },
       { $set: patch },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (!discount) throw new NotFoundException('Discount not found');
 
@@ -99,7 +99,7 @@ export class DiscountsService {
     const discount = await this.r.automaticDiscountModel.findOneAndUpdate(
       { _id: discountId, storeId, isDelete: false },
       { isDelete: true, isActive: false },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (!discount) throw new NotFoundException('Discount not found');
 

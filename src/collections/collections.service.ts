@@ -110,7 +110,7 @@ export class CollectionsService {
     }
     if (dto.status !== undefined) set.status = dto.status;
 
-    const updated = await this.r.collectionModel.findByIdAndUpdate(collectionId, { $set: set }, { new: true });
+    const updated = await this.r.collectionModel.findByIdAndUpdate(collectionId, { $set: set }, { returnDocument: 'after' });
     return { success: true, message: 'Collection updated', data: updated };
   }
 
@@ -122,7 +122,7 @@ export class CollectionsService {
     const updated = await this.r.collectionModel.findByIdAndUpdate(
       collectionId,
       { $set: { productIds: dto.productIds } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     return { success: true, message: 'Collection products updated', data: updated };
   }

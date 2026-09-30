@@ -90,7 +90,7 @@ export class AdminAnnouncementsService {
     if (dto.audience !== undefined) update.audience = dto.audience;
     if (dto.scheduledAt !== undefined) update.scheduledAt = new Date(dto.scheduledAt);
 
-    const announcement = await this.model.findByIdAndUpdate(id, { $set: update }, { new: true });
+    const announcement = await this.model.findByIdAndUpdate(id, { $set: update }, { returnDocument: 'after' });
     this.log('announcement_updated', `Announcement "${announcement!.title}" updated`, meta, id);
     return { success: true, message: 'Announcement updated', data: announcement };
   }
@@ -106,7 +106,7 @@ export class AdminAnnouncementsService {
     if (dto.status === 'scheduled') update.scheduledAt = new Date(dto.scheduledAt as string);
     if (dto.status === 'published') update.publishedAt = new Date();
 
-    const announcement = await this.model.findByIdAndUpdate(id, { $set: update }, { new: true });
+    const announcement = await this.model.findByIdAndUpdate(id, { $set: update }, { returnDocument: 'after' });
     this.log('announcement_status_changed', `Announcement "${announcement!.title}" set to ${dto.status}`, meta, id);
     return { success: true, message: `Announcement set to ${dto.status}`, data: announcement };
   }

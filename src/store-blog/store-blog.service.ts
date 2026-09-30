@@ -75,26 +75,26 @@ export class StoreBlogService {
     if (dto.coverImage !== undefined) set.coverImage = dto.coverImage;
     if (dto.tags !== undefined) set.tags = dto.tags;
 
-    const updated = await this.blogPostModel.findByIdAndUpdate(postId, { $set: set }, { new: true });
+    const updated = await this.blogPostModel.findByIdAndUpdate(postId, { $set: set }, { returnDocument: 'after' });
     return { success: true, message: 'Post updated', data: updated };
   }
 
   async updateContent(storeId: string, sellerId: string, postId: string, dto: UpdateBlogContentDto) {
     await this.findOwnedPost(storeId, sellerId, postId);
     validateContent(dto.content);
-    const updated = await this.blogPostModel.findByIdAndUpdate(postId, { $set: { content: dto.content } }, { new: true });
+    const updated = await this.blogPostModel.findByIdAndUpdate(postId, { $set: { content: dto.content } }, { returnDocument: 'after' });
     return { success: true, message: 'Content updated', data: updated };
   }
 
   async publish(storeId: string, sellerId: string, postId: string) {
     const post = await this.findOwnedPost(storeId, sellerId, postId);
-    const updated = await this.blogPostModel.findByIdAndUpdate(postId, { $set: { status: 'published', publishedAt: post.publishedAt ?? new Date() } }, { new: true });
+    const updated = await this.blogPostModel.findByIdAndUpdate(postId, { $set: { status: 'published', publishedAt: post.publishedAt ?? new Date() } }, { returnDocument: 'after' });
     return { success: true, message: 'Post published', data: updated };
   }
 
   async unpublish(storeId: string, sellerId: string, postId: string) {
     await this.findOwnedPost(storeId, sellerId, postId);
-    const updated = await this.blogPostModel.findByIdAndUpdate(postId, { $set: { status: 'draft' } }, { new: true });
+    const updated = await this.blogPostModel.findByIdAndUpdate(postId, { $set: { status: 'draft' } }, { returnDocument: 'after' });
     return { success: true, message: 'Post unpublished', data: updated };
   }
 

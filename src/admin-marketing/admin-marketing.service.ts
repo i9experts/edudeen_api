@@ -131,7 +131,7 @@ export class AdminMarketingService {
       if (value === undefined) continue;
       update[key] = key === 'startDate' || key === 'endDate' ? new Date(value as string) : value;
     }
-    const campaign = await this.r.campaignModel.findByIdAndUpdate(id, { $set: update }, { new: true });
+    const campaign = await this.r.campaignModel.findByIdAndUpdate(id, { $set: update }, { returnDocument: 'after' });
     this.log('campaign_updated', `Campaign "${campaign!.name}" updated`, meta, id);
     return { success: true, message: 'Campaign updated', data: campaign };
   }
@@ -228,7 +228,7 @@ export class AdminMarketingService {
       if (value === undefined) continue;
       update[key] = key === 'expiresAt' ? new Date(value as string) : value;
     }
-    const coupon = await this.r.couponModel.findByIdAndUpdate(id, { $set: update }, { new: true });
+    const coupon = await this.r.couponModel.findByIdAndUpdate(id, { $set: update }, { returnDocument: 'after' });
     this.log('platform_coupon_updated', `Platform coupon "${coupon!.code}" updated`, meta, id);
     return { success: true, message: 'Platform coupon updated', data: coupon };
   }

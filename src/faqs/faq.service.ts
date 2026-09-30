@@ -94,7 +94,7 @@ export class FaqService {
     }
 
     const faq = await this.faqModel
-      .findByIdAndUpdate(id, updateData, { new: true })
+      .findByIdAndUpdate(id, updateData, { returnDocument: 'after' })
       .exec();
 
     if (!faq) {

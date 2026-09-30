@@ -48,7 +48,7 @@ export class SellerPlatformSubscriptionsService {
   private async generateInvoiceNumber(): Promise<string> {
     const now = new Date();
     const key = `platform-invoice-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const counter = await this.counterModel.findOneAndUpdate({ _id: key }, { $inc: { seq: 1 } }, { upsert: true, new: true });
+    const counter = await this.counterModel.findOneAndUpdate({ _id: key }, { $inc: { seq: 1 } }, { upsert: true, returnDocument: 'after' });
     return `PINV-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${String(counter.seq).padStart(6, '0')}`;
   }
 

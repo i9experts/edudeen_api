@@ -38,7 +38,7 @@ export class StoreThemeService {
     await this.storeThemeModel.findOneAndUpdate(
       { storeId },
       { $setOnInsert: { storeId } },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     );
     // Backfill `draft` = a copy of the live root fields, for any store that
     // predates the draft/publish split. A raw `$exists` filter (not an
@@ -118,7 +118,7 @@ export class StoreThemeService {
           },
         },
       ],
-      { new: true, updatePipeline: true },
+      { returnDocument: 'after', updatePipeline: true },
     );
     return { success: true, message: 'Theme published', data: updated };
   }
@@ -142,7 +142,7 @@ export class StoreThemeService {
           },
         },
       ],
-      { new: true, updatePipeline: true },
+      { returnDocument: 'after', updatePipeline: true },
     );
     return { success: true, message: 'Draft reverted to the published theme', data: updated };
   }
@@ -160,7 +160,7 @@ export class StoreThemeService {
       // actually goes live.
       set[key === 'baseThemeId' ? 'draft.baseThemeId' : `draft.theme.${key}`] = value;
     }
-    const updated = await this.storeThemeModel.findOneAndUpdate({ storeId }, { $set: set }, { new: true });
+    const updated = await this.storeThemeModel.findOneAndUpdate({ storeId }, { $set: set }, { returnDocument: 'after' });
     return { success: true, message: 'Theme updated', data: updated };
   }
 
@@ -176,7 +176,7 @@ export class StoreThemeService {
     if (dto.navAlignment !== undefined) set['draft.header.navAlignment'] = dto.navAlignment;
     if (dto.headerStyle !== undefined) set['draft.header.headerStyle'] = dto.headerStyle;
 
-    const updated = await this.storeThemeModel.findOneAndUpdate({ storeId }, { $set: set }, { new: true });
+    const updated = await this.storeThemeModel.findOneAndUpdate({ storeId }, { $set: set }, { returnDocument: 'after' });
     return { success: true, message: 'Header updated', data: updated };
   }
 
@@ -188,7 +188,7 @@ export class StoreThemeService {
     const set: Record<string, unknown> = { 'draft.footer.blocks': dto.blocks };
     if (dto.footerStyle !== undefined) set['draft.footer.footerStyle'] = dto.footerStyle;
 
-    const updated = await this.storeThemeModel.findOneAndUpdate({ storeId }, { $set: set }, { new: true });
+    const updated = await this.storeThemeModel.findOneAndUpdate({ storeId }, { $set: set }, { returnDocument: 'after' });
     return { success: true, message: 'Footer updated', data: updated };
   }
 
@@ -199,7 +199,7 @@ export class StoreThemeService {
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) set[`draft.identityBanner.${key}`] = value;
     }
-    const updated = await this.storeThemeModel.findOneAndUpdate({ storeId }, { $set: set }, { new: true });
+    const updated = await this.storeThemeModel.findOneAndUpdate({ storeId }, { $set: set }, { returnDocument: 'after' });
     return { success: true, message: 'Store info updated', data: updated };
   }
 }

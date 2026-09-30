@@ -197,7 +197,7 @@ export class BannersService {
       set.isActive = status === 'active';
     }
 
-    const updated = await this.bannerModel.findByIdAndUpdate(bannerId, { $set: set }, { new: true, runValidators: true });
+    const updated = await this.bannerModel.findByIdAndUpdate(bannerId, { $set: set }, { returnDocument: 'after', runValidators: true });
     return { success: true, message: 'Banner updated successfully', data: updated };
   }
 
@@ -209,7 +209,7 @@ export class BannersService {
     const updated = await this.bannerModel.findByIdAndUpdate(
       bannerId,
       { $set: { status: 'paused', isActive: false } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     return { success: true, message: 'Banner paused', data: updated };
   }
@@ -223,7 +223,7 @@ export class BannersService {
     const updated = await this.bannerModel.findByIdAndUpdate(
       bannerId,
       { $set: { status: 'active', isActive: true } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     return { success: true, message: 'Banner resumed', data: updated };
   }

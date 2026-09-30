@@ -203,7 +203,7 @@ export class RefundRequestService {
     const request = await this.model.findOneAndUpdate(
       { _id: requestId, status: 'pending', isDelete: false },
       { status: 'approved', reviewedBy: actorId, reviewedAt: new Date() },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (!request) {
       throw new BadRequestException('Refund request not found or already reviewed');
@@ -341,7 +341,7 @@ export class RefundRequestService {
     const request = await this.model.findOneAndUpdate(
       { _id: requestId, status: 'pending', isDelete: false },
       { status: 'rejected', reviewedBy: actorId, reviewedAt: new Date(), resolutionNotes: notes },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (!request) {
       throw new BadRequestException('Refund request not found or already reviewed');

@@ -143,7 +143,7 @@ export class ProductVariantsService {
 
     const updated =
       Object.keys(update).length > 0
-        ? await productVariantModel.findByIdAndUpdate(variantId, update, { new: true })
+        ? await productVariantModel.findByIdAndUpdate(variantId, update, { returnDocument: 'after' })
         : variant;
 
     if (dto.isDefault === true && !variant.isDefault) {
