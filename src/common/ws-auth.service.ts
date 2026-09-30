@@ -4,6 +4,12 @@ import type { Socket } from 'socket.io';
 import { DatabaseService } from 'src/database/databaseservice';
 import { RedisService } from 'src/redis/redis.service';
 
+interface AccountModel {
+  findById(id: string): {
+    select(fields: string): { lean(): Promise<unknown> };
+  };
+}
+
 export interface WsIdentity {
   userId: string;
   role: string;
@@ -29,14 +35,18 @@ export class WsAuthService {
   /** Handshake token: `auth.token` (what the mobile app sends) or an Authorization header. A `?token=` query
    *  value ends up in proxy/load-balancer access logs, so it is refused unless WS_ALLOW_QUERY_TOKEN=true. */
   extractToken(client: Socket): string | null {
-    const fromAuth = client.handshake.auth?.token;
+    const fromAuth = (client.handshake.auth as { token?: unknown } | undefined)
+      ?.token;
     if (typeof fromAuth === 'string' && fromAuth) return fromAuth;
     const header = client.handshake.headers?.authorization;
-    if (typeof header === 'string' && header.startsWith('Bearer ')) return header.slice(7);
+    if (typeof header === 'string' && header.startsWith('Bearer '))
+      return header.slice(7);
     const fromQuery = client.handshake.query?.token;
     if (typeof fromQuery === 'string' && fromQuery) {
       if (process.env.WS_ALLOW_QUERY_TOKEN === 'true') return fromQuery;
-      this.logger.warn('Rejected a socket handshake that sent its token in the query string (send it in `auth.token`)');
+      this.logger.warn(
+        'Rejected a socket handshake that sent its token in the query string (send it in `auth.token`)',
+      );
     }
     return null;
   }
@@ -47,7 +57,14 @@ export class WsAuthService {
       const token = this.extractToken(client);
       if (!token) return null;
 
-      const payload = this.jwtService.verify(token, { secret: process.env.JWT_SECRET });
+      const payload = this.jwtService.verify<{
+        sub?: unknown;
+        role?: string;
+        typ?: string;
+        tokenVersion?: number;
+      }>(token, {
+        secret: process.env.JWT_SECRET,
+      });
       // Refresh / download tokens share the secret but must never authenticate a session.
       if (payload?.typ && payload.typ !== 'access') return null;
       if (!payload?.sub || typeof payload.sub !== 'string') return null;
@@ -60,20 +77,35 @@ export class WsAuthService {
 
       const model = this.modelForRole(payload.role);
       if (!model) return null;
-      const account = await model.findById(payload.sub).select('tokenVersion status isDelete').lean();
+      const account = (await model
+        .findById(payload.sub)
+        .select('tokenVersion status isDelete')
+        .lean()) as {
+        tokenVersion?: number;
+        status?: string;
+        isDelete?: boolean;
+      } | null;
       if (!account) return null;
-      if (account.isDelete || ['deleted', 'suspended'].includes(account.status)) return null;
-      if ((account.tokenVersion ?? 0) !== (payload.tokenVersion ?? 0)) return null;
+      if (
+        account.isDelete ||
+        ['deleted', 'suspended'].includes(account.status ?? '')
+      )
+        return null;
+      if ((account.tokenVersion ?? 0) !== (payload.tokenVersion ?? 0))
+        return null;
 
-      return { userId: payload.sub, role: payload.role };
+      return { userId: payload.sub, role: payload.role ?? '' };
     } catch {
       return null;
     }
   }
 
-  // Widened to any for the same reason as JwtAuthGuard.modelForRole: User/Seller/Admin are different models.
-  private modelForRole(role: unknown): any {
-    const repos = this.db.repositories;
+  // Narrowed to the one call we make: User/Seller/Admin are different model types.
+  private modelForRole(role: unknown): AccountModel | null {
+    const repos = this.db.repositories as unknown as Record<
+      string,
+      AccountModel
+    >;
     if (role === 'user') return repos.userModel;
     if (role === 'seller') return repos.sellerModel;
     if (role === 'admin') return repos.adminModel;

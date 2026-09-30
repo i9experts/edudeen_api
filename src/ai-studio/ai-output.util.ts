@@ -16,12 +16,19 @@ export function cleanAiText(value: unknown, maxLength: number): string | null {
   return cleaned || null;
 }
 
-export function cleanAiTags(value: unknown, maxTags = 20, maxLength = 40): string[] | null {
+export function cleanAiTags(
+  value: unknown,
+  maxTags = 20,
+  maxLength = 40,
+): string[] | null {
   if (!Array.isArray(value)) return null;
   const out: string[] = [];
   const seen = new Set<string>();
   for (const raw of value) {
-    const t = cleanAiText(typeof raw === 'string' ? raw : (raw as { tag?: unknown } | null)?.tag, maxLength);
+    const t = cleanAiText(
+      typeof raw === 'string' ? raw : (raw as { tag?: unknown } | null)?.tag,
+      maxLength,
+    );
     if (!t || seen.has(t.toLowerCase())) continue;
     seen.add(t.toLowerCase());
     out.push(t);
