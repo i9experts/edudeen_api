@@ -137,6 +137,12 @@ export class UploadService {
   }
 
   // ── SIGNED URL generate ──
+  // WARNING: the `expires_at` option does NOT expire this URL. Cloudinary only enforces `expires_at` on its
+  // download-API URLs (`utils.private_download_url`) and on token-authenticated delivery; for a plain signed
+  // `cloudinary.url()` the signature covers only the path, so the link is valid for as long as the asset exists
+  // (verified: the URL is byte-identical with and without `expires_at`). Never treat the `expirySeconds`
+  // argument as a security control — hand these URLs only to already-authorised callers, or stream the file
+  // through the API instead (as the digital-download flow does).
   generateSignedUrl(publicId: string, resourceType: string = 'raw', expirySeconds: number = 3600, fileName?: string, inline = false): string {
     const expiresAt = Math.floor(Date.now() / 1000) + expirySeconds;
     const safeFileName = fileName
