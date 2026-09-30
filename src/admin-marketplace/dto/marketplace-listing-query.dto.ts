@@ -1,17 +1,18 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsIn, IsMongoId, IsInt, IsOptional, IsString, Max, Min, MaxLength } from 'class-validator';
 
 export class MarketplaceListingQueryDto {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   search?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
-  @IsString()
+  @IsMongoId()
   categoryId?: string;
 
   @ApiProperty({ required: false, enum: ['active', 'inactive', 'draft', 'scheduled', 'flagged'] })
@@ -31,5 +32,6 @@ export class MarketplaceListingQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(100)
   limit?: number = 20;
 }

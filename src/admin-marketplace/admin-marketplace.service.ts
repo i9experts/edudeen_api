@@ -1,5 +1,8 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { isValidObjectId } from 'mongoose';
+import { escapeRegex } from '../common/query-safety.util';
+import { isStoreLive } from '../common/store-live.util';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -75,12 +78,12 @@ export class AdminMarketplaceService {
     const filter: Record<string, unknown> = { isDelete: false };
 
     if (query.categoryId) filter.categoryId = query.categoryId;
-    if (query.search) filter.name = { $regex: query.search, $options: 'i' };
+    if (query.search) filter.name = { $regex: escapeRegex(query.search), $options: 'i' };
 
     let flaggedProductIds: string[] | null = null;
     if (query.status === 'flagged') {
       const reports = await this.r.reportModel.find({ targetType: 'listing', status: { $ne: 'resolved' } }, { targetId: 1 });
-      flaggedProductIds = reports.map((r) => r.targetId);
+      flaggedProductIds = reports.map((r) => r.targetId).filter((id) => isValidObjectId(id));
       filter._id = { $in: flaggedProductIds };
     } else if (query.status) {
       filter.status = query.status;
@@ -139,6 +142,11 @@ export class AdminMarketplaceService {
 
   async setFeatured(id: string, isFeatured: boolean, meta: AuditMeta) {
     const product = await this.findProductOrThrow(id);
+    // Only a listing buyers can actually see may be featured — featuring a draft / inactive / off-market listing
+    // put it into featured rails. Unfeaturing is always allowed.
+    if (isFeatured && (product.status !== 'active' || !(await isStoreLive(this.r.storeModel, product.storeId)))) {
+      throw new BadRequestException('Only active listings from a live store can be featured');
+    }
     await this.r.productModel.findByIdAndUpdate(id, { $set: { isFeatured } });
     this.log(
       isFeatured ? 'listing_featured' : 'listing_unfeatured',
@@ -151,7 +159,8 @@ export class AdminMarketplaceService {
 
   async remove(id: string, meta: AuditMeta) {
     const product = await this.findProductOrThrow(id);
-    await this.r.productModel.findByIdAndUpdate(id, { $set: { isDelete: true, status: 'inactive', removedByAdmin: true } });
+    // Also drops the featured flag, or a removed listing kept its slot in featured rails.
+    await this.r.productModel.findByIdAndUpdate(id, { $set: { isDelete: true, status: 'inactive', isFeatured: false, removedByAdmin: true } });
     this.log('listing_removed', `Listing "${product.name}" removed by admin`, meta, id);
     return { success: true, message: 'Listing removed' };
   }
@@ -163,12 +172,14 @@ export class AdminMarketplaceService {
     const store = await this.r.storeModel.findOne({ _id: storeId, isDelete: false });
     if (!store) throw new NotFoundException('Store not found');
 
-    const current: string[] = store.badges ?? [];
-    const next = grant
-      ? (current.includes(badge) ? current : [...current, badge])
-      : current.filter((b) => b !== badge);
+    // Atomic set operations: the old read-modify-write lost a concurrent grant/revoke of another badge.
+    const updated = await this.r.storeModel.findOneAndUpdate(
+      { _id: storeId, isDelete: false },
+      grant ? { $addToSet: { badges: badge } } : { $pull: { badges: badge } },
+      { returnDocument: 'after' },
+    );
+    const next: string[] = updated?.badges ?? [];
 
-    await this.r.storeModel.findByIdAndUpdate(storeId, { $set: { badges: next } });
     this.log(
       grant ? 'store_badge_granted' : 'store_badge_revoked',
       `Badge "${badge}" ${grant ? 'granted to' : 'revoked from'} store "${store.name}"`,
@@ -195,7 +206,7 @@ export class AdminMarketplaceService {
     } else if (query.verificationStatus !== 'all') {
       filter.verificationStatus = query.verificationStatus;
     }
-    if (query.search) filter.name = { $regex: query.search, $options: 'i' };
+    if (query.search) filter.name = { $regex: escapeRegex(query.search), $options: 'i' };
 
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -352,6 +363,12 @@ export class AdminMarketplaceService {
   async approveLead(id: string, meta: AuditMeta) {
     const store = await this.findReviewableStoreOrThrow(id);
     const current: VerificationStatus = store.verificationStatus ?? 'not_started';
+
+    // A store of a suspended seller must not go live (the suspension cascade only touched stores that were active).
+    const owner = await this.r.sellerModel.findOne({ _id: store.sellerId, isDelete: false }, { status: 1 }).lean();
+    if (!owner || owner.status === 'suspended') {
+      throw new ConflictException('The seller account is suspended or missing — unsuspend the seller before approving this store');
+    }
 
     const evaluation = await this.storeService.getVerificationEvaluationForAdmin(id);
     if (!evaluation.canSubmit) {

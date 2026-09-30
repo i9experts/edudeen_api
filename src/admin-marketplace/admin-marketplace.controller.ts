@@ -4,6 +4,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { AdminMarketplaceService } from './admin-marketplace.service';
 import { MarketplaceListingQueryDto } from './dto/marketplace-listing-query.dto';
 import { SetFeaturedDto } from './dto/set-featured.dto';
@@ -35,17 +36,17 @@ export class AdminMarketplaceController {
   }
 
   @Patch('listings/:id/feature')
-  setFeatured(@Req() req: any, @Param('id') id: string, @Body() dto: SetFeaturedDto) {
+  setFeatured(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: SetFeaturedDto) {
     return this.adminMarketplaceService.setFeatured(id, dto.isFeatured, this.meta(req));
   }
 
   @Patch('listings/:id/remove')
-  remove(@Req() req: any, @Param('id') id: string) {
+  remove(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
     return this.adminMarketplaceService.remove(id, this.meta(req));
   }
 
   @Patch('stores/:id/badge')
-  setStoreBadge(@Req() req: any, @Param('id') id: string, @Body() dto: SetStoreBadgeDto) {
+  setStoreBadge(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: SetStoreBadgeDto) {
     return this.adminMarketplaceService.setStoreBadge(id, dto.badge, dto.grant, this.meta(req));
   }
 
@@ -55,22 +56,22 @@ export class AdminMarketplaceController {
   }
 
   @Get('leads/:id')
-  getLeadDetail(@Param('id') id: string) {
+  getLeadDetail(@Param('id', ParseObjectIdPipe) id: string) {
     return this.adminMarketplaceService.getLeadDetail(id);
   }
 
   @Patch('leads/:id/under-review')
-  markUnderReview(@Req() req: any, @Param('id') id: string) {
+  markUnderReview(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
     return this.adminMarketplaceService.markUnderReview(id, this.meta(req));
   }
 
   @Patch('leads/:id/approve')
-  approveLead(@Req() req: any, @Param('id') id: string) {
+  approveLead(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
     return this.adminMarketplaceService.approveLead(id, this.meta(req));
   }
 
   @Patch('leads/:id/reject')
-  rejectLead(@Req() req: any, @Param('id') id: string, @Body() dto: RejectLeadDto) {
+  rejectLead(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: RejectLeadDto) {
     return this.adminMarketplaceService.rejectLead(id, dto.reason, this.meta(req));
   }
 }
