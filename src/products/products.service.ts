@@ -1161,7 +1161,11 @@ export class ProductsService {
     }
 
     assertText(name, 'name', 200);
-    if (description !== undefined && description !== null) assertText(description, 'description', 20000);
+    // The schema requires a non-empty description; a missing one used to reach Mongoose and come back as a 500.
+    if (description === undefined || description === null || !String(description).trim()) {
+      throw new BadRequestException('description is required');
+    }
+    assertText(description, 'description', 20000);
     if (status !== undefined) assertSellerStatus(status);
     const scheduledDate = status === 'scheduled' ? parseScheduledAt(scheduledAt) : null;
     const cleanTags = tags === undefined ? [] : assertStringArray(tags, 'tags', { maxItems: 30, maxLength: 60 });
@@ -1289,7 +1293,11 @@ export class ProductsService {
     }
 
     assertText(name, 'name', 200);
-    if (description !== undefined && description !== null) assertText(description, 'description', 20000);
+    // The schema requires a non-empty description; a missing one used to reach Mongoose and come back as a 500.
+    if (description === undefined || description === null || !String(description).trim()) {
+      throw new BadRequestException('description is required');
+    }
+    assertText(description, 'description', 20000);
     if (status !== undefined) assertSellerStatus(status);
     const scheduledDate = status === 'scheduled' ? parseScheduledAt(scheduledAt) : null;
     const cleanTags = tags === undefined ? [] : assertStringArray(tags, 'tags', { maxItems: 30, maxLength: 60 });
