@@ -32,7 +32,7 @@ export class NotificationPreference {
   @Prop({ required: true, unique: true })
   userId: string;
 
-  @Prop({ required: true, enum: ['user', 'seller'] })
+  @Prop({ required: true, enum: ['user', 'seller', 'admin'] })
   role: string;
 
   @Prop({ type: PrefFlagsSchema, default: () => ({}) })
