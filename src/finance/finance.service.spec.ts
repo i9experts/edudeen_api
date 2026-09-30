@@ -75,8 +75,11 @@ describe('FinanceService', () => {
   beforeEach(() => {
     balanceModel = { findOne: jest.fn(), find: jest.fn().mockReturnValue(makeChainableFind([])) };
     txModel = makeConstructableModelMock();
+    txModel.exists = jest.fn().mockReturnValue({ session: jest.fn().mockResolvedValue(null) });
+    txModel.updateOne = jest.fn().mockResolvedValue({ modifiedCount: 1 });
     payoutModel = makeConstructableModelMock();
     payoutModel.exists = jest.fn().mockResolvedValue(false);
+    payoutModel.findOneAndUpdate = jest.fn();
     methodModel = { findById: jest.fn(), findOne: jest.fn(), find: jest.fn().mockReturnValue(makeChainableFind([])), exists: jest.fn().mockResolvedValue(true), updateMany: jest.fn() };
     scheduleModel = { findOne: jest.fn(), find: jest.fn().mockReturnValue(makeChainableFind([])), updateOne: jest.fn().mockResolvedValue({}) };
     storeModel = { findById: jest.fn().mockResolvedValue({ _id: STORE_ID, sellerId: SELLER_ID, isDelete: false }) };
@@ -272,27 +275,121 @@ describe('FinanceService', () => {
   });
 
   describe('adminRejectPayout', () => {
-    it('reverses the deduction back onto the available balance and marks the payout failed', async () => {
-      const payout = { _id: 'p1', storeId: STORE_ID, sellerId: SELLER_ID, amount: 40, currency: 'USD', status: 'processing', save: jest.fn() };
-      payoutModel.findById = jest.fn().mockResolvedValue(payout);
+    const statusLookup = (status: string | null) => {
+      payoutModel.findById = jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(status ? { status } : null) }) });
+    };
+
+    it('claims the payout atomically, then reverses the deduction onto the available balance', async () => {
+      const payout = { _id: 'p1', storeId: STORE_ID, sellerId: SELLER_ID, amount: 40, currency: 'USD', status: 'failed' };
+      payoutModel.findOneAndUpdate.mockResolvedValue(payout);
       const balance = makeBalance({ availableBalance: 60, totalPayouts: 40 });
       balanceModel.findOne.mockResolvedValue(balance);
 
       await service.adminRejectPayout('p1', 'admin-1', 'bank details invalid');
 
+      expect(payoutModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'p1', status: { $in: ['pending', 'processing'] } },
+        { $set: expect.objectContaining({ status: 'failed', failureReason: 'bank details invalid' }) },
+        expect.objectContaining({ session: expect.anything() }),
+      );
       expect(balance.availableBalance).toBe(100);
       expect(balance.totalPayouts).toBe(0);
-      expect(payout.status).toBe('failed');
     });
 
-    it('throws when the payout is not pending/processing', async () => {
-      payoutModel.findById = jest.fn().mockResolvedValue({ status: 'completed' });
+    it('a second (concurrent / double-click) reject loses the claim and credits NOTHING', async () => {
+      payoutModel.findOneAndUpdate.mockResolvedValue(null); // another request already moved it to failed
+      statusLookup('failed');
+      const balance = makeBalance({ availableBalance: 100, totalPayouts: 0 });
+      balanceModel.findOne.mockResolvedValue(balance);
+
+      await expect(service.adminRejectPayout('p1', 'admin-1', 'reason')).rejects.toThrow(/status "failed"/);
+      expect(balance.availableBalance).toBe(100);
+      expect(balance.save).not.toHaveBeenCalled();
+      expect(txModel.created).toHaveLength(0);
+    });
+
+    it('throws BadRequest when the payout is already completed', async () => {
+      payoutModel.findOneAndUpdate.mockResolvedValue(null);
+      statusLookup('completed');
       await expect(service.adminRejectPayout('p1', 'admin-1', 'reason')).rejects.toThrow(BadRequestException);
     });
 
     it('throws NotFoundException for a missing payout', async () => {
-      payoutModel.findById = jest.fn().mockResolvedValue(null);
+      payoutModel.findOneAndUpdate.mockResolvedValue(null);
+      statusLookup(null);
       await expect(service.adminRejectPayout('missing', 'admin-1', 'reason')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('adminApprovePayout', () => {
+    it('only one approve wins; a reject-after-approve cannot refund money that was wired', async () => {
+      payoutModel.findOneAndUpdate.mockResolvedValueOnce({ _id: 'p1', storeId: STORE_ID, sellerId: SELLER_ID, amount: 40, currency: 'PKR', status: 'completed' }).mockResolvedValueOnce(null);
+      payoutModel.findById = jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ status: 'completed' }) }) });
+      await service.adminApprovePayout('p1', 'admin-1');
+      await expect(service.adminApprovePayout('p1', 'admin-2')).rejects.toThrow(/status "completed"/);
+      expect(activityLogService.log).toHaveBeenCalledTimes(1);
+      expect((activityLogService.log as jest.Mock).mock.calls[0][0].description).toContain('PKR 40.00'); // not a hard-coded $
+    });
+  });
+
+  describe('adminRetryFailedPayout', () => {
+    it('a second concurrent retry finds nothing to claim and does not deduct again', async () => {
+      payoutModel.findOneAndUpdate.mockResolvedValue(null);
+      payoutModel.exists.mockResolvedValue({ _id: 'p1' });
+      const balance = makeBalance({ availableBalance: 100 });
+      balanceModel.findOne.mockResolvedValue(balance);
+      await expect(service.adminRetryFailedPayout('p1', 'admin-1')).rejects.toThrow(/Only failed payouts/);
+      expect(balance.availableBalance).toBe(100);
+    });
+  });
+
+  describe('processClearingBalances', () => {
+    const oldSale = { _id: 'tx1', storeId: STORE_ID, sellerId: SELLER_ID, currency: 'USD', createdAt: new Date(Date.now() - 400 * 24 * 3600 * 1000), metadata: { netAmount: 92, clearingDays: 7 } };
+
+    it('credits available balance once, only after winning the pending→completed claim', async () => {
+      txModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([oldSale]) });
+      const balance = makeBalance({ pendingBalance: 92 });
+      balanceModel.findOne.mockResolvedValue(balance);
+      const res = await service.processClearingBalances();
+      expect(txModel.updateOne).toHaveBeenCalledWith({ _id: 'tx1', status: 'pending' }, { $set: { status: 'completed' } }, expect.anything());
+      expect(balance.availableBalance).toBe(92);
+      expect(res.processed).toBe(1);
+    });
+
+    it('a concurrent run that loses the claim credits nothing (no double credit)', async () => {
+      txModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([oldSale]) });
+      txModel.updateOne.mockResolvedValue({ modifiedCount: 0 });
+      const balance = makeBalance({ pendingBalance: 92 });
+      balanceModel.findOne.mockResolvedValue(balance);
+      const res = await service.processClearingBalances();
+      expect(balance.availableBalance).toBe(0);
+      expect(balance.save).not.toHaveBeenCalled();
+      expect(res).toEqual({ processed: 0, totalAmount: 0, byCurrency: [] });
+    });
+
+    it('one poison row does not stop later sales from clearing', async () => {
+      const second = { ...oldSale, _id: 'tx2', storeId: 'store-2' };
+      txModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([oldSale, second]) });
+      const good = makeBalance({ pendingBalance: 92 });
+      balanceModel.findOne.mockImplementation(async (q: any) => { if (q.storeId === STORE_ID) throw new Error('boom'); return good; });
+      jest.spyOn((service as any).logger, 'error').mockImplementation(() => undefined);
+      const res = await service.processClearingBalances();
+      expect(res.processed).toBe(1);
+      expect(good.availableBalance).toBe(92);
+    });
+  });
+
+  describe('recordSale idempotency', () => {
+    it('does not credit again when a sale for the same order+store is already recorded', async () => {
+      txModel.exists.mockReturnValue({ session: jest.fn().mockResolvedValue({ _id: 'existing' }) });
+      const balance = makeBalance();
+      balanceModel.findOne.mockResolvedValue(balance);
+      jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+      await service.recordSale(STORE_ID, SELLER_ID, 'order-1', 100, 'Sale');
+      expect(balance.pendingBalance).toBe(0);
+      expect(balance.save).not.toHaveBeenCalled();
+      expect(txModel.created).toHaveLength(0);
+      expect(txModel.exists).toHaveBeenCalledWith({ storeId: STORE_ID, referenceId: 'order-1', referenceType: 'order', type: 'sale' });
     });
   });
 

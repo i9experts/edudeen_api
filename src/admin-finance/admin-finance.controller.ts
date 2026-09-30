@@ -110,13 +110,13 @@ export class AdminFinanceController {
   }
 
   @Post('process-clearing')
-  triggerClearingBalances() {
-    return this.adminFinanceService.triggerClearingBalances();
+  triggerClearingBalances(@Req() req: any) {
+    return this.adminFinanceService.triggerClearingBalances({ adminId: req.user.userId, ip: req.ip, userAgent: req.headers['user-agent'] });
   }
 
   @Post('process-scheduled-payouts')
-  triggerScheduledPayouts() {
-    return this.adminFinanceService.triggerScheduledPayouts();
+  triggerScheduledPayouts(@Req() req: any) {
+    return this.adminFinanceService.triggerScheduledPayouts({ adminId: req.user.userId, ip: req.ip, userAgent: req.headers['user-agent'] });
   }
 
   // ─── Payout method verification ──────────────────────────────────────────

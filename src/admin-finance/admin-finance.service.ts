@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { RedisService } from '../redis/redis.service';
 import { FinanceService } from '../finance/finance.service';
@@ -352,14 +352,42 @@ export class AdminFinanceService {
     return { success: true, data };
   }
 
-  async triggerClearingBalances() {
-    const data = await this.financeService.processClearingBalances();
-    return { success: true, data };
+  /** Runs `job` under the SAME Redis lock the cron uses, so an admin trigger
+   *  and the scheduled run (or two instances) can never process concurrently,
+   *  and records who triggered it. */
+  private async runAdminJob<T>(
+    lockName: string, ttlMs: number, action: string, description: string,
+    actor: { adminId: string; ip?: string; userAgent?: string }, job: () => Promise<T>,
+  ) {
+    let result: T | undefined;
+    const outcome = await this.redis.withLock(`cron-lock:${lockName}`, ttlMs, async () => {
+      result = await job();
+    });
+    void this.activityLogService.log({
+      storeId: 'platform',
+      category: 'finance',
+      action,
+      description: outcome === 'ran' ? description : `${description} — skipped (already running or Redis unavailable)`,
+      actorId: actor.adminId,
+      actorRole: 'admin',
+      ip: actor.ip,
+      userAgent: actor.userAgent,
+      metadata: outcome === 'ran' ? (result as object | undefined) ?? null : { skipped: true },
+    });
+    if (outcome !== 'ran') {
+      throw new ConflictException('This job is already running (or the lock service is unavailable) — try again shortly');
+    }
+    return { success: true, data: result };
   }
 
-  async triggerScheduledPayouts() {
-    const data = await this.financeService.processScheduledPayouts();
-    return { success: true, data };
+  async triggerClearingBalances(actor: { adminId: string; ip?: string; userAgent?: string }) {
+    return this.runAdminJob('finance-clearing-balances', 45 * 60_000, 'clearing_triggered', 'Admin triggered clearing of pending balances', actor,
+      () => this.financeService.processClearingBalances());
+  }
+
+  async triggerScheduledPayouts(actor: { adminId: string; ip?: string; userAgent?: string }) {
+    return this.runAdminJob('scheduled-payouts', 30 * 60_000, 'scheduled_payouts_triggered', 'Admin triggered the scheduled-payouts run', actor,
+      () => this.financeService.processScheduledPayouts());
   }
 
   // ═══════════════════════════════════════════════════════════════════════
