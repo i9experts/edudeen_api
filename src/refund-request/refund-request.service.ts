@@ -209,38 +209,71 @@ export class RefundRequestService {
       throw new BadRequestException('Refund request not found or already reviewed');
     }
 
-    const order = await this.databaseService.repositories.orderModel.findOne({
-      _id: request.orderId, isDelete: false,
-    });
-    if (!order) throw new NotFoundException('Order not found');
-    const sellerOrder = (order.sellerOrders as any[]).find(
-      (so: any) => so._id.toString() === request.sellerOrderId,
-    );
-    if (!sellerOrder) throw new NotFoundException('Seller order not found on this order');
+    // Everything up to and including the ledger debit is retryable: if any of
+    // it fails, put the request back to 'pending' instead of stranding it
+    // 'approved' with nothing refunded (it could then never be re-reviewed).
+    const revertClaim = () =>
+      this.model.updateOne(
+        { _id: requestId, status: 'approved' },
+        { $set: { status: 'pending', reviewedBy: null, reviewedAt: null } },
+      );
 
-    const items = (sellerOrder.items as any[]).filter((i: any) => request.itemIds.includes(i._id.toString()));
+    let order: any;
+    let sellerOrder: any;
+    let items: any[];
+    let buyerRefundAmount: number;
+    let settlementCurrency: string;
+    let buyerRefundCurrency: string;
+    let sellerDebitAmount: number;
+    try {
+      order = await this.databaseService.repositories.orderModel.findOne({
+        _id: request.orderId, isDelete: false,
+      });
+      if (!order) throw new NotFoundException('Order not found');
+      sellerOrder = (order.sellerOrders as any[]).find(
+        (so: any) => so._id.toString() === request.sellerOrderId,
+      );
+      if (!sellerOrder) throw new NotFoundException('Seller order not found on this order');
 
-    const buyerRefundAmount = this.round(items.reduce((s: number, i: any) => s + i.totalPrice, 0));
-    const buyerRefundCurrency = order.currency || 'USD';
-    const settlementCurrency = sellerOrder.settlementCurrency ?? buyerRefundCurrency;
-    const sellerDebitAmount = this.exchangeRateService.convertWithSnapshots(
-      buyerRefundAmount,
-      buyerRefundCurrency,
-      settlementCurrency,
-      (order.fxSnapshots as any) ?? [],
-    );
+      // Never refund (or debit a seller for) money that was never collected — e.g.
+      // an unpaid COD order a seller marked delivered.
+      if (!order.isPaid) throw new BadRequestException('This order has not been paid — there is nothing to refund');
 
-    // Debit ONLY this seller's wallet — never the other sellerOrders on
-    // this same order, and never proportional across them.
-    await this.financeService.recordRefund(
-      sellerOrder.storeId, sellerOrder.sellerId, order._id.toString(), sellerDebitAmount,
-      actorId, actorRole,
-      {
-        description: `Approved refund — Order #${order.orderNumber}, ${items.length} item(s)`,
-        targetType: 'order',
-        currency: settlementCurrency,
-      },
-    );
+      items = (sellerOrder.items as any[]).filter((i: any) => request.itemIds.includes(i._id.toString()));
+      // State may have changed since the request was filed.
+      const unrefundable = items.filter((i: any) => ['refunded', 'cancelled'].includes(i.status));
+      if (unrefundable.length > 0) {
+        throw new BadRequestException('One or more items were already refunded or cancelled');
+      }
+
+      // Capped by what is still refundable per item (totalPrice minus anything already refunded).
+      buyerRefundAmount = this.round(items.reduce((sum: number, i: any) => sum + Math.max(0, i.totalPrice - (i.refundedAmount ?? 0)), 0));
+      if (!(buyerRefundAmount > 0)) throw new BadRequestException('Nothing left to refund on these items');
+
+      buyerRefundCurrency = order.currency || 'USD';
+      settlementCurrency = sellerOrder.settlementCurrency ?? buyerRefundCurrency;
+      sellerDebitAmount = this.exchangeRateService.convertWithSnapshots(
+        buyerRefundAmount,
+        buyerRefundCurrency,
+        settlementCurrency,
+        (order.fxSnapshots as any) ?? [],
+      );
+
+      // Debit ONLY this seller's wallet — never the other sellerOrders on
+      // this same order, and never proportional across them.
+      await this.financeService.recordRefund(
+        sellerOrder.storeId, sellerOrder.sellerId, order._id.toString(), sellerDebitAmount,
+        actorId, actorRole,
+        {
+          description: `Approved refund — Order #${order.orderNumber}, ${items.length} item(s)`,
+          targetType: 'order',
+          currency: settlementCurrency,
+        },
+      );
+    } catch (err) {
+      await revertClaim();
+      throw err;
+    }
 
     let stripeRefundId: string | null = null;
     if (order.paymentType === 'stripe') {
