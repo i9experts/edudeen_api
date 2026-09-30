@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import {
   Injectable,
   NotFoundException,
@@ -26,7 +27,7 @@ export class CategoriesService {
   ) {}
 
   private audit(action: string, description: string, meta: AdminAuditMeta, targetId?: string, metadata?: object) {
-    this.activityLogService.log({
+    void this.activityLogService.log({
       storeId: 'platform',
       category: 'settings',
       action,

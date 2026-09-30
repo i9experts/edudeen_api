@@ -9,6 +9,7 @@ import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 import { round } from 'src/common/number.util';
+import type { ManualPaymentProof } from './schemas/manual-payment-proof.schema';
 import { SubmitManualPaymentDto } from './dto/submit-manual-payment.dto';
 import { ReuploadManualPaymentDto } from './dto/reupload-manual-payment.dto';
 
@@ -28,6 +29,8 @@ function sellerPayoutBasis(so: any): number {
 function sellerPayoutCurrency(so: any, order: any): string {
   return so.settlementCurrency ?? order.currency ?? 'USD';
 }
+
+type ProofLike = Partial<ManualPaymentProof> & { toObject?: () => Partial<ManualPaymentProof> };
 
 const PROOF_FOLDER = 'private/payment-proofs';
 const PROOF_URL_TTL_SECONDS = 10 * 60;
@@ -49,7 +52,7 @@ export class ManualPaymentsService {
 
   /** Signed, short-lived view URL for a private proof; legacy proofs keep
    *  their stored public URL. Never persisted. */
-  private proofViewUrl(proof: any): string | null {
+  private proofViewUrl(proof: Partial<ManualPaymentProof> | null | undefined): string | null {
     if (proof?.proofPublicId) {
       return this.uploadService.generateSignedUrl(
         proof.proofPublicId, proof.proofResourceType ?? 'image', PROOF_URL_TTL_SECONDS, undefined, true,
@@ -60,9 +63,11 @@ export class ManualPaymentsService {
 
   /** Response shape: `proofImageUrl` stays populated (signed for private
    *  proofs) so existing clients keep working; the storage ids are hidden. */
-  private presentProof(proof: any) {
-    const plain = typeof proof?.toObject === 'function' ? proof.toObject() : proof;
-    const { proofPublicId, proofResourceType, ...rest } = plain;
+  private presentProof(proof: ProofLike): Partial<ManualPaymentProof> & Record<string, unknown> {
+    const plain = typeof proof.toObject === 'function' ? proof.toObject() : proof;
+    const rest: Partial<ManualPaymentProof> & Record<string, unknown> = { ...plain };
+    delete rest.proofPublicId;
+    delete rest.proofResourceType;
     return { ...rest, proofImageUrl: this.proofViewUrl(plain) };
   }
 
