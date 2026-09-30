@@ -67,6 +67,16 @@ export class SeoResolutionService {
   /** Called by any service that writes to Product.seo/Category.seo/Store.seo — must be invoked with the real entityId (not a slug), since that's how the cache key is built for writes. */
   async invalidate(entityType: SeoEntityType, entityId: string): Promise<void> {
     await this.redis.del(this.cacheKey(entityType, entityId));
+    // The public endpoint caches under whatever the caller used — the slug too. Deleting only the id key left the
+    // slug entry stale for up to 10 minutes, so an unpublished / suspended / noindex-ed entity kept being served.
+    try {
+      const repos = this.db.repositories;
+      const model: any = entityType === 'product' ? repos.productModel : entityType === 'category' ? repos.categoryModel : repos.storeModel;
+      const doc = /^[a-f0-9]{24}$/i.test(entityId) ? await model.findById(entityId).select('slug').lean() : null;
+      if (doc?.slug) await this.redis.del(this.cacheKey(entityType, doc.slug));
+    } catch {
+      // a cache-invalidation lookup must never fail the write that triggered it
+    }
   }
 
   private cacheKey(entityType: SeoEntityType, entityIdOrSlug: string): string {
@@ -155,7 +165,9 @@ export class SeoResolutionService {
 
   private async resolveCategory(idOrSlug: string): Promise<ResolvedSeoMeta> {
     const { categoryModel } = this.db.repositories;
-    const category = await categoryModel.findById(idOrSlug).lean();
+    // Deleted / inactive categories have no public metadata; a non-ObjectId is a 404, not a CastError 500.
+    if (typeof idOrSlug !== 'string' || !/^[a-f0-9]{24}$/i.test(idOrSlug)) throw new NotFoundException('Category not found.');
+    const category = await categoryModel.findOne({ _id: idOrSlug, isDelete: false, status: 'active' }).lean();
     if (!category) throw new NotFoundException('Category not found.');
 
     const settings = await this.platformSeoService.getSettings();

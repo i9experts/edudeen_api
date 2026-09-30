@@ -62,7 +62,10 @@ export class SeoCanonicalService {
     const rule = await this.findOwned(storeId, ruleId);
     if (dto.canonicalUrl) assertSafeSeoDestination(dto.canonicalUrl);
 
-    Object.assign(rule, dto);
+    // Explicit fields only (see SeoRedirectsService.update).
+    if (dto.pathPattern !== undefined) rule.pathPattern = dto.pathPattern;
+    if (dto.canonicalUrl !== undefined) rule.canonicalUrl = dto.canonicalUrl;
+    if (dto.isActive !== undefined) rule.isActive = dto.isActive;
     await rule.save();
 
     await this.activityLog.log({

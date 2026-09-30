@@ -5,7 +5,7 @@ import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { SeoResolutionService } from './seo-resolution.service';
 import { UpdateSeoMetaDto } from '../dto/update-seo-meta.dto';
 import { UpdateStoreChecklistItemDto } from '../dto/update-store-checklist.dto';
-import { assertSafeSeoDestination } from './seo-url-safety.util';
+import { assertSafeSeoDestination, pickSeoMeta } from './seo-url-safety.util';
 import { computeSeoCompleteness } from './seo-content.service';
 
 // Manual checklist items a seller ticks themselves — the automated ones
@@ -64,7 +64,7 @@ export class StoreSeoService {
     if (!store) throw new NotFoundException('Store not found.');
 
     const current = (store as any).seo?.toObject?.() ?? (store as any).seo ?? {};
-    (store as any).seo = { ...current, ...dto, aiGenerated: false, updatedAt: new Date() };
+    (store as any).seo = { ...current, ...pickSeoMeta(dto as unknown as Record<string, unknown>), aiGenerated: false, updatedAt: new Date() };
     await store.save();
 
     await this.resolution.invalidate('store', storeId);

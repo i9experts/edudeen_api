@@ -1,10 +1,10 @@
 /* eslint-disable prettier/prettier */
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/database/databaseservice';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { SeoResolutionService } from './seo-resolution.service';
 import { UpdateSeoMetaDto } from '../dto/update-seo-meta.dto';
-import { assertSafeSeoDestination } from './seo-url-safety.util';
+import { assertSafeSeoDestination, pickSeoMeta } from './seo-url-safety.util';
 import { toCsv } from 'src/analytics/utils/csv.util';
 
 /**
@@ -34,7 +34,7 @@ export class SeoContentService {
     const category = await this.db.repositories.categoryModel.findById(categoryId);
     if (!category || (category as any).isDelete) throw new NotFoundException('Category not found.');
 
-    const merged = { ...(category as any).seo?.toObject?.() ?? (category as any).seo, ...dto, updatedAt: new Date() };
+    const merged = { ...(category as any).seo?.toObject?.() ?? (category as any).seo, ...pickSeoMeta(dto as unknown as Record<string, unknown>), updatedAt: new Date() };
     (category as any).seo = merged;
     await category.save();
 
@@ -149,7 +149,7 @@ export class SeoContentService {
     const product = await this.db.repositories.productModel.findOne({ _id: productId, storeId, isDelete: false });
     if (!product) throw new NotFoundException('Product not found.');
 
-    const merged = { ...(product as any).seo?.toObject?.() ?? (product as any).seo, ...dto, aiGenerated: false, updatedAt: new Date() };
+    const merged = { ...(product as any).seo?.toObject?.() ?? (product as any).seo, ...pickSeoMeta(dto as unknown as Record<string, unknown>), aiGenerated: false, updatedAt: new Date() };
     (product as any).seo = merged;
     await product.save();
 
@@ -236,7 +236,8 @@ export class SeoContentService {
     if (!store) throw new NotFoundException('Store not found.');
 
     const seo = (store as any).seo ?? {};
-    seo.pages = { ...(seo.pages ?? {}), [pageId]: { ...(seo.pages?.[pageId] ?? {}), ...dto } };
+    if (!/^[a-f0-9]{24}$/i.test(pageId)) throw new BadRequestException('Invalid page id.');
+    seo.pages = { ...(seo.pages ?? {}), [pageId]: { ...(seo.pages?.[pageId] ?? {}), ...pickSeoMeta(dto as unknown as Record<string, unknown>) } };
     (store as any).seo = seo;
     await store.save();
 

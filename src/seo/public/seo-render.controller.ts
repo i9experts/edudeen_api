@@ -69,7 +69,7 @@ ${meta.noindex ? '<meta name="robots" content="noindex,follow">' : ''}
 ${meta.ogImage ? `<meta property="og:image" content="${escapeHtml(meta.ogImage)}">` : ''}
 <meta property="og:url" content="${escapeHtml(meta.url)}">
 <meta property="og:type" content="${meta.entityType === 'product' ? 'product' : 'website'}">
-<meta name="twitter:card" content="${meta.twitterCard}">
+<meta name="twitter:card" content="${escapeHtml(String(meta.twitterCard ?? "summary"))}">
 <meta name="twitter:title" content="${escapeHtml(meta.ogTitle)}">
 <meta name="twitter:description" content="${escapeHtml(meta.ogDescription)}">
 ${meta.ogImage ? `<meta name="twitter:image" content="${escapeHtml(meta.ogImage)}">` : ''}

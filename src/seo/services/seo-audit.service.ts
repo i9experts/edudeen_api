@@ -39,7 +39,11 @@ export class SeoAuditService {
   ) {}
 
   async enqueueRun(storeId: string): Promise<{ queued: true }> {
-    await this.auditQueue.add(SEO_AUDIT_RUN_JOB, { storeId });
+    // One audit per store per 5-minute window: BullMQ ignores a job whose id already exists, so repeated clicks (or a
+    // script) can't stack thousands of full-catalogue audits. The time bucket keeps completed jobs from blocking
+    // the next legitimate run forever.
+    const bucket = Math.floor(Date.now() / (5 * 60_000));
+    await this.auditQueue.add(SEO_AUDIT_RUN_JOB, { storeId }, { jobId: `seo-audit-${storeId}-${bucket}` });
     return { queued: true };
   }
 

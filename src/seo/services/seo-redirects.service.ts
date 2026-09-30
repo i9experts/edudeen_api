@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, ConflictException, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/database/databaseservice';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { CreateRedirectDto } from '../dto/create-redirect.dto';
@@ -70,10 +70,19 @@ export class SeoRedirectsService {
   async update(storeId: string | null, redirectId: string, dto: UpdateRedirectDto, actor: { id: string; name?: string; role?: string }) {
     const redirect = await this.findOwned(storeId, redirectId);
     if (dto.destination) assertSafeSeoDestination(dto.destination);
-    if (dto.source) dto.source = normalizeSource(dto.source);
-
-    Object.assign(redirect, dto);
-    await redirect.save();
+    // Explicit fields only. Object.assign(doc, dto) let a seller PATCH `{"storeId": null}` (a platform-wide redirect),
+    // `{"isDelete": ...}` or another store's id — the global ValidationPipe does not strip unknown keys.
+    if (dto.source) redirect.source = normalizeSource(dto.source);
+    if (dto.destination !== undefined) redirect.destination = dto.destination;
+    if (dto.statusCode !== undefined) redirect.statusCode = dto.statusCode;
+    if (dto.isActive !== undefined) redirect.isActive = dto.isActive;
+    if (redirect.source === redirect.destination) throw new BadRequestException('A redirect cannot point to itself.');
+    try {
+      await redirect.save();
+    } catch (err) {
+      if ((err as { code?: number })?.code === 11000) throw new BadRequestException('A redirect for this source already exists.');
+      throw err;
+    }
 
     await this.activityLog.log({
       storeId: storeId ?? undefined,

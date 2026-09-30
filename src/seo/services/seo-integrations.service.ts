@@ -47,7 +47,30 @@ export class SeoIntegrationsService {
     return impl;
   }
 
+  /**
+   * `redirect_uri` was fully caller-controlled and forwarded to Google. Google only accepts URIs registered on the
+   * OAuth client, but our side must not accept arbitrary ones either. Allowed: this platform's web origins and any
+   * exact URLs / origins listed in SEO_OAUTH_REDIRECT_URIS (comma separated); localhost only outside production.
+   */
+  assertAllowedRedirectUri(redirectUri: string): void {
+    let url: URL;
+    try { url = new URL(redirectUri); } catch { throw new BadRequestException('redirectUri must be a valid URL.'); }
+    const origins = new Set<string>(['https://edudeen.com', 'https://www.edudeen.com', 'https://staging.edudeen.com']);
+    const webApp = process.env.WEB_APP_URL;
+    if (webApp) { try { origins.add(new URL(webApp).origin); } catch { /* ignore a malformed env value */ } }
+    for (const entry of (process.env.SEO_OAUTH_REDIRECT_URIS ?? '').split(',')) {
+      const e = entry.trim();
+      if (!e) continue;
+      try { origins.add(new URL(e).origin); } catch { /* ignore */ }
+    }
+    const isLocal = process.env.NODE_ENV !== 'production' && ['localhost', '127.0.0.1'].includes(url.hostname);
+    if (url.username || url.password || (!isLocal && (url.protocol !== 'https:' || !origins.has(url.origin)))) {
+      throw new BadRequestException('redirectUri is not an allowed redirect URL.');
+    }
+  }
+
   getAuthorizationUrl(provider: SeoIntegrationProvider, redirectUri: string, state: string): string {
+    this.assertAllowedRedirectUri(redirectUri);
     return this.getProvider(provider).getAuthorizationUrl(redirectUri, state);
   }
 
@@ -64,6 +87,15 @@ export class SeoIntegrationsService {
     actor: { id: string; name?: string; role?: string },
   ) {
     const impl = this.getProvider(provider);
+    this.assertAllowedRedirectUri(redirectUri);
+    // The identifier is interpolated into Google API paths — accept only the exact shape each provider uses
+    // (a value like "../../other/endpoint" would have redirected the request, with the seller's token, elsewhere).
+    if (provider === 'ga4' && !/^properties\/\d{1,20}$/.test(siteIdentifier)) {
+      throw new BadRequestException('GA4 property must look like "properties/123456789".');
+    }
+    if (provider === 'merchant_center' && !/^\d{1,20}$/.test(siteIdentifier)) {
+      throw new BadRequestException('Merchant Center account id must be numeric.');
+    }
     const tokens = await impl.exchangeCodeForTokens(authCode, redirectUri);
 
     const owns = await impl.verifyOwnership(tokens.accessToken, siteIdentifier);

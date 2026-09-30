@@ -1,26 +1,26 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty } from 'class-validator';
+import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { BadRequestException } from '@nestjs/common';
 import { SEO_INTEGRATION_PROVIDERS } from '../schemas/seo-integration.schema';
 
 export class ConnectIntegrationDto {
   @ApiProperty({ description: 'OAuth authorization code (or, for Bing, the pasted API key)' })
-  @IsString() @IsNotEmpty()
+  @IsString() @IsNotEmpty() @MaxLength(2048)
   code: string;
 
   @ApiProperty({ example: 'https://edudeen.com/seo/integrations/callback' })
-  @IsString() @IsNotEmpty()
+  @IsString() @IsNotEmpty() @MaxLength(2048)
   redirectUri: string;
 
   @ApiProperty({ description: 'Site URL, GA4 property id, or Merchant Center account id, depending on provider' })
-  @IsString() @IsNotEmpty()
+  @IsString() @IsNotEmpty() @MaxLength(512)
   siteIdentifier: string;
 }
 
 export class GetAuthUrlDto {
   @ApiProperty({ example: 'https://edudeen.com/seo/integrations/callback' })
-  @IsString() @IsNotEmpty()
+  @IsString() @IsNotEmpty() @MaxLength(2048)
   redirectUri: string;
 }
 
