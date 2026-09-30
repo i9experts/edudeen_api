@@ -72,6 +72,13 @@ describe('ManualPaymentsService', () => {
       await expect(service.submitPayment(USER_ID, { checkoutId: 'c1' } as any, undefined)).rejects.toThrow(BadRequestException);
     });
 
+    it('uploads the proof BEFORE placing orders: a failed upload leaves no orphan order', async () => {
+      (uploadService.uploadPrivateFile as jest.Mock).mockRejectedValueOnce(new Error('cloudinary down'));
+      paymentService.manualBankTransferPayment = jest.fn();
+      await expect(service.submitPayment(USER_ID, { checkoutId: 'c1' } as any, FAKE_FILE)).rejects.toThrow('cloudinary down');
+      expect(paymentService.manualBankTransferPayment).not.toHaveBeenCalled();
+    });
+
     it('places the order via PaymentService, uploads the proof, and records both USD and PKR amounts', async () => {
       const orders = [{ _id: 'order-1', orderNumber: 'ORD-1', totalAmount: 27800, currency: 'PKR' }];
       paymentService.manualBankTransferPayment = jest.fn().mockResolvedValue({ orders, amountUSD: 100, amountPKR: 27800, fxRate: 278 });

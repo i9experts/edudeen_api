@@ -109,8 +109,10 @@ export class ManualPaymentsService {
   async submitPayment(userId: string, dto: SubmitManualPaymentDto, file: Express.Multer.File | undefined) {
     if (!file) throw new BadRequestException('A payment proof image (screenshot or receipt) is required');
 
-    const { orders, amountUSD, amountPKR, fxRate } = await this.paymentService.manualBankTransferPayment(userId, dto.checkoutId);
+    // Upload FIRST: if it fails, nothing has been placed. (Placing the orders
+    // first left unpaid orders with no proof and no way for the buyer to retry.)
     const upload = await this.uploadService.uploadPrivateFile(file, PROOF_FOLDER);
+    const { orders, amountUSD, amountPKR, fxRate } = await this.paymentService.manualBankTransferPayment(userId, dto.checkoutId);
 
     const proof = await this.proofModel.create({
       userId,

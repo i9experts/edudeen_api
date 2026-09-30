@@ -2,6 +2,7 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  ConflictException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DatabaseService } from 'src/database/databaseservice';
@@ -881,6 +882,32 @@ export class PaymentService {
     );
   }
 
+  /** Exclusive, atomic claim for the "place order now" paths (COD, bank
+   *  transfer). Only one concurrent request can win; the rest get a 409 instead
+   *  of creating duplicate orders / double-decrementing stock / double-spending
+   *  coupons and gift cards. Released again if order creation fails so the
+   *  buyer can retry. */
+  private async claimCheckoutForPlacement(checkoutId: string, userId: string) {
+    const claimed = await this.databaseService.repositories.checkoutModel.findOneAndUpdate(
+      {
+        _id: checkoutId, userId, isDelete: false,
+        status: { $in: ['pending', 'payment_pending'] },
+        orderPlacementStartedAt: null,
+      },
+      { $set: { orderPlacementStartedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+    if (!claimed) throw new ConflictException('This checkout is already being processed');
+    return claimed;
+  }
+
+  private async releaseCheckoutPlacementClaim(checkoutId: string) {
+    await this.databaseService.repositories.checkoutModel.updateOne(
+      { _id: checkoutId, status: { $ne: 'completed' } },
+      { $set: { orderPlacementStartedAt: null } },
+    );
+  }
+
   async codPayment(userId: string, body: any) {
     const { checkoutId } = body;
     if (!checkoutId) throw new BadRequestException('checkoutId is required');
@@ -946,13 +973,21 @@ export class PaymentService {
       }
     }
 
-    await checkoutModel.findByIdAndUpdate(checkoutId, {
-      paymentType: 'cash_on_delivery',
-      status: 'payment_pending',
-    });
+    await this.claimCheckoutForPlacement(checkoutId, userId);
 
-    const codPaymentInfo = { paymentType: 'cash_on_delivery', isPaid: false };
-    const orders = await this.createOrder(userId, checkout, orderModel, addressModel, codPaymentInfo, codPaymentInfo);
+    let orders: any[];
+    try {
+      await checkoutModel.findByIdAndUpdate(checkoutId, {
+        paymentType: 'cash_on_delivery',
+        status: 'payment_pending',
+      });
+
+      const codPaymentInfo = { paymentType: 'cash_on_delivery', isPaid: false };
+      orders = await this.createOrder(userId, checkout, orderModel, addressModel, codPaymentInfo, codPaymentInfo);
+    } catch (err) {
+      await this.releaseCheckoutPlacementClaim(checkoutId);
+      throw err;
+    }
 
     await paymentTransactionModel.create({
       userId,
@@ -1057,19 +1092,27 @@ export class PaymentService {
       amountPKR = this.round(checkout.totalAmount * ratePerUSD);
     }
 
-    await checkoutModel.findByIdAndUpdate(checkoutId, {
-      paymentType: 'manual_bank_transfer',
-      status: 'payment_pending',
-      fxSnapshots: effectiveSnapshots,
-    });
-    checkout.fxSnapshots = effectiveSnapshots as any;
+    await this.claimCheckoutForPlacement(checkoutId, userId);
 
-    const pendingVerificationInfo = { paymentType: 'manual_bank_transfer', isPaid: false, paymentStatus: 'pending_verification' };
-    const orders = await this.createOrder(
-      userId, checkout, orderModel, addressModel,
-      pendingVerificationInfo, pendingVerificationInfo,
-      currencyConversion,
-    );
+    let orders: any[];
+    try {
+      await checkoutModel.findByIdAndUpdate(checkoutId, {
+        paymentType: 'manual_bank_transfer',
+        status: 'payment_pending',
+        fxSnapshots: effectiveSnapshots,
+      });
+      checkout.fxSnapshots = effectiveSnapshots as any;
+
+      const pendingVerificationInfo = { paymentType: 'manual_bank_transfer', isPaid: false, paymentStatus: 'pending_verification' };
+      orders = await this.createOrder(
+        userId, checkout, orderModel, addressModel,
+        pendingVerificationInfo, pendingVerificationInfo,
+        currencyConversion,
+      );
+    } catch (err) {
+      await this.releaseCheckoutPlacementClaim(checkoutId);
+      throw err;
+    }
 
     await paymentTransactionModel.create({
       userId,

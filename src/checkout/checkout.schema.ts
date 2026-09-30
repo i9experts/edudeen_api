@@ -270,6 +270,12 @@ export class Checkout {
   @Prop({ type: Date, default: null })
   expiredAt: Date | null;
 
+  // Set atomically by the COD / bank-transfer paths (see
+  // PaymentService.claimCheckoutForPlacement) so two concurrent requests for
+  // the same checkout can never both place orders. Null/absent = unclaimed.
+  @Prop({ type: Date, default: null })
+  orderPlacementStartedAt: Date | null;
+
   // Marketing attribution — client-reported (mobile app has no meaningful
   // Referer/UTM headers), captured at checkout-creation time and copied onto
   // the resulting Order(s) for analytics. Defaults to 'other' when the
