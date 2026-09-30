@@ -24,16 +24,21 @@ export class MarketingService {
     return store;
   }
 
+  /** A percentage must be in (0, 100]; a fixed amount must be positive. Validated
+   *  on the MERGED (existing + patch) values so an update can't sidestep create-time checks. */
+  private assertDiscountValue(type: string, value: number) {
+    if (!Number.isFinite(value) || value <= 0) throw new BadRequestException('Discount value must be greater than 0');
+    if (type === 'percentage' && value > 100) throw new BadRequestException('Percentage discount cannot exceed 100');
+  }
+
   async createCoupon(sellerId: string, storeId: string, dto: CreateCouponDto, ip?: string, userAgent?: string) {
-    await this.verifyStoreOwnership(storeId, sellerId);
+    const store = await this.verifyStoreOwnership(storeId, sellerId);
 
     const code = dto.code.trim().toUpperCase();
     const existing = await this.r.couponModel.findOne({ storeId, code, isDelete: false });
     if (existing) throw new ConflictException(`Coupon code "${code}" already exists for this store`);
 
-    if (dto.discountType === 'percentage' && dto.discountValue > 100) {
-      throw new BadRequestException('Percentage discount cannot exceed 100');
-    }
+    this.assertDiscountValue(dto.discountType, dto.discountValue);
 
     const coupon = await this.r.couponModel.create({
       storeId,
@@ -41,6 +46,9 @@ export class MarketingService {
       code,
       discountType: dto.discountType,
       discountValue: dto.discountValue,
+      // A fixed amount is only meaningful in the store's own currency — without
+      // this checkout read it as USD (500 PKR became 500 USD).
+      currency: dto.discountType === 'fixed' ? (store.baseCurrency ?? 'USD') : null,
       minOrderAmount: dto.minOrderAmount ?? null,
       usageLimit: dto.usageLimit ?? null,
       expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
@@ -82,15 +90,29 @@ export class MarketingService {
   }
 
   async updateCoupon(sellerId: string, storeId: string, couponId: string, dto: UpdateCouponDto, ip?: string, userAgent?: string) {
-    await this.verifyStoreOwnership(storeId, sellerId);
+    const store = await this.verifyStoreOwnership(storeId, sellerId);
 
     const coupon = await this.r.couponModel.findOne({ _id: couponId, storeId, isDelete: false });
     if (!coupon) throw new NotFoundException('Coupon not found');
 
+    const mergedType = dto.discountType ?? coupon.discountType;
+    const mergedValue = dto.discountValue ?? coupon.discountValue;
+    if (dto.discountType !== undefined || dto.discountValue !== undefined) this.assertDiscountValue(mergedType, mergedValue);
+
     const update: any = {};
-    if (dto.code !== undefined) update.code = dto.code.trim().toUpperCase();
+    if (dto.code !== undefined) {
+      const newCode = dto.code.trim().toUpperCase();
+      if (newCode !== coupon.code) {
+        const clash = await this.r.couponModel.findOne({ storeId, code: newCode, isDelete: false, _id: { $ne: couponId } });
+        if (clash) throw new ConflictException(`Coupon code "${newCode}" already exists for this store`);
+      }
+      update.code = newCode;
+    }
     if (dto.discountType !== undefined) update.discountType = dto.discountType;
     if (dto.discountValue !== undefined) update.discountValue = dto.discountValue;
+    if (dto.discountType !== undefined) {
+      update.currency = dto.discountType === 'fixed' ? (store.baseCurrency ?? 'USD') : null;
+    }
     if (dto.minOrderAmount !== undefined) update.minOrderAmount = dto.minOrderAmount;
     if (dto.usageLimit !== undefined) update.usageLimit = dto.usageLimit;
     if (dto.expiresAt !== undefined) update.expiresAt = new Date(dto.expiresAt);

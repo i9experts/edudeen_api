@@ -68,13 +68,21 @@ export class DiscountsService {
   }
 
   async updateDiscount(sellerId: string, storeId: string, discountId: string, dto: UpdateAutomaticDiscountDto) {
-    await this.verifyStoreOwnership(storeId, sellerId);
+    const store = await this.verifyStoreOwnership(storeId, sellerId);
     if (dto.target) this.validateTargeting(dto as any);
-    if (dto.discountType === 'percentage' && dto.discountValue != null && dto.discountValue > 100) {
-      throw new BadRequestException('Percentage discount cannot exceed 100');
-    }
 
-    const patch: any = { ...dto };
+    const current = await this.r.automaticDiscountModel.findOne({ _id: discountId, storeId, isDelete: false });
+    if (!current) throw new NotFoundException('Discount not found');
+    // Validate the MERGED type+value: patching only discountValue on a
+    // percentage discount used to skip the >100 check entirely.
+    const mergedType = dto.discountType ?? current.discountType;
+    const mergedValue = dto.discountValue ?? current.discountValue;
+    if (!Number.isFinite(mergedValue) || mergedValue <= 0) throw new BadRequestException('Discount value must be greater than 0');
+    if (mergedType === 'percentage' && mergedValue > 100) throw new BadRequestException('Percentage discount cannot exceed 100');
+
+    // Only fields actually sent (an own-`undefined` key would $set null-ish).
+    const patch: any = Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined));
+    if (dto.discountType !== undefined) patch.currency = dto.discountType === 'fixed' ? (store.baseCurrency ?? 'USD') : null;
     if (dto.startsAt !== undefined) patch.startsAt = dto.startsAt ? new Date(dto.startsAt) : null;
     if (dto.endsAt !== undefined) patch.endsAt = dto.endsAt ? new Date(dto.endsAt) : null;
 

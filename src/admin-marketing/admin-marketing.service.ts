@@ -222,7 +222,10 @@ export class AdminMarketingService {
   }
 
   async updatePlatformCoupon(id: string, dto: UpdatePlatformCouponDto, meta: AuditMeta) {
-    await this.findPlatformCouponOrThrow(id);
+    const existing = await this.findPlatformCouponOrThrow(id);
+    const mergedValue = (dto as any).discountValue ?? existing.discountValue;
+    if (!Number.isFinite(mergedValue) || mergedValue <= 0) throw new BadRequestException('Discount value must be greater than 0');
+    if (existing.discountType === 'percentage' && mergedValue > 100) throw new BadRequestException('Percentage discount cannot exceed 100');
     const update: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(dto)) {
       if (value === undefined) continue;

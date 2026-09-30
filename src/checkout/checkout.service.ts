@@ -429,7 +429,7 @@ export class CheckoutService {
         if (eligibleSubtotal <= 0) continue;
 
         const amount = discount.discountType === 'percentage'
-          ? this.round(eligibleSubtotal * (discount.discountValue / 100))
+          ? Math.min(this.round(eligibleSubtotal * (Math.min(discount.discountValue, 100) / 100)), eligibleSubtotal)
           : Math.min(discount.discountValue, eligibleSubtotal);
         if (amount <= 0) continue;
 
@@ -889,7 +889,7 @@ export class CheckoutService {
     // checkout currency, before being subtracted from a store-native total.
     const totalDiscount =
       coupon.discountType === 'percentage'
-        ? this.round(eligibleSubtotal * (coupon.discountValue / 100))
+        ? Math.min(this.round(eligibleSubtotal * (Math.min(coupon.discountValue, 100) / 100)), eligibleSubtotal)
         : Math.min(
             this.exchangeRateService.convertWithSnapshots(
               coupon.discountValue,
