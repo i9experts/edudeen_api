@@ -22,7 +22,7 @@ export class GenerateListingDto extends BaseGenerateDto {
 
   /** Accepts a single string or string[] per the contract. */
   @IsDefined()
-  @Transform(({ value }) => (Array.isArray(value) ? value : typeof value === 'string' ? value.slice(0, 500) : null))
+  @Transform(({ value }: { value: unknown }) => (Array.isArray(value) ? (value as unknown[]) : typeof value === 'string' ? value.slice(0, 500) : null))
   @ValidateIf((o) => Array.isArray(o.keywords))
   @ArrayMaxSize(30) @IsString({ each: true }) @MaxLength(100, { each: true })
   keywords: string | string[];

@@ -50,9 +50,9 @@ export class AiCreditsService {
         { storeId },
         { $setOnInsert: { storeId, sellerId, balance: limits.aiCreditsPerMonth, monthlyAllowance: limits.aiCreditsPerMonth, lastResetAt: new Date() } },
         { upsert: true, returnDocument: 'after' },
-      ) as NonNullable<Awaited<ReturnType<typeof this.walletModel.findOne>>>;
-    } catch (err: any) {
-      if (err?.code !== 11000) throw err;
+      );
+    } catch (err) {
+      if ((err as { code?: number })?.code !== 11000) throw err;
       return (await this.walletModel.findOne({ storeId }))!;
     }
   }
