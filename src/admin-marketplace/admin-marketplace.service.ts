@@ -363,10 +363,16 @@ export class AdminMarketplaceService {
     }
     assertValidVerificationTransition(current, 'verified');
 
-    await this.r.storeModel.findByIdAndUpdate(id, {
-      $set: { status: 'active', verificationStatus: 'verified', reviewedAt: new Date() },
-      $push: { 'verification.history': this.pushVerificationHistory('approved', null, meta) },
-    });
+    // Atomic + conditional: two admins approving at once (or an approve racing a reject/suspend) can't both
+    // win, and a SUSPENDED store is never silently re-activated by an approval.
+    const approved = await this.r.storeModel.findOneAndUpdate(
+      { _id: id, isDelete: false, verificationStatus: { $in: ['pending', 'under_review'] }, status: { $ne: 'suspended' } },
+      {
+        $set: { status: 'active', verificationStatus: 'verified', reviewedAt: new Date() },
+        $push: { 'verification.history': this.pushVerificationHistory('approved', null, meta) },
+      },
+    );
+    if (!approved) throw new BadRequestException('This lead was already reviewed, or the store is suspended');
 
     this.log('lead_approved', `Store "${store.name}" approved and is now live`, meta, id, 'store');
     this.notificationsService.notify({
@@ -389,10 +395,14 @@ export class AdminMarketplaceService {
     const current: VerificationStatus = store.verificationStatus ?? 'not_started';
     assertValidVerificationTransition(current, 'rejected');
 
-    await this.r.storeModel.findByIdAndUpdate(id, {
-      $set: { status: 'rejected', verificationStatus: 'rejected', rejectionReason: reason, reviewedAt: new Date() },
-      $push: { 'verification.history': this.pushVerificationHistory('rejected', reason, meta) },
-    });
+    const rejected = await this.r.storeModel.findOneAndUpdate(
+      { _id: id, isDelete: false, verificationStatus: { $in: ['pending', 'under_review'] }, status: { $ne: 'suspended' } },
+      {
+        $set: { status: 'rejected', verificationStatus: 'rejected', rejectionReason: reason, reviewedAt: new Date() },
+        $push: { 'verification.history': this.pushVerificationHistory('rejected', reason, meta) },
+      },
+    );
+    if (!rejected) throw new BadRequestException('This lead was already reviewed, or the store is suspended');
 
     this.log('lead_rejected', `Store "${store.name}" rejected: ${reason}`, meta, id, 'store');
     this.notificationsService.notify({

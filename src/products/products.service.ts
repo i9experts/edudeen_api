@@ -19,6 +19,7 @@ import { EducationLevel } from './schemas/product.schema';
 import { EducationLevelService } from './education-level.service';
 import { UploadService } from 'src/upload/upload.service';
 import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
+import { sanitizeDigitalForPublicView } from './product-public-view.util';
 import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings } from './product-input.util';
 import { generateUniqueSlug } from 'src/common/slug.util';
 import { RedisService } from 'src/redis/redis.service';
@@ -152,19 +153,8 @@ export class ProductsService {
   // they'll get, never the storage manifest itself. The actual bytes are
   // only ever reachable through OrdersService's signed download flow after
   // payment, regardless of this — but the manifest shouldn't leak either.
-  private sanitizeDigitalForPublicView<T extends { digital?: any }>(
-    product: T,
-  ): T {
-    if (!product?.digital) return product;
-    const { files, preview, ...safeDigital } = product.digital;
-    return {
-      ...product,
-      digital: {
-        ...safeDigital,
-        fileCount: Array.isArray(files) ? files.length : 0,
-        previewAvailable: !!preview?.enabled,
-      },
-    };
+  private sanitizeDigitalForPublicView<T extends { digital?: any }>(product: T): T {
+    return sanitizeDigitalForPublicView(product);
   }
 
   /** subCategoryId must be an ACTIVE child of the product's root category. It used to be stored unchecked
@@ -329,6 +319,7 @@ export class ProductsService {
         .lean();
     }
     if (!product) throw new NotFoundException('Product not found');
+    if (!(await this.isStoreLive(product.storeId))) throw new NotFoundException('Product not found');
     if (product.type !== 'digital' || !product.digital?.preview?.enabled) {
       throw new BadRequestException(
         'Preview is not available for this product',
@@ -844,19 +835,29 @@ export class ProductsService {
     return productIds.map((id) => byId.get(id)).filter(Boolean);
   }
 
+  /** A store's catalogue is only publicly visible while the store itself is live. Several public read paths
+   *  (new arrivals, best sellers, trending, pinned, variant lookup, digital preview) only checked the PRODUCT's
+   *  status, so a pending/suspended/deleted store's products stayed reachable to anyone with an id. */
+  private async isStoreLive(storeId: string): Promise<boolean> {
+    if (typeof storeId !== 'string' || !isValidObjectId(storeId)) return false;
+    return !!(await this.databaseService.repositories.storeModel.exists({ _id: storeId, status: 'active', isDelete: false }));
+  }
+
   // ── Storefront promotion sections (Best Seller / New Arrival / Trending / Pinned) ──
   // Public, read-only. No new schema — Best Seller/Trending are derived from the
   // same order-aggregation util analytics already uses; New Arrival is a plain
   // sort; Pinned reuses `getShapedProductsByIds` (order-preserving by id list).
 
   async getPinnedProducts(storeId: string, customerId?: string | null) {
-    const store = await this.databaseService.repositories.storeModel.findOne({ _id: storeId, isDelete: false }).lean();
+    if (typeof storeId !== 'string' || !isValidObjectId(storeId)) return { success: true, data: { products: [] } };
+    const store = await this.databaseService.repositories.storeModel.findOne({ _id: storeId, isDelete: false, status: 'active' }).lean();
     if (!store) return { success: true, data: { products: [] } };
     const products = await this.getShapedProductsByIds((store as any).pinnedProductIds ?? [], customerId);
     return { success: true, data: { products } };
   }
 
   async getNewArrivals(storeId: string, limit: number = 12, customerId?: string | null) {
+    if (!(await this.isStoreLive(storeId))) return { success: true, data: { products: [] } };
     const productModel = this.databaseService.repositories.productModel;
     const products = await productModel
       .find({ storeId, status: 'active', isDelete: false })
@@ -867,6 +868,7 @@ export class ProductsService {
   }
 
   private async getTopSellingProducts(storeId: string, from: Date, limit: number, customerId?: string | null) {
+    if (!(await this.isStoreLive(storeId))) return { success: true, data: { products: [] } };
     const { orderModel, productModel } = this.databaseService.repositories;
     const sales = await aggregateProductSales(orderModel, from, new Date(), { 'sellerOrders.storeId': storeId });
     const topIds = [...sales].sort((a, b) => b.unitsSold - a.unitsSold).slice(0, limit).map((s) => s.productId);
@@ -922,7 +924,7 @@ export class ProductsService {
       return { message: 'Product not found', success: false, data: null };
     }
 
-    if (!product) {
+    if (!product || !(await this.isStoreLive(product.storeId))) {
       return {
         message: 'Product not found',
         success: false,
@@ -1010,6 +1012,9 @@ export class ProductsService {
     };
   }
   async getVariantById(variantId: string) {
+    if (typeof variantId !== 'string' || !isValidObjectId(variantId)) {
+      return { message: 'Variant not found', success: false, data: null };
+    }
     const productModel = this.databaseService.repositories.productModel;
     const productVariantModel =
       this.databaseService.repositories.productVariantModel;

@@ -1,3 +1,5 @@
+import { isValidObjectId } from 'mongoose';
+import { sanitizeDigitalForPublicView } from 'src/products/product-public-view.util';
 import {
   Injectable,
   UnauthorizedException,
@@ -7,6 +9,9 @@ import {
 
 import { DatabaseService } from 'src/database/databaseservice';
 import { AddToCartDto, MAX_CART_LINE_QUANTITY } from './dto/add-to-cart.dto';
+
+/** Per-user cap so a wishlist can't grow without bound. */
+const MAX_WISHLIST_ITEMS = 200;
 
 @Injectable()
 export class CartService {
@@ -32,10 +37,13 @@ export class CartService {
       if (requestedStoreId && requestedStoreId !== storeId) {
         throw new BadRequestException('This product is not sold by this store');
       }
+      // Items of a pending/suspended store can't be added (checkout refuses them anyway, but they used to sit in carts).
+      const storeLive = await this.databaseService.repositories.storeModel.exists({ _id: storeId, status: 'active', isDelete: false });
+      if (!storeLive) throw new BadRequestException('Product not found');
 
       // 2️⃣ Get variant
       const variant = await variantModel.findById(dto.productVariantId).lean();
-      if (!variant || variant.isDelete || variant.productId !== dto.productId) {
+      if (!variant || variant.isDelete || variant.status !== 'active' || variant.productId !== dto.productId) {
         throw new BadRequestException('Product variant not found');
       }
 
@@ -380,215 +388,113 @@ export class CartService {
     }
   }
 
+  /** The product exactly as a public browser may see it: live product, live store, no private digital data.
+   *  (The wishlist used to return raw `findById` documents — file manifests and delivery messages included —
+   *  for drafts, deleted and admin-removed products alike.) */
+  private async loadViewableProduct(productId: string) {
+    if (typeof productId !== 'string' || !isValidObjectId(productId)) return null;
+    const { productModel, storeModel } = this.databaseService.repositories;
+    const product = await productModel.findOne({ _id: productId, status: 'active', isDelete: false }).lean();
+    if (!product) return null;
+    const live = await storeModel.exists({ _id: product.storeId, status: 'active', isDelete: false });
+    return live ? sanitizeDigitalForPublicView(product) : null;
+  }
+
+  private async loadVariantLean(variantId: string) {
+    if (typeof variantId !== 'string' || !isValidObjectId(variantId)) return null;
+    return this.databaseService.repositories.productVariantModel.findOne({ _id: variantId, isDelete: false }).lean();
+  }
+
   async addToWishlist(userId: string, storeId: string, body: any) {
     try {
-      const { productId, productVariantId } = body;
+      const { productId, productVariantId } = body ?? {};
 
-      // 1. check duplicate
-      const wishlistItem =
-        await this.databaseService.repositories.wishListModel.findOne({
-          userId,
-          storeId,
-          productId,
-          productVariantId,
-        });
+      // Validate what is being wishlisted: a real, live product; a variant OF that product; and the store is
+      // taken from the product (a mismatched client storeId used to slip past the unique index and inflate
+      // wishlistCount on any product). Capped per user.
+      const product = await this.loadViewableProduct(productId);
+      if (!product) throw new BadRequestException('Product not found');
+      if (storeId && storeId !== product.storeId) throw new BadRequestException('This product is not sold by this store');
+      const variant = await this.loadVariantLean(productVariantId);
+      if (!variant || variant.productId !== productId || variant.status !== 'active') {
+        throw new BadRequestException('Product variant not found');
+      }
+      storeId = product.storeId;
 
+      const { wishListModel, productModel } = this.databaseService.repositories;
+      const view = () => ({ product, variant });
+
+      const wishlistItem = await wishListModel.findOne({ userId, storeId, productId, productVariantId });
       if (wishlistItem) {
-        // 👉 product + variant fetch
-        const product =
-          await this.databaseService.repositories.productModel.findById(
-            productId,
-          );
-        const variant =
-          await this.databaseService.repositories.productVariantModel.findById(
-            productVariantId,
-          );
-
-        return {
-          message: 'Product already in wishlist',
-          data: {
-            wishlist: wishlistItem,
-            product,
-            variant,
-          },
-        };
+        return { message: 'Product already in wishlist', data: { wishlist: wishlistItem, ...view() } };
+      }
+      if ((await wishListModel.countDocuments({ userId })) >= MAX_WISHLIST_ITEMS) {
+        throw new BadRequestException(`Your wishlist is full (${MAX_WISHLIST_ITEMS} items) — remove something first`);
       }
 
-      // 2. create wishlist — guarded by a unique index on
-      // {userId, storeId, productId, productVariantId} for the race window
-      // between the findOne check above and this create() (e.g. a
-      // double-tap firing two near-simultaneous requests)
+      // Guarded by a unique index on {userId, storeId, productId, productVariantId} for the race window
+      // between the findOne above and this create() (e.g. a double-tap).
       let newItem;
       try {
-        newItem = await this.databaseService.repositories.wishListModel.create(
-          { userId, storeId, productId, productVariantId },
-        );
+        newItem = await wishListModel.create({ userId, storeId, productId, productVariantId });
       } catch (err: any) {
         if (err?.code === 11000) {
-          const existing =
-            await this.databaseService.repositories.wishListModel.findOne({
-              userId,
-              storeId,
-              productId,
-              productVariantId,
-            });
-          const product =
-            await this.databaseService.repositories.productModel.findById(
-              productId,
-            );
-          const variant =
-            await this.databaseService.repositories.productVariantModel.findById(
-              productVariantId,
-            );
-          return {
-            message: 'Product already in wishlist',
-            data: { wishlist: existing, product, variant },
-          };
+          const existing = await wishListModel.findOne({ userId, storeId, productId, productVariantId });
+          return { message: 'Product already in wishlist', data: { wishlist: existing, ...view() } };
         }
         throw err;
       }
 
-      await this.databaseService.repositories.productModel.findByIdAndUpdate(
-        productId,
-        {
-          $inc: { wishlistCount: 1 },
-          lastWishlistedAt: new Date(),
-        },
-      );
+      await productModel.findByIdAndUpdate(productId, { $inc: { wishlistCount: 1 }, lastWishlistedAt: new Date() });
 
-      // 3. fetch product + variant
-      const product =
-        await this.databaseService.repositories.productModel.findById(
-          productId,
-        );
-      const variant =
-        await this.databaseService.repositories.productVariantModel.findById(
-          productVariantId,
-        );
-
-      // 4. final response
-      return {
-        message: 'Product added to wishlist successfully',
-        data: {
-          wishlist: newItem,
-          product,
-          variant,
-        },
-      };
+      return { message: 'Product added to wishlist successfully', data: { wishlist: newItem, ...view() } };
     } catch (error: any) {
-      throw new BadRequestException(
-        error.message || 'Failed to add to wishlist',
-      );
+      throw new BadRequestException(error.message || 'Failed to add to wishlist');
     }
   }
 
   async getWishlist(userId: string, storeId: string) {
     try {
-      // 1️⃣ User wishlist lao (is store ke liye)
       const wishlist = await this.databaseService.repositories.wishListModel
-        .find({
-          userId: userId,
-          storeId,
-        })
-        .sort({ createdAt: -1 });
+        .find({ userId, storeId })
+        .sort({ createdAt: -1 })
+        .limit(MAX_WISHLIST_ITEMS);
 
-      // Final grouped array
       const groupedWishlist: any[] = [];
-
-      // 2️⃣ Loop chalao
       for (const item of wishlist) {
-        // Product find karo
-        const product =
-          await this.databaseService.repositories.productModel.findById(
-            item.productId,
-          );
+        // Removed / draft / suspended-store products silently drop out instead of being served.
+        const product = await this.loadViewableProduct(item.productId);
+        if (!product) continue;
+        const variant = await this.loadVariantLean(item.productVariantId);
 
-        // Variant find karo
-        const variant =
-          await this.databaseService.repositories.productVariantModel.findById(
-            item.productVariantId,
-          );
-
-        // Agar product nahi mila
-        if (!product) {
-          continue;
-        }
-
-        // 3️⃣ Check karo product pehle se groupedWishlist me hai ya nahi
-        const existingProduct = groupedWishlist.find(
-          (data) => data.product._id.toString() === product._id.toString(),
-        );
-
-        // 4️⃣ Agar product already mojood hai
+        const existingProduct = groupedWishlist.find((data) => data.product._id.toString() === product._id.toString());
         if (existingProduct) {
-          // Variant push karo
-          if (variant) {
-            existingProduct.variants.push(variant);
-          }
+          if (variant) existingProduct.variants.push(variant);
         } else {
-          // 5️⃣ Naya product add karo
-          groupedWishlist.push({
-            product: product,
-            variants: variant ? [variant] : [],
-          });
+          groupedWishlist.push({ product, variants: variant ? [variant] : [] });
         }
       }
 
-      return {
-        message: 'Wishlist fetched successfully',
-        data: groupedWishlist,
-      };
+      return { message: 'Wishlist fetched successfully', data: groupedWishlist };
     } catch (error: any) {
-      throw new BadRequestException(
-        error.message || 'Failed to fetch wishlist',
-      );
+      throw new BadRequestException(error.message || 'Failed to fetch wishlist');
     }
   }
 
   async getWishlistItem(userId: string, storeId: string, query: any) {
     try {
-      const { productId, productVariantId } = query;
+      const productId = typeof query?.productId === 'string' ? query.productId : undefined;
+      const productVariantId = typeof query?.productVariantId === 'string' ? query.productVariantId : undefined;
+      if (!productId || !productVariantId) throw new BadRequestException('productId and productVariantId are required');
 
-      // 1. wishlist document find
-      const wishlistItem =
-        await this.databaseService.repositories.wishListModel.findOne({
-          userId,
-          storeId,
-          productId,
-          productVariantId,
-        });
+      const wishlistItem = await this.databaseService.repositories.wishListModel.findOne({ userId, storeId, productId, productVariantId });
+      if (!wishlistItem) return { message: 'Wishlist item not found', data: null };
 
-      if (!wishlistItem) {
-        return {
-          message: 'Wishlist item not found',
-          data: null,
-        };
-      }
-
-      // 2. product fetch
-      const product =
-        await this.databaseService.repositories.productModel.findById(
-          productId,
-        );
-
-      // 3. variant fetch
-      const variant =
-        await this.databaseService.repositories.productVariantModel.findById(
-          productVariantId,
-        );
-
-      return {
-        message: 'Wishlist item fetched successfully',
-        data: {
-          wishlist: wishlistItem,
-          product,
-          variant,
-        },
-      };
+      const product = await this.loadViewableProduct(productId);
+      const variant = await this.loadVariantLean(productVariantId);
+      return { message: 'Wishlist item fetched successfully', data: { wishlist: wishlistItem, product, variant } };
     } catch (error: any) {
-      throw new BadRequestException(
-        error.message || 'Failed to fetch wishlist item',
-      );
+      throw new BadRequestException(error.message || 'Failed to fetch wishlist item');
     }
   }
 

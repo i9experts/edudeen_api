@@ -512,3 +512,5 @@ StoreSchema.index({ name: 1 });
 StoreSchema.index({ sellerType: 1 });
 StoreSchema.index({ averageRating: -1 });
 StoreSchema.index({ followersCount: -1 });
+// A custom domain can belong to only one live store. Partial so stores WITHOUT a domain (null) and deleted stores don't collide.
+StoreSchema.index({ customDomain: 1 }, { unique: true, partialFilterExpression: { customDomain: { $type: 'string' }, isDelete: false } });

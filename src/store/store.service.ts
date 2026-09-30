@@ -1,4 +1,6 @@
 /* eslint-disable prettier/prettier */
+import { isValidObjectId } from 'mongoose';
+import { sanitizeDigitalForPublicView, clampInt, queryString } from 'src/products/product-public-view.util';
 import {
   Injectable,
   BadRequestException,
@@ -12,8 +14,7 @@ import {
   BUSINESS_TYPES, ID_DOCUMENT_TYPES, VERIFICATION_DOCUMENT_TYPES,
   determineVerificationLevel, assertValidVerificationTransition,
   type BusinessType, type VerificationDocumentType, type VerificationDocument,
-  type VerificationStatus,
-} from './schemas/store.schema';
+  type VerificationStatus, STORE_ANNOUNCEMENT_TYPES } from './schemas/store.schema';
 import { getVerificationRequirements, isFieldSatisfied } from './verification-requirements.config';
 import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
 import { UploadService } from 'src/upload/upload.service';
@@ -501,6 +502,18 @@ export class StoreService {
     });
   }
 
+  /** Platform-owned hostnames a store must never claim (PLATFORM_DOMAINS env adds more, comma separated). */
+  private isPlatformHost(host: string): boolean {
+    const platform = new Set<string>(['edudeen.com']);
+    const target = CUSTOM_DOMAIN_CNAME_TARGET.toLowerCase().split('.');
+    if (target.length >= 2) platform.add(target.slice(-2).join('.'));
+    for (const d of (process.env.PLATFORM_DOMAINS ?? '').split(',')) {
+      const v = d.trim().toLowerCase();
+      if (v) platform.add(v);
+    }
+    return [...platform].some((d) => host === d || host.endsWith(`.${d}`));
+  }
+
   /** Platform-plan-gated: only stores on a plan with `customDomainAllowed` may set a custom domain. */
   async setCustomDomain(sellerId: string, storeId: string, domain: string | null) {
     const store = await this.databaseService.repositories.storeModel.findOne({ _id: storeId, isDelete: false });
@@ -510,8 +523,16 @@ export class StoreService {
     const normalized = domain ? domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '') : null;
     if (normalized) {
       await this.entitlementsService.assertFeatureAllowed(storeId, 'customDomainAllowed', 'Custom domain');
+      if (normalized.length > 253 || normalized.split('.').some((label) => label.length > 63)) {
+        throw new BadRequestException('Enter a valid domain, e.g. shop.yourbrand.com');
+      }
       if (!/^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/.test(normalized)) {
         throw new BadRequestException('Enter a valid domain, e.g. shop.yourbrand.com');
+      }
+      // Never let a store claim the platform's own hostnames (edudeen.com, api.edudeen.com, another store's
+      // <slug>.edudeen.com ...): with a wildcard DNS record those would pass CNAME verification and hijack them.
+      if (this.isPlatformHost(normalized)) {
+        throw new BadRequestException('This domain belongs to the platform and cannot be used as a custom domain');
       }
       const clash = await this.databaseService.repositories.storeModel.findOne({
         customDomain: normalized, _id: { $ne: storeId }, isDelete: false,
@@ -524,7 +545,15 @@ export class StoreService {
     // of the NEW domain before it can serve as a live storefront.
     if (normalized !== store.customDomain) store.customDomainStatus = 'unverified';
     store.customDomain = normalized;
-    await store.save();
+    try {
+      await store.save();
+    } catch (err) {
+      // The partial unique index on customDomain is the real guard against two concurrent claims.
+      if ((err as { code?: number })?.code === 11000) {
+        throw new BadRequestException('This domain is already connected to another store');
+      }
+      throw err;
+    }
 
     this.activityLogService.log({
       storeId, category: 'settings', action: 'custom_domain_updated',
@@ -609,8 +638,16 @@ export class StoreService {
     if (!store) throw new NotFoundException('Store not found');
     if (store.sellerId !== sellerId) throw new UnauthorizedException('Unauthorized');
 
+    if (!Array.isArray(productIds) || productIds.some((id) => typeof id !== 'string' || !isValidObjectId(id))) {
+      throw new BadRequestException('productIds must be an array of product ids');
+    }
     const limit = await this.adminConfigService.getPlacementLimit('storeFeaturedProducts');
-    store.pinnedProductIds = productIds.slice(0, limit);
+    const requested = [...new Set(productIds)].slice(0, limit);
+    // Only THIS store's live products may be pinned (any id from anywhere used to be stored and rendered publicly).
+    const owned = await this.databaseService.repositories.productModel
+      .find({ _id: { $in: requested }, storeId, isDelete: false, status: 'active' }).select('_id').lean();
+    const ownedIds = new Set(owned.map((p: { _id: { toString(): string } }) => p._id.toString()));
+    store.pinnedProductIds = requested.filter((id) => ownedIds.has(id));
     await store.save();
 
     this.activityLogService.log({
@@ -627,14 +664,34 @@ export class StoreService {
     if (!store) throw new NotFoundException('Store not found');
     if (store.sellerId !== sellerId) throw new UnauthorizedException('Unauthorized');
 
+    // Rendered on the public storefront: constrain everything. A ctaLink of `javascript:...` used to be stored
+    // verbatim; an invalid date or type surfaced as a 500.
+    const str = (v: unknown, field: string, max: number): string | null => {
+      if (v === undefined || v === null || v === '') return null;
+      if (typeof v !== 'string' || v.length > max) throw new BadRequestException(`${field} must be text of at most ${max} characters`);
+      return v;
+    };
+    const message = str(body.message, 'message', 300);
+    const ctaLabel = str(body.ctaLabel, 'ctaLabel', 60);
+    const ctaLink = str(body.ctaLink, 'ctaLink', 2048);
+    if (ctaLink && !/^https?:\/\/[^\s]+$/i.test(ctaLink)) throw new BadRequestException('ctaLink must be an http(s) URL');
+    const type = body.type ?? 'info';
+    if (!(STORE_ANNOUNCEMENT_TYPES as readonly string[]).includes(type)) throw new BadRequestException('Invalid announcement type');
+    const date = (v: unknown, field: string): Date | null => {
+      if (!v) return null;
+      const d = new Date(v as string);
+      if (Number.isNaN(d.getTime())) throw new BadRequestException(`${field} is not a valid date`);
+      return d;
+    };
+
     store.announcementBar = {
-      message: body.message ?? null,
-      type: body.type ?? 'info',
-      ctaLabel: body.ctaLabel ?? null,
-      ctaLink: body.ctaLink ?? null,
-      isActive: !!body.isActive,
-      startAt: body.startAt ? new Date(body.startAt) : null,
-      endAt: body.endAt ? new Date(body.endAt) : null,
+      message,
+      type,
+      ctaLabel,
+      ctaLink,
+      isActive: body.isActive === true,
+      startAt: date(body.startAt, 'startAt'),
+      endAt: date(body.endAt, 'endAt'),
     };
     await store.save();
 
@@ -747,7 +804,12 @@ export class StoreService {
     if (!store) throw new NotFoundException('Store not found');
 
     if (!requestingUserId || store.sellerId !== requestingUserId) {
-      return { success: true, data: store };
+      // Anyone who is not the owner gets ONLY the public storefront shape, and only for a live store. This
+      // route is unauthenticated and used to hand back the raw document (plan, aiCredits, rejectionReason,
+      // verificationStatus, customDomain, POS registers/shifts, seller id...) for stores in ANY status.
+      if (store.status !== 'active') throw new NotFoundException('Store not found');
+      const shaped = await this.shapePublicStoreResponse(store.toObject());
+      return { ...shaped, data: { ...shaped.data, _id: store._id } };
     }
 
     const { sellerModel, productModel, orderModel } = this.databaseService.repositories;
@@ -819,6 +881,32 @@ export class StoreService {
     if (store.sellerId !== sellerId)
       throw new UnauthorizedException('You are not authorized to edit this store');
 
+    // A suspended store is frozen — the admin action must not be editable around (name, logo, category, domain...).
+    if (store.status === 'suspended') throw new BadRequestException('This store is suspended and cannot be edited');
+
+    // Every editable field is text of a sane size (body is untyped: `{}` / arrays used to cast-error into a 500,
+    // and nothing bounded lengths or checked that logo/cover were real https URLs).
+    const text = (v: unknown, field: string, max: number, { required = false } = {}) => {
+      if (typeof v !== 'string' || v.length > max || (required && !v.trim())) {
+        throw new BadRequestException(`${field} must be text of at most ${max} characters`);
+      }
+    };
+    const httpsUrl = (v: unknown, field: string) => {
+      if (v === null || v === '') return;
+      text(v, field, 2048);
+      if (!/^https:\/\/[^\s]+$/i.test(v as string)) throw new BadRequestException(`${field} must be an https URL`);
+    };
+    if (name !== undefined) text(name, 'name', 120, { required: true });
+    if (description !== undefined && description !== null) text(description, 'description', 5000);
+    if (tagline !== undefined && tagline !== null) text(tagline, 'tagline', 200);
+    if (contactPhone !== undefined && contactPhone !== null) text(contactPhone, 'contactPhone', 32);
+    if (contactEmail !== undefined && contactEmail !== null) {
+      text(contactEmail, 'contactEmail', 254);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) throw new BadRequestException('contactEmail must be a valid email address');
+    }
+    if (logo !== undefined) httpsUrl(logo, 'logo');
+    if (coverImage !== undefined) httpsUrl(coverImage, 'coverImage');
+
     if (sellerType && !Object.values(SellerType).includes(sellerType)) {
       throw new BadRequestException('Invalid sellerType');
     }
@@ -861,8 +949,15 @@ export class StoreService {
       updateData.enabledTools = resolveTools(productTypes);
     }
 
-    if (body.categoryId !== undefined) {
+    if (body.categoryId !== undefined && body.categoryId !== store.categoryId) {
+      if (typeof body.categoryId !== 'string' && body.categoryId !== null) throw new BadRequestException('categoryId must be a category id');
       if (body.categoryId) await this.assertValidRootCategory(body.categoryId);
+      // Every product's categoryId is the store's root category (denormalised at creation). Changing the
+      // store's category under existing products would leave them listed in the OLD category.
+      const hasProducts = await this.databaseService.repositories.productModel.exists({ storeId, isDelete: false });
+      if (hasProducts) {
+        throw new BadRequestException('The store category cannot be changed once the store has products');
+      }
       updateData.categoryId = body.categoryId;
     }
 
@@ -958,6 +1053,11 @@ export class StoreService {
       status: 'active',
     }).lean();
     if (!store) throw new NotFoundException('No store is connected to this domain');
+
+    // The plan entitlement was only checked when the domain was SET. A store that has since been downgraded
+    // (or dropped its plan) must stop serving on its custom domain.
+    const limits = await this.entitlementsService.getLimits(store._id.toString());
+    if (!limits.customDomainAllowed) throw new NotFoundException('No store is connected to this domain');
 
     return this.shapePublicStoreResponse(store);
   }
@@ -1178,12 +1278,21 @@ export class StoreService {
     }).lean();
     if (!store) throw new NotFoundException('Store not found');
 
-    const page  = parseInt(query.page)  || 1;
-    const limit = parseInt(query.limit) || 12;
+    // Bounded, and coerced from untrusted query values: limit was uncapped (?limit=100000 dumped the whole
+    // catalog with a variant query per page), page could be negative (Mongo error) or huge (skip overflow),
+    // and `?type[$ne]=x` style objects flowed straight into the filter.
+    const page  = clampInt(query.page, 1, 1, 1000);
+    const limit = clampInt(query.limit, 12, 1, 50);
     const skip  = (page - 1) * limit;
 
+    const qType = queryString(query.type);
+    const qCategory = queryString(query.categoryId);
+    const qTag = queryString(query.tag);
+    const qCollection = queryString(query.collectionId);
+    const qSort = queryString(query.sort);
+
     const filter: any = { storeId, isDelete: false, status: 'active' };
-    if (query.type && query.type !== 'all') filter.type = query.type;
+    if (qType && qType !== 'all') filter.type = qType;
     // `Product.categoryId` is the store's single fixed root category — every
     // product in a store shares the exact same value there, so filtering on
     // it within one store's own listing is meaningless (matches either
@@ -1193,18 +1302,18 @@ export class StoreService {
     // since a seller only ever picks from their store's subcategories, but
     // it must be matched against `subCategoryId` here to actually filter
     // anything (a real, previously-silent no-op bug, not a new behavior).
-    if (query.categoryId && query.categoryId !== 'all') filter.subCategoryId = query.categoryId;
-    if (query.tag && query.tag !== 'all') filter.tags = query.tag;
-    if (query.search && String(query.search).trim()) {
-      filter.name = { $regex: String(query.search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+    if (qCategory && qCategory !== 'all') filter.subCategoryId = qCategory;
+    if (qTag && qTag !== 'all') filter.tags = qTag;
+    if (queryString(query.search) && queryString(query.search)!.trim()) {
+      filter.name = { $regex: queryString(query.search)!.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
     }
     // Collection membership — resolved via CollectionsService (manual: the
     // seller's own ordered pick; automatic: category/tag rule, evaluated
     // fresh) so this endpoint's existing variant/seller/campaign-pricing
     // shaping pipeline is reused as-is rather than duplicated inside the
     // collections module.
-    if (query.collectionId && query.collectionId !== 'all') {
-      const ids = await this.collectionsService.resolveProductIds(storeId, query.collectionId);
+    if (qCollection && qCollection !== 'all') {
+      const ids = await this.collectionsService.resolveProductIds(storeId, qCollection);
       filter._id = { $in: ids.length ? ids : ['__none__'] };
     }
     // Same real "on sale" definition the product card's own discount badge
@@ -1233,7 +1342,7 @@ export class StoreService {
       best_rated: { averageRating: -1 },
       default:    { createdAt: -1 },
     };
-    const sort = sortMap[query.sort] ?? sortMap['default'];
+    const sort = sortMap[qSort ?? ''] ?? sortMap['default'];
 
     const total    = await this.databaseService.repositories.productModel.countDocuments(filter);
     const products = await this.databaseService.repositories.productModel
@@ -1309,7 +1418,7 @@ export class StoreService {
           base.subscriberPlanName = benefits.planName;
         }
       }
-      return base;
+      return sanitizeDigitalForPublicView(base);
     });
 
     return {
@@ -1326,6 +1435,9 @@ export class StoreService {
     // Same 600s Redis TTL convention as getTopStores/getPlatformStats — a
     // store's tag/category facets change only as often as products are
     // added/edited, so a request-per-page-view cost here is pure waste.
+    if (typeof storeId !== 'string' || !isValidObjectId(storeId)) throw new NotFoundException('Store not found');
+    const liveStore = await this.databaseService.repositories.storeModel.exists({ _id: storeId, isDelete: false, status: 'active' });
+    if (!liveStore) throw new NotFoundException('Store not found');
     const cacheKey = `store-filters:v1:${storeId}`;
     const cached = await this.redisService.get(cacheKey);
     if (cached) return { success: true, data: JSON.parse(cached) };
@@ -1363,31 +1475,34 @@ export class StoreService {
 
   // ── 6. Follow / Unfollow store ────────────────────────────────────────────
   async followStore(userId: string, storeId: string) {
-    if (!storeId) throw new BadRequestException('storeId is required');
+    if (!storeId || !isValidObjectId(storeId)) throw new BadRequestException('storeId is required');
 
+    // Only live stores can be followed (pending/suspended stores used to collect followers).
     const store = await this.databaseService.repositories.storeModel.findOne({
       _id: storeId,
       isDelete: false,
+      status: 'active',
     });
     if (!store) throw new NotFoundException('Store not found');
 
-    const existing = await this.databaseService.repositories.storeFollowerModel.findOne({
-      userId,
-      storeId,
-    });
+    const { storeFollowerModel, storeModel } = this.databaseService.repositories;
 
-    if (existing) {
-      await this.databaseService.repositories.storeFollowerModel.deleteOne({ userId, storeId });
-      await this.databaseService.repositories.storeModel.findByIdAndUpdate(storeId, {
-        $inc: { followersCount: -1 },
-      });
+    // Unfollow: decrement ONLY if this call actually removed the row, so two concurrent unfollows
+    // can't both decrement (followersCount used to be able to go negative).
+    const removed = await storeFollowerModel.deleteOne({ userId, storeId });
+    if (removed.deletedCount === 1) {
+      await storeModel.findByIdAndUpdate(storeId, { $inc: { followersCount: -1 } });
       return { success: true, message: 'Unfollowed', data: { following: false } };
     }
 
-    await this.databaseService.repositories.storeFollowerModel.create({ userId, storeId });
-    await this.databaseService.repositories.storeModel.findByIdAndUpdate(storeId, {
-      $inc: { followersCount: 1 },
-    });
+    // Follow: the unique index makes a concurrent double-tap fail on one side; treat that as "already following".
+    try {
+      await storeFollowerModel.create({ userId, storeId });
+    } catch (err) {
+      if ((err as { code?: number })?.code === 11000) return { success: true, message: 'Following', data: { following: true } };
+      throw err;
+    }
+    await storeModel.findByIdAndUpdate(storeId, { $inc: { followersCount: 1 } });
 
     this.notificationsService.notify({
       recipientId: store.sellerId,
@@ -1412,8 +1527,8 @@ export class StoreService {
     if (!store) throw new NotFoundException('Store not found');
     if (store.sellerId !== sellerId) throw new UnauthorizedException('Unauthorized');
 
-    const page  = parseInt(query.page)  || 1;
-    const limit = parseInt(query.limit) || 20;
+    const page  = clampInt(query.page, 1, 1, 1000);
+    const limit = clampInt(query.limit, 20, 1, 100);
     const skip  = (page - 1) * limit;
 
     const total = await this.databaseService.repositories.storeFollowerModel
@@ -1474,8 +1589,8 @@ export class StoreService {
 
     const { orderModel, userModel } = this.databaseService.repositories;
 
-    const page = parseInt(query.page) || 1;
-    const limit = parseInt(query.limit) || 20;
+    const page = clampInt(query.page, 1, 1, 1000);
+    const limit = clampInt(query.limit, 20, 1, 100);
     const skip = (page - 1) * limit;
 
     const customerIds = await orderModel.distinct('userId', { 'sellerOrders.storeId': storeId, isDelete: false });
@@ -1555,13 +1670,15 @@ export class StoreService {
     const hasOrderedHere = await orderModel.exists({ userId: customerId, 'sellerOrders.storeId': storeId, isDelete: false });
     if (!hasOrderedHere) throw new BadRequestException('This customer has no orders with your store');
 
+    // A buyer's login email belongs to the buyer alone. Letting any seller with one order rewrite it (and reset
+    // isVerified) was an account-takeover path: change the email, then use "forgot password" on the new address.
+    if (dto.email !== undefined) {
+      throw new BadRequestException("A customer's email can only be changed by the customer");
+    }
+
     const update: any = {};
     if (dto.name !== undefined) update.name = dto.name;
     if (dto.phone !== undefined) update.phone = dto.phone;
-    if (dto.email !== undefined) {
-      update.email = dto.email;
-      update.isVerified = false; // new email hasn't gone through OTP yet
-    }
 
     if (Object.keys(update).length === 0) throw new BadRequestException('Nothing to update');
 
