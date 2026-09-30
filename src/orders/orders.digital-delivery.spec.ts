@@ -57,7 +57,13 @@ describe('OrdersService — digital delivery', () => {
     service = new OrdersService(db, upload, jwt, config, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
   };
 
-  afterEach(() => jest.restoreAllMocks());
+  // On newer Node versions restoreAllMocks can leave global.fetch undefined
+  // after a spy on it, which makes the next spyOn(global, 'fetch') throw.
+  const realFetch = global.fetch;
+  afterEach(() => {
+    jest.restoreAllMocks();
+    if (typeof global.fetch !== 'function') global.fetch = realFetch;
+  });
 
   it('issues typed download tokens for a paid, active item', async () => {
     setup(makeOrder(), makeProduct());
