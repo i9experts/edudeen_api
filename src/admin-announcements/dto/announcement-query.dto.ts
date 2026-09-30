@@ -1,6 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  MaxLength,
+} from 'class-validator';
 
 export class AnnouncementQueryDto {
   @ApiProperty({ enum: ['draft', 'published', 'scheduled'], required: false })
@@ -16,6 +24,7 @@ export class AnnouncementQueryDto {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   search?: string;
 
   @ApiProperty({ required: false, default: 1 })
@@ -30,5 +39,6 @@ export class AnnouncementQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(100)
   limit?: number = 20;
 }

@@ -48,7 +48,8 @@ export class AdminMarketingService {
    *  silently creating an ambiguous tie in the deals-banner rotation order. */
   private async assertOrderAvailable(order: number | undefined, excludeId?: string) {
     if (order == null) return;
-    const filter: Record<string, unknown> = { isDelete: false, order };
+    // Ended campaigns no longer hold a rotation slot (expireCampaigns resets them to 0), so they must not block it.
+    const filter: Record<string, unknown> = { isDelete: false, status: { $ne: 'ended' }, order };
     if (excludeId) filter._id = { $ne: excludeId };
     const conflict = await this.r.campaignModel.findOne(filter).select('name').lean();
     if (conflict) {
@@ -97,9 +98,12 @@ export class AdminMarketingService {
     // for campaigns nobody happens to be viewing right now.
     await this.expireCampaigns();
 
+    if (status !== undefined && !['draft', 'active', 'ended'].includes(status)) {
+      throw new BadRequestException('status must be one of draft, active, ended');
+    }
     const filter: Record<string, unknown> = { isDelete: false };
     if (status) filter.status = status;
-    const campaigns = await this.r.campaignModel.find(filter).sort({ createdAt: -1 });
+    const campaigns = await this.r.campaignModel.find(filter).sort({ createdAt: -1 }).limit(500);
     return { success: true, data: campaigns };
   }
 
@@ -138,7 +142,13 @@ export class AdminMarketingService {
 
   async setCampaignStatus(id: string, dto: UpdateCampaignStatusDto, meta: AuditMeta) {
     const campaign = await this.findCampaignOrThrow(id);
-    await this.r.campaignModel.findByIdAndUpdate(id, { $set: { status: dto.status } });
+    if (dto.status === 'active' && new Date(campaign.endDate) <= new Date()) {
+      throw new BadRequestException('This campaign has already ended — extend its endDate before activating it');
+    }
+    if (dto.status === 'active' && campaign.order != null && campaign.status !== 'active') {
+      await this.assertOrderAvailable(campaign.order, id);
+    }
+    await this.r.campaignModel.findByIdAndUpdate(id, { $set: dto.status === 'ended' ? { status: 'ended', order: 0 } : { status: dto.status } });
     this.log('campaign_status_changed', `Campaign "${campaign.name}" set to ${dto.status}`, meta, id);
     return { success: true, message: `Campaign set to ${dto.status}` };
   }
@@ -188,6 +198,12 @@ export class AdminMarketingService {
 
   async createPlatformCoupon(dto: CreatePlatformCouponDto, meta: AuditMeta) {
     const code = dto.code.trim().toUpperCase();
+    if (!Number.isFinite(dto.discountValue) || dto.discountValue <= 0) {
+      throw new BadRequestException('Discount value must be greater than 0');
+    }
+    if (dto.expiresAt && new Date(dto.expiresAt) <= new Date()) {
+      throw new BadRequestException('expiresAt must be in the future');
+    }
     const existing = await this.r.couponModel.findOne({ scope: 'platform', code, isDelete: false });
     if (existing) throw new ConflictException(`Platform coupon code "${code}" already exists`);
 
@@ -195,6 +211,7 @@ export class AdminMarketingService {
       throw new BadRequestException('Percentage discount cannot exceed 100');
     }
 
+    // The unique index on platform codes also covers soft-deleted coupons, so a re-used code is a 409, not a 500.
     const coupon = await this.r.couponModel.create({
       scope: 'platform',
       adminId: meta.adminId,
@@ -204,6 +221,11 @@ export class AdminMarketingService {
       minOrderAmount: dto.minOrderAmount ?? null,
       usageLimit: dto.usageLimit ?? null,
       expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
+      // Fixed amounts on platform coupons are USD (the platform pivot currency) — see coupon.schema.
+      currency: dto.discountType === 'fixed' ? 'USD' : null,
+    }).catch((err: { code?: number }) => {
+      if (err?.code === 11000) throw new ConflictException(`Platform coupon code "${code}" already exists (it may have been deleted earlier)`);
+      throw err;
     });
 
     this.log('platform_coupon_created', `Platform coupon "${code}" created`, meta, String(coupon._id));
@@ -211,7 +233,7 @@ export class AdminMarketingService {
   }
 
   async listPlatformCoupons() {
-    const coupons = await this.r.couponModel.find({ scope: 'platform', isDelete: false }).sort({ createdAt: -1 });
+    const coupons = await this.r.couponModel.find({ scope: 'platform', isDelete: false }).sort({ createdAt: -1 }).limit(500);
     return { success: true, data: coupons };
   }
 

@@ -2,6 +2,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { escapeRegex } from '../common/query-safety.util';
 import { CreateAnnouncementDto } from './dto/create-announcement.dto';
 import { UpdateAnnouncementDto } from './dto/update-announcement.dto';
 import { UpdateAnnouncementStatusDto } from './dto/update-announcement-status.dto';
@@ -62,7 +63,7 @@ export class AdminAnnouncementsService {
     const filter: Record<string, unknown> = { isDelete: false };
     if (query.status) filter.status = query.status;
     if (query.audience) filter.audience = query.audience;
-    if (query.search) filter.title = { $regex: query.search, $options: 'i' };
+    if (query.search) filter.title = { $regex: escapeRegex(query.search), $options: 'i' };
 
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -130,6 +131,7 @@ export class AdminAnnouncementsService {
         audience: { $in: ['all', audience] },
         $or: [{ status: 'published' }, { status: 'scheduled', scheduledAt: { $lte: now } }],
       })
+      .select('title message audience publishedAt scheduledAt createdAt') // never expose createdBy (an admin id) publicly
       .sort({ publishedAt: -1, scheduledAt: -1, createdAt: -1 })
       .limit(5);
 

@@ -4,6 +4,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { AdminAnnouncementsService } from './admin-announcements.service';
 import { CreateAnnouncementDto } from './dto/create-announcement.dto';
 import { UpdateAnnouncementDto } from './dto/update-announcement.dto';
@@ -34,17 +35,17 @@ export class AdminAnnouncementsController {
   }
 
   @Put(':id')
-  update(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateAnnouncementDto) {
+  update(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: UpdateAnnouncementDto) {
     return this.adminAnnouncementsService.update(id, dto, this.meta(req));
   }
 
   @Patch(':id/status')
-  setStatus(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateAnnouncementStatusDto) {
+  setStatus(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: UpdateAnnouncementStatusDto) {
     return this.adminAnnouncementsService.setStatus(id, dto, this.meta(req));
   }
 
   @Delete(':id')
-  remove(@Req() req: any, @Param('id') id: string) {
+  remove(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
     return this.adminAnnouncementsService.remove(id, this.meta(req));
   }
 }

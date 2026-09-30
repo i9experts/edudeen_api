@@ -1,21 +1,24 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsDateString, IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsDateString, IsEnum, IsNumber, IsOptional, IsString, Min, MaxLength, IsUrl, Max, IsInt } from 'class-validator';
 
 export class UpdateCampaignDto {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   name?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @MaxLength(1000)
   description?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
-  @IsString()
+  @IsUrl({ protocols: ['https'], require_protocol: true })
+  @MaxLength(500)
   bannerImage?: string;
 
   @ApiProperty({ required: false })
@@ -37,6 +40,7 @@ export class UpdateCampaignDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(1000000)
   discountValue?: number;
 
   @ApiProperty({ enum: ['seller', 'platform'], required: false })
@@ -46,6 +50,8 @@ export class UpdateCampaignDto {
 
   @ApiProperty({ required: false })
   @IsOptional()
-  @IsNumber()
+  @IsInt()
+  @Min(0)
+  @Max(1000)
   order?: number;
 }

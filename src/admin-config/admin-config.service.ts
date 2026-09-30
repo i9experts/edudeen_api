@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { UpdateFeatureFlagsDto } from './dto/update-feature-flags.dto';
@@ -163,6 +163,13 @@ export class AdminConfigService {
   }
 
   async updatePromotionPricing(dto: UpdatePromotionPricingDto, meta: AuditMeta) {
+    for (const [placement, card] of Object.entries(dto) as Array<[string, { festivalOverrides?: Array<{ name: string; startAt: string; endAt: string }> } | undefined]>) {
+      for (const f of card?.festivalOverrides ?? []) {
+        if (new Date(f.endAt) <= new Date(f.startAt)) {
+          throw new BadRequestException(`Festival "${f.name}" on ${placement}: endAt must be after startAt`);
+        }
+      }
+    }
     const set: Record<string, unknown> = {};
     for (const [placement, rateCard] of Object.entries(dto)) {
       if (rateCard !== undefined) set[`promotionPricing.${placement}`] = rateCard;
@@ -185,6 +192,16 @@ export class AdminConfigService {
   }
 
   async updateManualPaymentConfig(dto: UpdateManualPaymentConfigDto, meta: AuditMeta) {
+    // The buyer is charged this rate on manual (PKR) orders. A typo (27.8 / 27800) silently under- or over-charges
+    // every order, so it must sit inside the FX sanity band the admin already maintains.
+    if (dto.usdToPkrRate !== undefined) {
+      const fx = (await this.getFxConfig()) as { sanityBandMinPKR?: number; sanityBandMaxPKR?: number } | undefined;
+      const min = fx?.sanityBandMinPKR;
+      const max = fx?.sanityBandMaxPKR;
+      if ((typeof min === 'number' && dto.usdToPkrRate < min) || (typeof max === 'number' && dto.usdToPkrRate > max)) {
+        throw new BadRequestException(`usdToPkrRate must be between ${min ?? '-'} and ${max ?? '-'} (the FX sanity band). Update the FX config first if the market has really moved.`);
+      }
+    }
     const set: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) set[`manualPaymentConfig.${key}`] = value;
@@ -197,6 +214,15 @@ export class AdminConfigService {
   }
 
   async updateFxConfig(dto: UpdateFxConfigDto, meta: AuditMeta) {
+    // Validate the band as it will be AFTER this partial update, not just the fields sent.
+    if (dto.sanityBandMinPKR !== undefined || dto.sanityBandMaxPKR !== undefined) {
+      const current = (await this.getFxConfig()) as { sanityBandMinPKR?: number; sanityBandMaxPKR?: number } | undefined;
+      const min = dto.sanityBandMinPKR ?? current?.sanityBandMinPKR;
+      const max = dto.sanityBandMaxPKR ?? current?.sanityBandMaxPKR;
+      if (typeof min === 'number' && typeof max === 'number' && min >= max) {
+        throw new BadRequestException('sanityBandMinPKR must be lower than sanityBandMaxPKR');
+      }
+    }
     const set: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) set[`fxConfig.${key}`] = value;

@@ -4,6 +4,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { AdminMarketingService } from './admin-marketing.service';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCampaignDto } from './dto/update-campaign.dto';
@@ -37,17 +38,17 @@ export class AdminMarketingController {
   }
 
   @Put('campaigns/:id')
-  updateCampaign(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateCampaignDto) {
+  updateCampaign(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: UpdateCampaignDto) {
     return this.adminMarketingService.updateCampaign(id, dto, this.meta(req));
   }
 
   @Patch('campaigns/:id/status')
-  setCampaignStatus(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateCampaignStatusDto) {
+  setCampaignStatus(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: UpdateCampaignStatusDto) {
     return this.adminMarketingService.setCampaignStatus(id, dto, this.meta(req));
   }
 
   @Delete('campaigns/:id')
-  deleteCampaign(@Req() req: any, @Param('id') id: string) {
+  deleteCampaign(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
     return this.adminMarketingService.deleteCampaign(id, this.meta(req));
   }
 
@@ -64,12 +65,12 @@ export class AdminMarketingController {
   }
 
   @Patch('coupons/:id')
-  updatePlatformCoupon(@Req() req: any, @Param('id') id: string, @Body() dto: UpdatePlatformCouponDto) {
+  updatePlatformCoupon(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: UpdatePlatformCouponDto) {
     return this.adminMarketingService.updatePlatformCoupon(id, dto, this.meta(req));
   }
 
   @Delete('coupons/:id')
-  deletePlatformCoupon(@Req() req: any, @Param('id') id: string) {
+  deletePlatformCoupon(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
     return this.adminMarketingService.deletePlatformCoupon(id, this.meta(req));
   }
 }

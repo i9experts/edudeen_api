@@ -1,16 +1,18 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsDateString, IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsDateString, IsEnum, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class CreateAnnouncementDto {
   @ApiProperty({ example: 'Platform Maintenance — May 18, 2026' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(150)
   title: string;
 
   @ApiProperty({ example: 'We will be performing scheduled maintenance...' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(2000)
   message: string;
 
   @ApiProperty({ enum: ['all', 'sellers', 'buyers'], required: false })

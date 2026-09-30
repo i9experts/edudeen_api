@@ -1,21 +1,24 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsDateString, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsDateString, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, Min, MaxLength, IsUrl, Max, IsInt } from 'class-validator';
 
 export class CreateCampaignDto {
   @ApiProperty({ example: 'Summer Sale Weekend' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   name: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @MaxLength(1000)
   description?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
-  @IsString()
+  @IsUrl({ protocols: ['https'], require_protocol: true })
+  @MaxLength(500)
   bannerImage?: string;
 
   @ApiProperty({ example: '2026-08-01T00:00:00.000Z' })
@@ -35,6 +38,7 @@ export class CreateCampaignDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(1000000)
   discountValue?: number;
 
   @ApiProperty({
@@ -47,6 +51,8 @@ export class CreateCampaignDto {
 
   @ApiProperty({ required: false, example: 0, description: 'Rotation order in the buyer-facing deals banner when multiple campaigns are active (0 = shown first). Defaults to appended-last.' })
   @IsOptional()
-  @IsNumber()
+  @IsInt()
+  @Min(0)
+  @Max(1000)
   order?: number;
 }
