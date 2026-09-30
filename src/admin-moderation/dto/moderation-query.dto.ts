@@ -1,6 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  MaxLength,
+} from 'class-validator';
 
 export class ModerationQueryDto {
   @ApiProperty({ enum: ['listing', 'seller', 'review'], required: false })
@@ -16,6 +24,7 @@ export class ModerationQueryDto {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   search?: string;
 
   @ApiProperty({ required: false, default: 1 })
@@ -30,5 +39,6 @@ export class ModerationQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(100)
   limit?: number = 20;
 }

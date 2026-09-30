@@ -1,6 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  MaxLength,
+} from 'class-validator';
 
 export class AdminUsersQueryDto {
   @ApiProperty({ enum: ['buyer', 'seller'], required: false })
@@ -10,12 +18,13 @@ export class AdminUsersQueryDto {
 
   @ApiProperty({ enum: ['active', 'suspended', 'pending'], required: false })
   @IsOptional()
-  @IsString()
+  @IsIn(['active', 'suspended', 'pending'])
   status?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   search?: string;
 
   @ApiProperty({ required: false, default: 1 })
@@ -30,5 +39,6 @@ export class AdminUsersQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(100)
   limit?: number = 20;
 }

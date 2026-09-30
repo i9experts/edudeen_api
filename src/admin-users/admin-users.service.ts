@@ -1,8 +1,13 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { AdminUsersQueryDto } from './dto/admin-users-query.dto';
+import { escapeRegex } from '../common/query-safety.util';
+import { suspendSellerCascade } from '../common/seller-suspension.util';
+
+/** Account fields an admin must never receive: credential hash, OTP state, push token, session counter. */
+const SENSITIVE_FIELDS = '-password -otp -otpExpiresAt -otpAttempts -fcmToken -tokenVersion -providerId';
 
 interface AuditMeta {
   adminId: string;
@@ -60,7 +65,7 @@ export class AdminUsersService {
     const match: Record<string, unknown> = { isDelete: false };
     if (query.status) match.status = query.status;
     if (query.search) {
-      const rx = { $regex: query.search, $options: 'i' };
+      const rx = { $regex: escapeRegex(query.search), $options: 'i' };
       match.$or = [{ name: rx }, { email: rx }];
     }
     return match;
@@ -131,12 +136,12 @@ export class AdminUsersService {
     return { success: true, data: { items, total, page, limit } };
   }
 
-  private async findOrThrow(role: 'buyer' | 'seller', id: string) {
+  private async findOrThrow(role: 'buyer' | 'seller', id: string): Promise<{ name?: string; email?: string }> {
     // dynamic model selection: userModel/sellerModel differ in document type,
     // so the union call is widened to `any` here rather than fighting Mongoose's
     // overload resolution for two structurally different models.
     const model: any = role === 'buyer' ? this.r.userModel : this.r.sellerModel;
-    const doc = await model.findOne({ _id: id, isDelete: false });
+    const doc = (await model.findOne({ _id: id, isDelete: false }).select(SENSITIVE_FIELDS)) as { name?: string; email?: string } | null;
     if (!doc) throw new NotFoundException(`${role} not found`);
     return doc;
   }
@@ -158,32 +163,13 @@ export class AdminUsersService {
       return { success: true, message: 'Buyer set to suspended' };
     }
 
-    // Seller suspension cascades to every store they own — otherwise their
-    // listings/storefronts stay live and purchasable under a suspended
-    // seller. Only the stores that were actually active at this moment are
-    // recorded, so unsuspend later restores exactly those and never
-    // reactivates a store that was independently suspended beforehand.
-    const activeStores = await this.r.storeModel.find(
-      { sellerId: id, isDelete: false, status: 'active' },
-      { _id: 1 },
-    );
-    const storeIdsToSuspend = activeStores.map((s: any) => String(s._id));
-
-    if (storeIdsToSuspend.length) {
-      await this.r.storeModel.updateMany(
-        { _id: { $in: storeIdsToSuspend } },
-        { $set: { status: 'suspended' } },
-      );
-    }
-
-    await this.r.sellerModel.findByIdAndUpdate(id, {
-      $set: { status: 'suspended', cascadeSuspendedStoreIds: storeIdsToSuspend },
-      $inc: { tokenVersion: 1 },
-    });
+    // Seller suspension cascades to every store they own (see suspendSellerCascade for the merge-not-overwrite
+    // rule that lets unsuspend restore exactly those stores).
+    const { suspendedStores } = await suspendSellerCascade(this.databaseService, id);
 
     this.log(
       'seller_suspended',
-      `Seller "${doc.name ?? doc.email}" suspended (${storeIdsToSuspend.length} store(s) suspended with it)`,
+      `Seller "${doc.name ?? doc.email}" suspended (${suspendedStores} store(s) suspended with it)`,
       meta,
       id,
     );
@@ -194,25 +180,28 @@ export class AdminUsersService {
     const doc = await this.findOrThrow(role, id);
 
     if (role === 'buyer') {
-      await this.r.userModel.findByIdAndUpdate(id, { $set: { status: 'active' } });
+      const restored = await this.r.userModel.updateOne({ _id: id, isDelete: false, status: 'suspended' }, { $set: { status: 'active' } });
+      if (!restored.modifiedCount) throw new ConflictException('Buyer is not suspended');
       this.log('buyer_unsuspended', `Buyer "${doc.name ?? doc.email}" set to active`, meta, id);
       return { success: true, message: 'Buyer set to active' };
     }
 
-    const storeIdsToRestore: string[] = (doc as any).cascadeSuspendedStoreIds ?? [];
+    // Atomic claim: only a suspended seller can be unsuspended, so this can never be used to activate a seller
+    // in another state, and two concurrent calls restore the stores once.
+    const prev = await this.r.sellerModel.findOneAndUpdate(
+      { _id: id, isDelete: false, status: 'suspended' },
+      { $set: { status: 'active', cascadeSuspendedStoreIds: [] } },
+      { returnDocument: 'before' },
+    );
+    if (!prev) throw new ConflictException('Seller is not suspended');
+    const storeIdsToRestore: string[] = prev.cascadeSuspendedStoreIds ?? [];
     if (storeIdsToRestore.length) {
-      // Extra `status: 'suspended'` filter guards against restoring a store
-      // that got independently suspended (e.g. by moderation) while the
-      // seller-level suspension was in effect.
+      // `status: 'suspended'` keeps an independently changed store (e.g. rejected) from being flipped to active.
       await this.r.storeModel.updateMany(
-        { _id: { $in: storeIdsToRestore }, status: 'suspended' },
+        { _id: { $in: storeIdsToRestore }, isDelete: false, status: 'suspended' },
         { $set: { status: 'active' } },
       );
     }
-
-    await this.r.sellerModel.findByIdAndUpdate(id, {
-      $set: { status: 'active', cascadeSuspendedStoreIds: [] },
-    });
 
     this.log(
       'seller_unsuspended',

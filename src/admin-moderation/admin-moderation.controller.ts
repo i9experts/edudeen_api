@@ -4,6 +4,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { AdminModerationService } from './admin-moderation.service';
 import { ModerationQueryDto } from './dto/moderation-query.dto';
 
@@ -31,17 +32,17 @@ export class AdminModerationController {
   }
 
   @Patch(':id/review')
-  markReviewed(@Req() req: any, @Param('id') id: string) {
+  markReviewed(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
     return this.adminModerationService.markReviewed(id, this.meta(req));
   }
 
   @Patch(':id/approve')
-  approve(@Req() req: any, @Param('id') id: string) {
+  approve(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
     return this.adminModerationService.approve(id, this.meta(req));
   }
 
   @Patch(':id/remove')
-  remove(@Req() req: any, @Param('id') id: string) {
+  remove(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
     return this.adminModerationService.remove(id, this.meta(req));
   }
 }

@@ -4,6 +4,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { AdminUsersService } from './admin-users.service';
 import { AdminUsersQueryDto } from './dto/admin-users-query.dto';
 
@@ -38,17 +39,17 @@ export class AdminUsersController {
   }
 
   @Get(':role/:id')
-  getById(@Param('role') role: string, @Param('id') id: string) {
+  getById(@Param('role') role: string, @Param('id', ParseObjectIdPipe) id: string) {
     return this.adminUsersService.getById(this.validateRole(role), id);
   }
 
   @Patch(':role/:id/suspend')
-  suspend(@Req() req: any, @Param('role') role: string, @Param('id') id: string) {
+  suspend(@Req() req: any, @Param('role') role: string, @Param('id', ParseObjectIdPipe) id: string) {
     return this.adminUsersService.suspend(this.validateRole(role), id, this.meta(req));
   }
 
   @Patch(':role/:id/unsuspend')
-  unsuspend(@Req() req: any, @Param('role') role: string, @Param('id') id: string) {
+  unsuspend(@Req() req: any, @Param('role') role: string, @Param('id', ParseObjectIdPipe) id: string) {
     return this.adminUsersService.unsuspend(this.validateRole(role), id, this.meta(req));
   }
 }

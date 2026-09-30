@@ -1,8 +1,11 @@
 /* eslint-disable prettier/prettier */
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { isValidObjectId } from 'mongoose';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { ModerationQueryDto } from './dto/moderation-query.dto';
+import { escapeRegex } from '../common/query-safety.util';
+import { suspendSellerCascade } from '../common/seller-suspension.util';
 
 interface AuditMeta {
   adminId: string;
@@ -71,8 +74,8 @@ export class AdminModerationService {
   }
 
   private async enrich(reports: any[]) {
-    const listingIds = reports.filter((r) => r.targetType === 'listing').map((r) => r.targetId);
-    const sellerReportTargetIds = reports.filter((r) => r.targetType === 'seller').map((r) => r.targetId);
+    const listingIds = reports.filter((r) => r.targetType === 'listing' && isValidObjectId(r.targetId)).map((r) => r.targetId);
+    const sellerReportTargetIds = reports.filter((r) => r.targetType === 'seller' && isValidObjectId(r.targetId)).map((r) => r.targetId);
 
     const [products, directSellers] = await Promise.all([
       this.r.productModel.find({ _id: { $in: listingIds } }, { name: 1, sellerId: 1 }),
@@ -80,7 +83,7 @@ export class AdminModerationService {
     ]);
 
     const productById = new Map(products.map((p) => [String(p._id), p]));
-    const productSellerIds = products.map((p) => p.sellerId);
+    const productSellerIds = products.map((p) => p.sellerId).filter((id) => isValidObjectId(id));
     const listingSellers = await this.r.sellerModel.find({ _id: { $in: productSellerIds } }, { name: 1 });
     const sellerNameById = new Map([...listingSellers, ...directSellers].map((s) => [String(s._id), s.name]));
 
@@ -104,7 +107,7 @@ export class AdminModerationService {
     const filter: Record<string, unknown> = { targetType: { $in: MARKETPLACE_TARGET_TYPES }, status: { $ne: 'resolved' } };
     if (query.targetType) filter.targetType = query.targetType;
     if (query.riskLevel) filter.riskLevel = query.riskLevel;
-    if (query.search) filter.reason = { $regex: query.search, $options: 'i' };
+    if (query.search) filter.reason = { $regex: escapeRegex(query.search), $options: 'i' };
 
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -123,59 +126,66 @@ export class AdminModerationService {
     return { success: true, data: { items, total, page, limit } };
   }
 
-  private async findReportOrThrow(id: string) {
-    const report = await this.r.reportModel.findOne({ _id: id, targetType: { $in: MARKETPLACE_TARGET_TYPES } });
-    if (!report) throw new NotFoundException('Report not found');
-    return report;
+  /** Atomically moves a not-yet-resolved report to `next`. Two admins (or a double click) cannot both act on the
+   *  same report, and a resolved report can never be re-actioned. Returns the report as it was BEFORE the claim. */
+  private async claimReport(id: string, next: Record<string, unknown>, from: string[]) {
+    const prev = await this.r.reportModel.findOneAndUpdate(
+      { _id: id, targetType: { $in: MARKETPLACE_TARGET_TYPES }, status: { $in: from } },
+      { $set: next },
+      { returnDocument: 'before' },
+    );
+    if (prev) return prev;
+    const exists = await this.r.reportModel.exists({ _id: id, targetType: { $in: MARKETPLACE_TARGET_TYPES } });
+    if (!exists) throw new NotFoundException('Report not found');
+    throw new ConflictException('This report has already been resolved');
   }
 
   async markReviewed(id: string, meta: AuditMeta) {
-    const report = await this.findReportOrThrow(id);
-    await this.r.reportModel.findByIdAndUpdate(id, { $set: { status: 'reviewed', reviewedBy: meta.adminId } });
+    const report = await this.claimReport(id, { status: 'reviewed', reviewedBy: meta.adminId }, ['pending', 'reviewed']);
     this.log('report_reviewed', `Report ${id} (${report.targetType}) marked reviewed`, meta, id);
     return { success: true, message: 'Report marked as reviewed' };
   }
 
   async approve(id: string, meta: AuditMeta) {
-    const report = await this.findReportOrThrow(id);
-    await this.r.reportModel.findByIdAndUpdate(id, {
-      $set: { status: 'resolved', resolution: 'approved', resolvedAt: new Date(), reviewedBy: meta.adminId },
-    });
+    const report = await this.claimReport(
+      id,
+      { status: 'resolved', resolution: 'approved', resolvedAt: new Date(), reviewedBy: meta.adminId },
+      ['pending', 'reviewed'],
+    );
     this.log('report_approved', `Report ${id} (${report.targetType}) approved — no action taken on target`, meta, id);
     return { success: true, message: 'Report approved' };
   }
 
   async remove(id: string, meta: AuditMeta) {
-    const report = await this.findReportOrThrow(id);
+    const report = await this.claimReport(
+      id,
+      { status: 'resolved', resolution: 'removed', resolvedAt: new Date(), reviewedBy: meta.adminId },
+      ['pending', 'reviewed'],
+    );
 
-    if (report.targetType === 'listing') {
-      await this.r.productModel.findByIdAndUpdate(report.targetId, { $set: { isDelete: true, status: 'inactive', removedByAdmin: true } });
-    } else if (report.targetType === 'seller') {
-      // Mirrors AdminUsersService.suspend's cascade: suspending a seller
-      // here must also suspend their stores and revoke their session,
-      // exactly like the Users-page suspend action does — a report-driven
-      // removal shouldn't leave the seller's listings live or their
-      // existing login working.
-      const activeStores = await this.r.storeModel.find(
-        { sellerId: report.targetId, isDelete: false, status: 'active' },
-        { _id: 1 },
-      );
-      const storeIdsToSuspend = activeStores.map((s: any) => String(s._id));
-      if (storeIdsToSuspend.length) {
-        await this.r.storeModel.updateMany(
-          { _id: { $in: storeIdsToSuspend } },
-          { $set: { status: 'suspended' } },
+    try {
+      if (!isValidObjectId(report.targetId)) throw new NotFoundException('Report target is not a valid id');
+      if (report.targetType === 'listing') {
+        await this.r.productModel.updateOne(
+          { _id: report.targetId },
+          { $set: { isDelete: true, status: 'inactive', isFeatured: false, removedByAdmin: true } },
         );
+      } else if (report.targetType === 'seller') {
+        // Same cascade as the Users-page suspend (stores suspended, session revoked), and safe to repeat.
+        await suspendSellerCascade(this.databaseService, report.targetId);
+      } else if (report.targetType === 'review') {
+        // "Remove" on a review report used to resolve the report without touching the review.
+        await this.r.ratingModel.updateOne({ _id: report.targetId }, { $set: { isDelete: true } });
       }
-      await this.r.sellerModel.findByIdAndUpdate(report.targetId, {
-        $set: { status: 'suspended', cascadeSuspendedStoreIds: storeIdsToSuspend },
-        $inc: { tokenVersion: 1 },
-      });
+    } catch (err) {
+      // The action did not happen — put the report back so it can be retried instead of being lost as "removed".
+      await this.r.reportModel.updateOne(
+        { _id: id, status: 'resolved', resolution: 'removed' },
+        { $set: { status: report.status, resolution: report.resolution ?? null, resolvedAt: null } },
+      );
+      throw err;
     }
 
-    await this.r.reportModel.findByIdAndUpdate(id, {
-      $set: { status: 'resolved', resolution: 'removed', resolvedAt: new Date(), reviewedBy: meta.adminId },
-    });
     this.log('report_removed', `Report ${id} (${report.targetType}) actioned — target removed/suspended`, meta, id);
     return { success: true, message: 'Report actioned — target removed/suspended' };
   }
