@@ -1,9 +1,12 @@
 /* eslint-disable prettier/prettier */
 import { JwtService } from '@nestjs/jwt';
+import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { AuthService } from './auth.service';
 
 const SECRET = 'test-secret';
+process.env.JWT_SECRET = SECRET;
+const hashOtp = (o: string) => (AuthService as any).hashOtp(o);
 
 function makeAccount(overrides: Record<string, any> = {}) {
   const acc: any = {
@@ -115,7 +118,7 @@ describe('AuthService — security', () => {
     const future = () => new Date(Date.now() + 60_000);
 
     it('burns the code after 5 wrong attempts', async () => {
-      const acc = makeAccount({ otp: '123456', otpExpiresAt: future() });
+      const acc = makeAccount({ otp: hashOtp('123456'), otpExpiresAt: future() });
       setup(() => acc);
       for (let i = 0; i < 5; i++) {
         await expect(service.resetPassword(acc.email, 'user', '000000', 'newpassword1')).rejects.toThrow(/Invalid OTP/);
@@ -126,17 +129,48 @@ describe('AuthService — security', () => {
     });
 
     it('revokes existing sessions on a successful reset', async () => {
-      const acc = makeAccount({ otp: '123456', otpExpiresAt: future(), tokenVersion: 3 });
+      const acc = makeAccount({ otp: hashOtp('123456'), otpExpiresAt: future(), tokenVersion: 3 });
       setup(() => acc);
       await service.resetPassword(acc.email, 'user', '123456', 'newpassword1');
       expect(acc.tokenVersion).toBe(4);
       expect(await bcrypt.compare('newpassword1', acc.password)).toBe(true);
     });
 
-    it('rejects a too-short new password', async () => {
+    it('stores the OTP hashed, never in plaintext', async () => {
+      const acc = makeAccount();
+      setup(() => acc);
+      await service.forgotPassword(acc.email, 'user');
+      const sent = (service as any).otpService.sendOtp.mock.calls[0][1];
+      expect(acc.otp).not.toBe(sent);
+      expect(acc.otp).toBe(hashOtp(sent));
+    });
+
+    it('does not accept a legacy plaintext-stored OTP', async () => {
       const acc = makeAccount({ otp: '123456', otpExpiresAt: future() });
       setup(() => acc);
+      await expect(service.resetPassword(acc.email, 'user', '123456', 'newpassword1')).rejects.toThrow(/Invalid OTP/);
+    });
+
+    it('rejects a too-short new password', async () => {
+      const acc = makeAccount({ otp: hashOtp('123456'), otpExpiresAt: future() });
+      setup(() => acc);
       await expect(service.resetPassword(acc.email, 'user', '123456', 'short')).rejects.toThrow(/8 and 72/);
+    });
+  });
+
+  describe('error mapping', () => {
+    it('keeps a validation error as 400 instead of rewrapping it as 401', async () => {
+      const acc = makeAccount({ otp: hashOtp('123456'), otpExpiresAt: new Date(Date.now() + 60_000) });
+      setup(() => acc);
+      await expect(service.resetPassword(acc.email, 'user', '123456', 'short')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('turns an unexpected error into a generic 500 without leaking its message', async () => {
+      setup(() => { throw new Error('mongo://user:secret@host exploded'); });
+      jest.spyOn((service as any).logger, 'error').mockImplementation(() => undefined);
+      const err: any = await service.forgotPassword('a@b.co', 'user').catch((e) => e);
+      expect(err).toBeInstanceOf(InternalServerErrorException);
+      expect(JSON.stringify(err.getResponse())).not.toMatch(/secret|mongo/);
     });
   });
 });

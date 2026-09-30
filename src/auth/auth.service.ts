@@ -1,5 +1,8 @@
 import {
   Injectable,
+  Logger,
+  HttpException,
+  InternalServerErrorException,
   UnauthorizedException,
   BadRequestException,
 } from '@nestjs/common';
@@ -10,12 +13,12 @@ import { JwtService } from '@nestjs/jwt';
 import { RegisterDto } from './dto/register.dto';
 import { SocialLoginDto } from './dto/social-login.dto';
 import { LoginDto } from './dto/login.dto';
-import { UpdateProfileDto } from './dto/update-profile.dto';
+import { AuthUpdateProfileDto } from './dto/update-profile.dto';
 import { CreateAdminDto } from './dto/create-admin.dto';
 import { OtpService } from 'src/otp/otp.service';
 import { DatabaseService } from 'src/database/databaseservice';
 import { OAuth2Client } from 'google-auth-library';
-import { randomInt, timingSafeEqual } from 'crypto';
+import { createHmac, randomInt, timingSafeEqual } from 'crypto';
 import * as appleSignin from 'apple-signin-auth';
 // import axios from 'axios';
 import { stat } from 'fs';
@@ -24,6 +27,7 @@ import { ActivityLogService } from 'src/activity-log/activity-log.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   private googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID); // 👈 Google Client
   constructor(
     private databaseService: DatabaseService,
@@ -52,6 +56,21 @@ export class AuthService {
     return randomInt(100000, 1000000).toString();
   }
 
+  /** OTPs are stored as an HMAC (keyed with JWT_SECRET), never in plaintext.
+   *  Pre-existing plaintext OTPs simply fail the comparison and expire. */
+  private static hashOtp(otp: string): string {
+    return createHmac('sha256', process.env.JWT_SECRET ?? '').update(String(otp ?? '')).digest('hex');
+  }
+
+  /** Keeps HttpExceptions (400/401/404/…) as they are; anything else is an
+   *  unexpected failure — log it server-side and return a generic 500 so
+   *  internal messages never reach the client. */
+  private mapError(error: any, context: string): HttpException {
+    if (error instanceof HttpException) return error;
+    this.logger.error(`${context}: ${error?.message ?? error}`, error?.stack);
+    return new InternalServerErrorException(context);
+  }
+
   /** Validates an OTP against the account and burns it after
    *  MAX_OTP_ATTEMPTS wrong tries — the per-IP throttle alone does not stop
    *  a distributed brute force of a 6-digit code. */
@@ -62,7 +81,7 @@ export class AuthService {
     if ((user.otpAttempts ?? 0) >= AuthService.MAX_OTP_ATTEMPTS) {
       throw new UnauthorizedException('Too many wrong attempts, please request a new OTP');
     }
-    const a = Buffer.from(String(otp ?? ''));
+    const a = Buffer.from(AuthService.hashOtp(otp));
     const b = Buffer.from(String(user.otp));
     const ok = a.length === b.length && timingSafeEqual(a, b);
     if (!ok) {
@@ -81,7 +100,7 @@ export class AuthService {
   /** Single place that mints a session. `typ` separates access from refresh
    *  tokens (and from order download tokens, which share JWT_SECRET) so
    *  JwtStrategy can refuse anything that is not an access token. */
-  private async issueSession(account: any) {
+  async issueSession(account: any) {
     const base = {
       sub: account._id,
       email: account.email,
@@ -202,7 +221,7 @@ export class AuthService {
         address,
         profileImage,
         role,
-        otp,
+        otp: AuthService.hashOtp(otp),
         otpExpiresAt,
         isVerified: false,
       });
@@ -219,7 +238,7 @@ export class AuthService {
         },
       };
     } catch (error) {
-      throw new UnauthorizedException(error.message || 'Signup failed');
+      throw this.mapError(error, 'Signup failed');
     }
   }
 
@@ -328,7 +347,7 @@ export class AuthService {
         },
       };
     } catch (error) {
-      throw new UnauthorizedException(error.message || 'Login failed');
+      throw this.mapError(error, 'Login failed');
     }
   }
 
@@ -501,7 +520,7 @@ export class AuthService {
         },
       };
     } catch (error) {
-      throw new UnauthorizedException(error.message || 'Social login failed');
+      throw this.mapError(error, 'Social login failed');
     }
   }
 
@@ -532,7 +551,7 @@ export class AuthService {
       const newOtp = AuthService.generateOtp();
       const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-      user.otp = newOtp;
+      user.otp = AuthService.hashOtp(newOtp);
       user.otpExpiresAt = otpExpiresAt;
       user.otpAttempts = 0;
       await user.save();
@@ -547,7 +566,7 @@ export class AuthService {
         },
       };
     } catch (error) {
-      throw new UnauthorizedException(error.message || 'Resend OTP failed');
+      throw this.mapError(error, 'Resend OTP failed');
     }
   }
 
@@ -607,9 +626,7 @@ export class AuthService {
         },
       };
     } catch (error) {
-      throw new UnauthorizedException(
-        error.message || 'OTP verification failed',
-      );
+      throw this.mapError(error, 'OTP verification failed');
     }
   }
 
@@ -645,7 +662,7 @@ export class AuthService {
         const otp = AuthService.generateOtp();
         const otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
-        user.otp = otp;
+        user.otp = AuthService.hashOtp(otp);
         user.otpExpiresAt = otpExpiresAt;
         user.otpAttempts = 0;
         await user.save();
@@ -659,9 +676,7 @@ export class AuthService {
         data: null,
       };
     } catch (error) {
-      throw new UnauthorizedException(
-        error.message || 'Forgot password failed',
-      );
+      throw this.mapError(error, 'Forgot password failed');
     }
   }
 
@@ -712,11 +727,11 @@ export class AuthService {
         success: true,
       };
     } catch (error) {
-      throw new UnauthorizedException(error.message || 'Password reset failed');
+      throw this.mapError(error, 'Password reset failed');
     }
   }
 
-  async editProfile(userId: string, role: string, dto: UpdateProfileDto) {
+  async editProfile(userId: string, role: string, dto: AuthUpdateProfileDto) {
     try {
       let userModel;
 
@@ -748,9 +763,7 @@ export class AuthService {
         data: user,
       };
     } catch (error) {
-      throw new BadRequestException(
-        error.message || 'Failed to update profile',
-      );
+      throw this.mapError(error, 'Failed to update profile');
     }
   }
 
@@ -783,9 +796,7 @@ export class AuthService {
         data: user,
       };
     } catch (error) {
-      throw new UnauthorizedException(
-        error.message || 'Failed to fetch profile',
-      );
+      throw this.mapError(error, 'Failed to fetch profile');
     }
   }
 
@@ -845,9 +856,7 @@ export class AuthService {
         },
       };
     } catch (error) {
-      throw new UnauthorizedException(
-        error.message || 'Failed to create admin account',
-      );
+      throw this.mapError(error, 'Failed to create admin account');
     }
   }
 }

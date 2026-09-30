@@ -8,10 +8,14 @@ import * as bcrypt from 'bcrypt';
 import { DatabaseService } from 'src/database/databaseservice';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { AuthService } from 'src/auth/auth.service';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly authService: AuthService,
+  ) {}
 
   private get userModel() {
     return this.db.repositories.userModel;
@@ -85,11 +89,16 @@ export class UsersService {
       throw new UnauthorizedException('Current password is incorrect');
 
     user.password = await bcrypt.hash(newPassword, 10);
+    // Revoke every other session (old access/refresh tokens carry the old
+    // tokenVersion) and hand back a fresh pair so this device stays logged in.
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
     await user.save();
+    const token = await this.authService.issueSession(user);
 
     return {
       success: true,
       message: 'Password changed successfully',
+      data: { token },
     };
   }
 

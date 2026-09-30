@@ -6,7 +6,7 @@ import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { SocialLoginDto } from './dto/social-login.dto';
-import { UpdateProfileDto } from './dto/update-profile.dto';
+import { AuthUpdateProfileDto } from './dto/update-profile.dto';
 import { CreateAdminDto } from './dto/create-admin.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { UseGuards } from '@nestjs/common';
@@ -109,7 +109,7 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Patch('edit-profile')
-  async editProfile(@Req() req: any, @Body() updateProfileDto: UpdateProfileDto) {
+  async editProfile(@Req() req: any, @Body() updateProfileDto: AuthUpdateProfileDto) {
     const { userId, role } = req.user;
     return this.authService.editProfile(userId, role, updateProfileDto);
   }
