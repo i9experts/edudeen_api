@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { isStoreLive } from 'src/common/store-live.util';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { verifyStoreOwnershipStrict } from '../common/store-ownership.util';
@@ -9,6 +10,8 @@ import { UpdatePageDto } from './dto/update-page.dto';
 import { UpdateSectionsDto } from './dto/update-sections.dto';
 
 const MAX_SECTIONS_PER_PAGE = 40;
+const MAX_PAGES_PER_STORE = 50;
+const MAX_SECTIONS_BYTES = 60_000; // serialized size cap per page — the 100kb body limit was the only bound, times unlimited pages
 // Custom pages are served at the bare `/:slug/:pageSlug` (no `/pages/`
 // prefix), so a page slug now shares its namespace directly with sibling
 // storefront routes — 'blog' must be reserved to avoid shadowing
@@ -21,6 +24,9 @@ const MAX_SECTIONS_PER_PAGE = 40;
 const RESERVED_CUSTOM_PAGE_SLUGS = ['home', 'blog', 'category', 'collections', 'search', 'cart', 'checkout', 'login', 'account'];
 
 function validateSections(sections: { type: SectionType; settings: Record<string, any>; blocks: { type: string; settings: Record<string, any> }[] }[]) {
+  if (Buffer.byteLength(JSON.stringify(sections ?? [])) > MAX_SECTIONS_BYTES) {
+    throw new BadRequestException('This page is too large — remove some content');
+  }
   if (sections.length > MAX_SECTIONS_PER_PAGE) {
     throw new BadRequestException(`A page cannot have more than ${MAX_SECTIONS_PER_PAGE} sections`);
   }
@@ -94,6 +100,9 @@ export class StorePagesService {
     }
     const existing = await this.storePageModel.findOne({ storeId, slug: dto.slug, isDelete: false });
     if (existing) throw new ConflictException(`A page with slug "${dto.slug}" already exists`);
+    if ((await this.storePageModel.countDocuments({ storeId, isDelete: false })) >= MAX_PAGES_PER_STORE) {
+      throw new BadRequestException(`A store can have at most ${MAX_PAGES_PER_STORE} pages`);
+    }
 
     const page = await this.storePageModel.create({
       storeId,
@@ -173,18 +182,21 @@ export class StorePagesService {
   // ── Public ───────────────────────────────────────────────────────────────
 
   async getPublicHome(storeId: string) {
+    if (!(await isStoreLive(this.storeModel, storeId))) throw new NotFoundException('Store not found');
     const page = await this.storePageModel.findOne({ storeId, type: 'home', status: 'published', isDelete: false }).lean();
     if (!page) throw new NotFoundException('This store has no published home page yet');
     return { success: true, data: page };
   }
 
   async getPublicPage(storeId: string, slug: string) {
+    if (!(await isStoreLive(this.storeModel, storeId))) throw new NotFoundException('Store not found');
     const page = await this.storePageModel.findOne({ storeId, slug, type: 'custom', status: 'published', isDelete: false }).lean();
     if (!page) throw new NotFoundException('Page not found');
     return { success: true, data: page };
   }
 
   async listPublicPages(storeId: string) {
+    if (!(await isStoreLive(this.storeModel, storeId))) throw new NotFoundException('Store not found');
     const pages = await this.storePageModel
       .find({ storeId, type: 'custom', status: 'published', isDelete: false })
       .select('slug title showInNav showInFooter')

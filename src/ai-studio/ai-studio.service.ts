@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { cleanAiText, cleanAiTags } from './ai-output.util';
 import {
   BadRequestException, HttpException, HttpStatus, Injectable, Logger, NotFoundException,
 } from '@nestjs/common';
@@ -425,21 +426,17 @@ export class AiStudioService {
   }
 
   private buildProductUpdate(toolType: AiToolType, output: Record<string, any>): Record<string, any> | null {
+    // Everything is reduced to plain bounded text (see ai-output.util) before it touches a public product field.
     if (toolType === 'listing_writer') {
-      return {
-        ...(output.title ? { name: output.title } : {}),
-        ...(output.description ? { description: output.description } : {}),
-        ...(Array.isArray(output.suggestedTags) ? { tags: output.suggestedTags } : {}),
-      };
+      const name = cleanAiText(output.title, 200);
+      const description = cleanAiText(output.description, 5000);
+      const tags = cleanAiTags(output.suggestedTags);
+      return { ...(name ? { name } : {}), ...(description ? { description } : {}), ...(tags ? { tags } : {}) };
     }
     if (toolType === 'seo_booster') {
-      const tags = Array.isArray(output.optimizedTags)
-        ? output.optimizedTags.map((t: any) => (typeof t === 'string' ? t : t?.tag)).filter(Boolean)
-        : null;
-      return {
-        ...(output.optimizedTitle ? { name: output.optimizedTitle } : {}),
-        ...(tags ? { tags } : {}),
-      };
+      const name = cleanAiText(output.optimizedTitle, 200);
+      const tags = cleanAiTags(output.optimizedTags);
+      return { ...(name ? { name } : {}), ...(tags ? { tags } : {}) };
     }
     return null;
   }

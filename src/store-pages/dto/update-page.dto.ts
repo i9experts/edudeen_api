@@ -8,12 +8,12 @@ class StorePageSeoInputDto {
   @ApiProperty({ required: false, deprecated: true, description: 'Superseded by metaDescription — kept as a one-release write-compat alias.' })
   @IsOptional() @IsString() @MaxLength(160) metaDesc?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(160) metaDescription?: string;
-  @ApiProperty({ required: false }) @IsOptional() @IsString() ogImage?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(2048) @Matches(/^https:\/\/\S+$/i, { message: 'ogImage must be an https URL' }) ogImage?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(70) ogTitle?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(200) ogDescription?: string;
   @ApiProperty({ required: false, enum: ['summary', 'summary_large_image'] })
   @IsOptional() @IsIn(['summary', 'summary_large_image']) twitterCard?: string;
-  @ApiProperty({ required: false }) @IsOptional() @IsString() canonicalUrlOverride?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(2048) canonicalUrlOverride?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsBoolean() noindex?: boolean;
   @ApiProperty({ required: false, type: [String] }) @IsOptional() @IsArray() @IsString({ each: true }) keywords?: string[];
 }

@@ -1,7 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsNumber, IsOptional, IsString, IsDateString, Min } from 'class-validator';
+import { IsDateString, IsIn, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { STORE_BANNER_TYPES, StoreBannerType, STORE_BANNER_LINK_TYPES, StoreBannerLinkType } from '../schemas/store-banner.schema';
 
 export class CreateStoreBannerDto {
@@ -13,6 +13,7 @@ export class CreateStoreBannerDto {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @MaxLength(60)
   ctaLabel?: string;
 
   @ApiProperty({ enum: STORE_BANNER_LINK_TYPES, default: 'external' })
@@ -23,6 +24,7 @@ export class CreateStoreBannerDto {
   @ApiProperty({ required: false, description: 'Product/category id, collection id, or an external URL depending on linkType' })
   @IsOptional()
   @IsString()
+  @MaxLength(2048)
   linkTarget?: string;
 
   @ApiProperty({ required: false, example: 0 })

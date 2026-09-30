@@ -1,7 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsIn, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsArray, IsIn, IsOptional, IsString, Matches, MaxLength, ValidateNested } from 'class-validator';
 import { BlockInputDto } from '../../common/dto/block-input.dto';
 
 export class UpdateHeaderDto {
@@ -10,7 +10,7 @@ export class UpdateHeaderDto {
   logoSource?: 'store' | 'custom';
 
   @ApiProperty({ required: false })
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @MaxLength(2048) @Matches(/^https:\/\/\S+$/i, { message: 'customLogoUrl must be an https URL' })
   customLogoUrl?: string;
 
   @ApiProperty({ required: false, type: [BlockInputDto], description: 'nav_link blocks only' })

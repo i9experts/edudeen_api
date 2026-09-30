@@ -1,9 +1,7 @@
 /* eslint-disable prettier/prettier */
-import { ApiProperty } from '@nestjs/swagger';
 import { PartialType } from '@nestjs/swagger';
 import { CreateStoreBannerDto } from './create-store-banner.dto';
 
-export class UpdateStoreBannerDto extends PartialType(CreateStoreBannerDto) {
-  @ApiProperty({ required: false })
-  mobileImageUrl?: string;
-}
+// Images are replaced by re-uploading, never by supplying a URL/publicId — the update service only reads the
+// declared fields of CreateStoreBannerDto.
+export class UpdateStoreBannerDto extends PartialType(CreateStoreBannerDto) {}

@@ -26,9 +26,11 @@ function required(value: unknown, field: string): void {
 }
 
 function maxLen(value: unknown, max: number, field: string): void {
-  if (typeof value === 'string' && value.length > max) {
-    throw new BadRequestException(`${field} must be ${max} characters or fewer`);
-  }
+  if (value === undefined || value === null) return;
+  // Text fields must BE text: a non-string (object / array / number) used to pass this check and be stored verbatim.
+  if (typeof value !== 'string') throw new BadRequestException(`${field} must be text`);
+  if (value.length > max) throw new BadRequestException(`${field} must be ${max} characters or fewer`);
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)) throw new BadRequestException(`${field} contains characters that are not allowed`);
 }
 
 function oneOf<T extends string>(value: unknown, allowed: readonly T[], field: string): void {

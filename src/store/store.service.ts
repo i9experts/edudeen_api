@@ -1,6 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { isValidObjectId } from 'mongoose';
 import { sanitizeDigitalForPublicView, clampInt, queryString } from 'src/products/product-public-view.util';
+import { assertSafePublicJson } from 'src/common/query-safety.util';
 import {
   Injectable,
   BadRequestException,
@@ -987,9 +988,19 @@ export class StoreService {
     });
     if (!store) throw new NotFoundException('Store not found');
     if (store.sellerId !== sellerId) throw new UnauthorizedException('Unauthorized');
+    // Same freeze as updateStore: a suspended store must not be able to keep editing its public storefront.
+    if (store.status === 'suspended') throw new BadRequestException('This store is suspended and cannot be edited');
 
+    // Opaque JSON served to every visitor: bound size/depth and reject javascript:/data: links; the cover image
+    // gets the same https-only rule as updateStore.
+    assertSafePublicJson(builderConfig, 'builderConfig');
     const updateData: any = { builderConfig };
-    if (coverImage !== undefined) updateData.coverImage = coverImage;
+    if (coverImage !== undefined) {
+      if (coverImage !== null && (typeof coverImage !== 'string' || coverImage.length > 2048 || !/^https:\/\/\S+$/i.test(coverImage))) {
+        throw new BadRequestException('coverImage must be an https URL');
+      }
+      updateData.coverImage = coverImage;
+    }
 
     const updated = await this.databaseService.repositories.storeModel.findByIdAndUpdate(
       storeId,

@@ -12,5 +12,5 @@ export class CreateBlogPostDto {
   slug: string;
 
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(240) excerpt?: string;
-  @ApiProperty({ required: false }) @IsOptional() @IsString() coverImage?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(2048) @Matches(/^https:\/\/\S+$/i, { message: 'coverImage must be an https URL' }) coverImage?: string;
 }

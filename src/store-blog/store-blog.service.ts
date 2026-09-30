@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { isStoreLive } from 'src/common/store-live.util';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { verifyStoreOwnershipStrict } from '../common/store-ownership.util';
@@ -9,6 +10,7 @@ import { UpdateBlogContentDto } from './dto/update-blog-content.dto';
 
 const CONTENT_BLOCK_TYPES = ['paragraph', 'heading', 'image', 'quote', 'list', 'divider'];
 const MAX_CONTENT_BLOCKS = 60;
+const MAX_POSTS_PER_STORE = 500;
 
 function validateContent(content: { type: string; settings: Record<string, any> }[]) {
   if (content.length > MAX_CONTENT_BLOCKS) throw new BadRequestException(`A post cannot have more than ${MAX_CONTENT_BLOCKS} content blocks`);
@@ -53,6 +55,9 @@ export class StoreBlogService {
     await verifyStoreOwnershipStrict(this.storeModel, storeId, sellerId);
     const existing = await this.blogPostModel.findOne({ storeId, slug: dto.slug, isDelete: false });
     if (existing) throw new ConflictException(`A post with slug "${dto.slug}" already exists`);
+    if ((await this.blogPostModel.countDocuments({ storeId, isDelete: false })) >= MAX_POSTS_PER_STORE) {
+      throw new BadRequestException(`A store can have at most ${MAX_POSTS_PER_STORE} posts`);
+    }
 
     const post = await this.blogPostModel.create({
       storeId, title: dto.title, slug: dto.slug, excerpt: dto.excerpt ?? '', coverImage: dto.coverImage ?? null,
@@ -107,6 +112,7 @@ export class StoreBlogService {
   // ── Public ───────────────────────────────────────────────────────────────
 
   async listPublic(storeId: string, page = 1, limit = 10) {
+    if (!(await isStoreLive(this.storeModel, storeId))) throw new NotFoundException('Store not found');
     const skip = (page - 1) * limit;
     const [posts, total] = await Promise.all([
       this.blogPostModel.find({ storeId, status: 'published', isDelete: false })
@@ -118,6 +124,7 @@ export class StoreBlogService {
   }
 
   async getPublicBySlug(storeId: string, slug: string) {
+    if (!(await isStoreLive(this.storeModel, storeId))) throw new NotFoundException('Post not found');
     const post = await this.blogPostModel.findOne({ storeId, slug, status: 'published', isDelete: false }).lean();
     if (!post) throw new NotFoundException('Post not found');
     return { success: true, data: post };

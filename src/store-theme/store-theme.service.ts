@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { isStoreLive } from 'src/common/store-live.util';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { verifyStoreOwnershipStrict } from '../common/store-ownership.util';
@@ -21,6 +22,18 @@ function validateBlocks(blocks: { type: string; settings: Record<string, any> }[
     validateBlockSettings(block.type, block.settings ?? {});
   }
 }
+
+/** The only keys updateTheme / updateIdentityBanner will write — mirrors the DTO classes. */
+const THEME_UPDATE_KEYS = [
+  'primaryColor', 'bgColor', 'textColor', 'accentColor', 'font', 'buttonStyle', 'buttonRadius', 'buttonWidth', 'imageRadius',
+  'typeScale', 'containerWidth', 'sectionSpacing', 'productCardStyle', 'productCardRadius', 'buttonSize', 'heroStyle',
+  'heroAlignment', 'productImageRatio', 'productImageHover', 'productGridDensity', 'testimonialStyle', 'testimonialCardStyle',
+  'testimonialCardRadius', 'faqStyle', 'baseThemeId',
+] as const;
+const IDENTITY_BANNER_KEYS = [
+  'showFollowButton', 'showMessageButton', 'showLoyaltyButton', 'showMembershipButton', 'layout', 'showBadges',
+  'showFollowerCount', 'showProductCount', 'showRating', 'descriptionMaxLines',
+] as const;
 
 @Injectable()
 export class StoreThemeService {
@@ -96,7 +109,9 @@ export class StoreThemeService {
   }
 
   async getPublic(storeId: string) {
-    const theme = await this.storeThemeModel.findOne({ storeId }).lean();
+    // Live stores only, and never the unpublished `draft` copy (it used to be returned to every visitor).
+    if (!(await isStoreLive(this.storeModel, storeId))) return { success: true, data: null };
+    const theme = await this.storeThemeModel.findOne({ storeId }).select('-draft').lean();
     return { success: true, data: theme };
   }
 
@@ -151,9 +166,11 @@ export class StoreThemeService {
     await verifyStoreOwnershipStrict(this.storeModel, storeId, sellerId);
     await this.ensureDefaultTheme(storeId);
     const set: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(dto)) {
+    for (const key of THEME_UPDATE_KEYS) {
+      const value = (dto as Record<string, unknown>)[key];
       if (value === undefined) continue;
-      // `baseThemeId` lives at the draft root (sibling of `theme`), not
+      // Only the declared keys are written (iterating Object.entries(dto) turned any extra body key into a
+      // `draft.theme.<key>` write path). `baseThemeId` lives at the draft root (sibling of `theme`), not
       // nested under it — everything else on this DTO is a `theme.*`
       // color/design field. All writes now target `draft.*`, never the
       // live root fields directly — see publishTheme() for how a draft
@@ -196,9 +213,11 @@ export class StoreThemeService {
     await verifyStoreOwnershipStrict(this.storeModel, storeId, sellerId);
     await this.ensureDefaultTheme(storeId);
     const set: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(dto)) {
+    for (const key of IDENTITY_BANNER_KEYS) {
+      const value = (dto as Record<string, unknown>)[key];
       if (value !== undefined) set[`draft.identityBanner.${key}`] = value;
     }
+    if (Object.keys(set).length === 0) throw new BadRequestException('Nothing to update');
     const updated = await this.storeThemeModel.findOneAndUpdate({ storeId }, { $set: set }, { returnDocument: 'after' });
     return { success: true, message: 'Store info updated', data: updated };
   }

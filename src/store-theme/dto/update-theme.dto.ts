@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsHexColor, IsIn, IsOptional, IsString } from 'class-validator';
+import { IsHexColor, IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 const BORDER_RADIUS_VALUES = ['none', 'small', 'medium', 'large', 'full'] as const;
 const BUTTON_STYLE_VALUES = ['solid', 'outline', 'soft'] as const;
@@ -22,7 +22,7 @@ export class UpdateThemeDto {
   @ApiProperty({ required: false }) @IsOptional() @IsHexColor() bgColor?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsHexColor() textColor?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsHexColor() accentColor?: string;
-  @ApiProperty({ required: false }) @IsOptional() @IsString() font?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @Matches(/^[A-Za-z0-9 ,'\-]{1,60}$/, { message: 'font must be a plain font family name' }) font?: string;
   @ApiProperty({ required: false, enum: BUTTON_STYLE_VALUES }) @IsOptional() @IsIn(BUTTON_STYLE_VALUES) buttonStyle?: string;
   @ApiProperty({ required: false, enum: BORDER_RADIUS_VALUES }) @IsOptional() @IsIn(BORDER_RADIUS_VALUES) buttonRadius?: string;
   @ApiProperty({ required: false, enum: BUTTON_WIDTH_VALUES }) @IsOptional() @IsIn(BUTTON_WIDTH_VALUES) buttonWidth?: string;
@@ -46,5 +46,5 @@ export class UpdateThemeDto {
 
   // Set when this update came from applying a curated theme (frontend
   // `themes.ts` id, not a backend ref) — null/omitted clears/leaves it alone.
-  @ApiProperty({ required: false, nullable: true }) @IsOptional() @IsString() baseThemeId?: string | null;
+  @ApiProperty({ required: false, nullable: true }) @IsOptional() @IsString() @MaxLength(60) baseThemeId?: string | null;
 }
