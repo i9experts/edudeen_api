@@ -1007,9 +1007,15 @@ export class ProductsService {
 
     // Only for a logged-in caller: may THIS buyer review the product? Same rule as RatingService.addReview.
     // One indexed-by-user query on the single-product endpoint — never on list endpoints.
-    const canReview = customerId
-      ? await checkVerifiedPurchase(this.databaseService.repositories.orderModel, customerId, product._id.toString(), null)
-      : undefined;
+    // `hasReviewed` (same filter addReview uses to detect an existing review) is one more query, run alongside.
+    const [canReview, hasReviewed] = customerId
+      ? await Promise.all([
+          checkVerifiedPurchase(this.databaseService.repositories.orderModel, customerId, product._id.toString(), null),
+          this.databaseService.repositories.ratingModel
+            .exists({ userId: customerId, productId: product._id.toString(), isDelete: false })
+            .then((hit: unknown) => !!hit),
+        ])
+      : [undefined, undefined];
 
     return {
       message: 'Product fetched successfully',
@@ -1018,7 +1024,7 @@ export class ProductsService {
         product: productWithSeller,
         variants,
         defaultVariant,
-        ...(canReview === undefined ? {} : { canReview }),
+        ...(canReview === undefined ? {} : { canReview, hasReviewed }),
       },
     };
   }

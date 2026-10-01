@@ -198,10 +198,14 @@ describe('canReview is exactly the rule RatingService.addReview enforces', () =>
 });
 
 describe('product detail canReview', () => {
-  function productsSvc(orders: any[]) {
+  function productsSvc(orders: any[], reviewed = false) {
     const orderModel: any = { find: jest.fn(() => chain(orders)) };
+    const ratingModel: any = {
+      exists: jest.fn(async () => (reviewed ? { _id: 'r1' } : null)),
+    };
     const repos: any = {
       orderModel,
+      ratingModel,
       productModel: {
         findOne: () =>
           chain({ _id: id('p1'), sellerId: 's', storeId: 'S', name: 'X' }),
@@ -224,7 +228,7 @@ describe('product detail canReview', () => {
       sanitizeDigitalForPublicView: (x: any) => x,
       applySubscriberPricing: (v: any[]) => v,
     });
-    return { svc, orderModel };
+    return { svc, orderModel, ratingModel };
   }
 
   it('is present and true for a buyer who bought it, false for one who did not, and absent for an anonymous visitor', async () => {
@@ -254,5 +258,35 @@ describe('product detail canReview', () => {
       userId: 'u1',
       'sellerOrders.items.productId': 'p1',
     });
+  });
+
+  it('hasReviewed: true once this buyer has a review of the product, false before; absent without a token; one query, same filter as addReview', async () => {
+    const done = productsSvc(
+      [orderWith({ type: 'digital', status: 'pending' }, true)],
+      true,
+    );
+    const res = (await done.svc.getProductById('p1', 'u1')).data;
+    expect(res).toMatchObject({ canReview: true, hasReviewed: true });
+    expect(done.ratingModel.exists).toHaveBeenCalledTimes(1);
+    expect(done.ratingModel.exists).toHaveBeenCalledWith({
+      userId: 'u1',
+      productId: 'p1',
+      isDelete: false,
+    });
+
+    const fresh = productsSvc(
+      [orderWith({ type: 'digital', status: 'pending' }, true)],
+      false,
+    );
+    expect((await fresh.svc.getProductById('p1', 'u1')).data).toMatchObject({
+      canReview: true,
+      hasReviewed: false,
+    });
+
+    const anon = productsSvc([], true);
+    const anonRes = (await anon.svc.getProductById('p1', null)).data;
+    expect('hasReviewed' in anonRes).toBe(false);
+    expect('canReview' in anonRes).toBe(false);
+    expect(anon.ratingModel.exists).not.toHaveBeenCalled();
   });
 });
