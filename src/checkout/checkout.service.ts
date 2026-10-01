@@ -3,6 +3,7 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
+import { isValidObjectId } from 'mongoose';
 import { DatabaseService } from 'src/database/databaseservice';
 import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-benefits.service';
 import { MarketingService } from 'src/marketing/marketing.service';
@@ -445,7 +446,14 @@ export class CheckoutService {
     let defaultAddressId: string | null = null;
 
     if (hasPhysical) {
-      let defaultAddress = await addressModel.findOne({ userId, isDefault: true, isDelete: false });
+      // The address the buyer picked at checkout. It used to be ignored, so an
+      // order always shipped to the default address whatever was chosen.
+      let defaultAddress =
+        typeof body.addressId === 'string' && isValidObjectId(body.addressId)
+          ? await addressModel.findOne({ _id: body.addressId, userId, isDelete: false })
+          : null;
+      if (body.addressId && !defaultAddress) throw new BadRequestException('Selected address not found');
+      if (!defaultAddress) defaultAddress = await addressModel.findOne({ userId, isDefault: true, isDelete: false });
 
       // Buyers aren't required to flag an address as default when saving
       // one, so a buyer with addresses but no explicit default would
@@ -616,11 +624,27 @@ export class CheckoutService {
     const withManualTransfer = (methods: string[]) =>
       manualTransferEnabled ? [...methods, 'manual_bank_transfer'] : methods;
 
+    // The shipping option picked at checkout. It used to be dropped here (and
+    // the separate add-shipping call was never made), so no order was ever
+    // charged shipping. Without a zone — none configured yet — shipping is free.
+    let shippingFee = 0;
+    let finalTotal = totalAmount;
+    let finalCheckout: any = checkout;
+    if (hasPhysical && body.shippingZoneId) {
+      if (typeof body.shippingZoneId !== 'string' || !isValidObjectId(body.shippingZoneId)) {
+        throw new BadRequestException('Invalid shippingZoneId');
+      }
+      const added = await this.addShippingInCheckout(userId, { checkoutId: checkout._id.toString(), shippingZoneId: body.shippingZoneId });
+      shippingFee = added.data.shippingFee;
+      finalTotal = added.data.totalAmount;
+      finalCheckout = (await checkoutModel.findById(checkout._id)) ?? checkout;
+    }
+
     return {
       success: true,
       message: 'Checkout created successfully',
       data: {
-        checkout,
+        checkout: finalCheckout,
         // A mixed cart can either pay everything online ('stripe') or split
         // it — digital online now, physical via COD on delivery ('split').
         // Digital-only carts never get COD; physical-only carts keep both
@@ -632,9 +656,9 @@ export class CheckoutService {
           : withManualTransfer(codEligible ? ['stripe', 'cash_on_delivery'] : ['stripe']),
         summary: {
           subtotal,
-          shippingFee: 0,
+          shippingFee,
           taxAmount,
-          totalAmount,
+          totalAmount: finalTotal,
           subscriberSavingsUSD: this.round(subscriberSavingsUSD),
           campaignDiscountUSD: campaignSavingsUSD,
           autoDiscountUSD: autoDiscountSavingsUSD,
@@ -678,6 +702,7 @@ export class CheckoutService {
     const shippingZone = await shippingZoneModel.findOne({
       _id: shippingZoneId,
       isDelete: false,
+      status: { $ne: 'inactive' },
     });
     if (!shippingZone) throw new NotFoundException('Shipping zone not found');
 
@@ -747,10 +772,11 @@ export class CheckoutService {
       const shippingZoneModel =
         this.databaseService.repositories.shippingZoneModel;
 
-      // get all shipping zones
+      // Buyers only ever see zones an admin has switched on.
       const shippingZones = await shippingZoneModel
         .find({
           isDelete: false,
+          status: { $ne: 'inactive' },
         })
         .sort({ createdAt: -1 });
 
@@ -761,6 +787,69 @@ export class CheckoutService {
     } catch (error) {
       throw error;
     }
+  }
+
+  // ── Admin: shipping zones ────────────────────────────────────────────────
+  // There was no way to create a zone at all (only direct DB inserts), so a
+  // physical checkout had no shipping option to pick and could not continue.
+
+  private pickZoneFields(body: any, partial: boolean) {
+    const out: Record<string, unknown> = {};
+    const text = (key: string, max: number, required: boolean) => {
+      const v = body?.[key];
+      if (v === undefined) { if (required && !partial) throw new BadRequestException(`${key} is required`); return; }
+      if (v === null || v === '') { if (required) throw new BadRequestException(`${key} is required`); out[key] = null; return; }
+      if (typeof v !== 'string' || v.trim().length > max) throw new BadRequestException(`${key} must be text of at most ${max} characters`);
+      out[key] = v.trim();
+    };
+    text('country', 60, true);
+    text('province', 80, false);
+    text('city', 80, false);
+    text('estimatedDeliveryTime', 40, false);
+    if (body?.shippingPrice !== undefined) {
+      const p = Number(body.shippingPrice);
+      if (!Number.isFinite(p) || p < 0 || p > 1_000_000) throw new BadRequestException('shippingPrice must be between 0 and 1,000,000 PKR');
+      out.shippingPrice = Math.round(p);
+    } else if (!partial) throw new BadRequestException('shippingPrice is required');
+    if (body?.status !== undefined) {
+      if (body.status !== 'active' && body.status !== 'inactive') throw new BadRequestException('status must be active or inactive');
+      out.status = body.status;
+    }
+    return out;
+  }
+
+  async adminListShippingZones() {
+    const data = await this.databaseService.repositories.shippingZoneModel
+      .find({ isDelete: false })
+      .sort({ country: 1, province: 1, city: 1 })
+      .lean();
+    return { success: true, data };
+  }
+
+  async adminCreateShippingZone(body: any) {
+    const data = await this.databaseService.repositories.shippingZoneModel.create(this.pickZoneFields(body, false));
+    return { success: true, message: 'Shipping zone created', data };
+  }
+
+  async adminUpdateShippingZone(id: string, body: any) {
+    if (!isValidObjectId(id)) throw new BadRequestException('Invalid shipping zone id');
+    const data = await this.databaseService.repositories.shippingZoneModel.findOneAndUpdate(
+      { _id: id, isDelete: false },
+      { $set: this.pickZoneFields(body, true) },
+      { returnDocument: 'after' },
+    );
+    if (!data) throw new NotFoundException('Shipping zone not found');
+    return { success: true, message: 'Shipping zone updated', data };
+  }
+
+  async adminDeleteShippingZone(id: string) {
+    if (!isValidObjectId(id)) throw new BadRequestException('Invalid shipping zone id');
+    const data = await this.databaseService.repositories.shippingZoneModel.findOneAndUpdate(
+      { _id: id, isDelete: false },
+      { $set: { isDelete: true } },
+    );
+    if (!data) throw new NotFoundException('Shipping zone not found');
+    return { success: true, message: 'Shipping zone deleted' };
   }
 
   /** Validates a seller-created coupon against this checkout and, if valid,

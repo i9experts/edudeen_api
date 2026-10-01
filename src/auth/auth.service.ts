@@ -396,6 +396,19 @@ export class AuthService {
       };
     }
     if (authProvider === 'facebook') {
+      // The token must have been issued to OUR Facebook app — otherwise a
+      // token some other app obtained for that person could be replayed here.
+      const fbAppId = process.env.FACEBOOK_APP_ID;
+      const fbSecret = process.env.FACEBOOK_APP_SECRET;
+      if (fbAppId && fbSecret) {
+        const dbg = await fetch(
+          `https://graph.facebook.com/debug_token?input_token=${encodeURIComponent(token)}&access_token=${encodeURIComponent(`${fbAppId}|${fbSecret}`)}`,
+        );
+        const info: any = (await dbg.json())?.data;
+        if (!info?.is_valid || String(info.app_id) !== String(fbAppId) || String(info.user_id) !== String(socialId)) {
+          throw new UnauthorizedException('Invalid Facebook token');
+        }
+      }
       const resp = await fetch(
         `https://graph.facebook.com/me?fields=id,email&access_token=${encodeURIComponent(token)}`,
       );
@@ -410,9 +423,12 @@ export class AuthService {
       };
     }
     if (authProvider === 'apple') {
-      const payload: any = await appleSignin.verifyIdToken(token, {
-        audience: process.env.APPLE_CLIENT_ID,
-      });
+      // Web sign-in uses the Services ID, the iOS app its bundle id — accept
+      // either (comma-separated APPLE_CLIENT_IDS, or the single APPLE_CLIENT_ID).
+      const audience = (process.env.APPLE_CLIENT_IDS || process.env.APPLE_CLIENT_ID || '')
+        .split(',').map((s) => s.trim()).filter(Boolean);
+      if (!audience.length) throw new UnauthorizedException('Apple sign-in is not configured');
+      const payload: any = await appleSignin.verifyIdToken(token, { audience });
       if (!payload || payload.sub !== socialId) {
         throw new UnauthorizedException('Invalid Apple token');
       }

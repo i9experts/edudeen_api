@@ -90,6 +90,7 @@
 import {
   Controller,
   Post,
+  Patch,
   Delete,
   Param,
   Req,
@@ -134,6 +135,35 @@ export class CheckoutController {
   @Get('getShippingZones')
   async getShippingZones() {
     return this.checkoutService.getShippingZones();
+  }
+
+  // ── Admin: shipping zones (where Edudeen delivers, and for how much) ──
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Get('admin/shipping-zones')
+  async adminListShippingZones() {
+    return this.checkoutService.adminListShippingZones();
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('admin/shipping-zones')
+  async adminCreateShippingZone(@Body() body: any) {
+    return this.checkoutService.adminCreateShippingZone(body);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Patch('admin/shipping-zones/:id')
+  async adminUpdateShippingZone(@Param('id') id: string, @Body() body: any) {
+    return this.checkoutService.adminUpdateShippingZone(id, body);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Delete('admin/shipping-zones/:id')
+  async adminDeleteShippingZone(@Param('id') id: string) {
+    return this.checkoutService.adminDeleteShippingZone(id);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
