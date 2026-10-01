@@ -685,7 +685,9 @@ export class CheckoutService {
         // 'stripe' and 'cash_on_delivery' as before — unless COD isn't
         // eligible (see codEligible above), in which case 'stripe' (pay
         // everything online) is always the safe fallback.
-        allowedPaymentMethods: hasDigital
+        allowedPaymentMethods: totalAmount === 0
+          ? ['free'] // nothing to pay: confirm via POST /api/payment/free-checkout
+          : hasDigital
           ? withManualTransfer(hasPhysical && codEligible ? ['stripe', 'split'] : ['stripe'])
           : withManualTransfer(codEligible ? ['stripe', 'cash_on_delivery'] : ['stripe']),
         summary: {

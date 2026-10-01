@@ -13,7 +13,7 @@ const item = (n: string, totalPrice: number, status = 'pending') => ({
 });
 
 /** A paid Stripe physical order with two stores: A has items a1, a2 (shipping 300), B has b1 (shipping 300). */
-function build(over: { legacy?: boolean } = {}) {
+function build(over: { legacy?: boolean; free?: boolean } = {}) {
   const order: any = {
     _id: 'order-1',
     userId: 'buyer-1',
@@ -57,6 +57,7 @@ function build(over: { legacy?: boolean } = {}) {
     refundStripePaymentIntent: jest.fn().mockResolvedValue({ id: 're_1' }),
     restoreGiftCardForItems: jest.fn().mockResolvedValue(undefined),
   };
+  const activity: any = { log: jest.fn() };
   const svc = new OrdersService(
     { repositories: repos } as any,
     {} as any,
@@ -70,7 +71,7 @@ function build(over: { legacy?: boolean } = {}) {
     payment,
     {} as any,
   );
-  return { svc, payment, order };
+  return { svc, payment, order, activity };
 }
 const refunded = (p: any) => p.refundStripePaymentIntent.mock.calls[0]?.[1];
 
@@ -133,5 +134,31 @@ describe('cancelOrder hands the cancelled items back to the gift-card restore (p
     expect(so.storeId).toBe('B');
     expect(items.map((i: any) => i._id.toString())).toEqual(['b1']);
     expect(key).toBe('cancel-order-1-b1');
+  });
+});
+
+describe('cancelling a FREE order', () => {
+  it('moves no money (no Stripe refund, no "send the refund by hand" alert) but still cancels the items', async () => {
+    const { svc, payment, activity } = build({ free: true });
+    // free order: everything cost 0
+    const order: any = await (
+      svc as any
+    ).databaseService.repositories.orderModel.findOne();
+    order.sellerOrders.forEach((so: any) => {
+      so.shippingFee = 0;
+      so.items.forEach((i: any) => {
+        i.totalPrice = 0;
+      });
+    });
+    order.shippingFee = 0;
+    const res = await svc.cancelOrder('buyer-1', 'order-1', {
+      reason: 'x',
+      itemIds: ['a1'],
+    });
+    expect(res.success).toBe(true);
+    expect(payment.refundStripePaymentIntent).not.toHaveBeenCalled();
+    expect(activity.log).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'manual_refund_required' }),
+    );
   });
 });

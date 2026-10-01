@@ -400,7 +400,7 @@ export class Order {
   @Prop({ required: true })
   totalAmount: number;
 
-  @Prop({ enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer'], required: true })
+  @Prop({ enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer', 'free'], required: true })
   paymentType: string;
 
   // 'pending_verification' — manual bank-transfer order awaiting an admin to

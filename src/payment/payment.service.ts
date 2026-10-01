@@ -38,6 +38,9 @@ export function orderIdForStore(createdOrders: any[], storeId: string | null | u
   return String((match ?? createdOrders[0])?._id ?? '');
 }
 
+/** Default cap on free orders one buyer may place in a rolling 24h (env FREE_ORDERS_PER_USER_PER_DAY overrides it). */
+export const DEFAULT_FREE_ORDERS_PER_USER_PER_DAY = 20;
+
 @Injectable()
 export class PaymentService {
   private stripe: InstanceType<typeof Stripe> | undefined;
@@ -220,6 +223,8 @@ export class PaymentService {
       }
     }
 
+    await this.assertStoresStillActive(checkout);
+
     // A mixed cart (physical + digital together) charges only the
     // digital-items subtotal online when the buyer picked 'split' — the
     // physical portion is then settled via COD once this payment succeeds
@@ -252,6 +257,14 @@ export class PaymentService {
     // summing, same rule as CheckoutService.convertedSubtotal, using this
     // checkout's own frozen fxSnapshots rather than a fresh rate.
     const chargeAmount = this.computeChargeAmount(checkout, useSplit ? 'digital_only' : 'full');
+    // Nothing to charge: Stripe rejects a 0 amount. A fully-free checkout has its own confirmation endpoint.
+    if (!(chargeAmount > 0)) {
+      throw new BadRequestException(
+        checkout.totalAmount === 0
+          ? 'This order is free — confirm it without a payment (free checkout).'
+          : 'There is nothing to pay online for this order — choose another payment option.',
+      );
+    }
     await this.assertGiftCardStillCovers(checkout);
     const paymentScope = useSplit ? 'digital_only' : 'full';
 
@@ -993,6 +1006,130 @@ export class PaymentService {
     );
   }
 
+  /** A store can be suspended after a checkout was created. Every path that places an order or takes
+   *  money re-checks, so an order is never created for a store that is no longer live. */
+  private async assertStoresStillActive(checkout: any) {
+    const storeIds = [...new Set((checkout.items as any[]).map((i: any) => i.storeId))];
+    const live = await this.databaseService.repositories.storeModel
+      .find({ _id: { $in: storeIds }, status: 'active', isDelete: false })
+      .select('_id')
+      .lean();
+    const liveIds = new Set((live as any[]).map((s: any) => String(s._id)));
+    const gone = (checkout.items as any[]).find((i: any) => !liveIds.has(String(i.storeId)));
+    if (gone) {
+      throw new BadRequestException(
+        `"${gone.name}" is no longer available because the seller's store is not active — please remove it from your cart and start a new checkout.`,
+      );
+    }
+  }
+
+  /** The checkout's grand total recomputed from its own server-priced lines (each converted from its native
+   *  currency with the checkout's frozen FX snapshots) plus shipping — never read from the client. */
+  private recomputeCheckoutTotal(checkout: any): number {
+    const subtotal = (checkout.items as any[]).reduce(
+      (sum: number, i: any) =>
+        sum +
+        this.exchangeRateService.convertWithSnapshots(i.totalPrice, i.currency ?? checkout.currency, checkout.currency, (checkout.fxSnapshots as any) ?? []),
+      0,
+    );
+    return this.round(subtotal + (checkout.shippingFee || 0));
+  }
+
+  /**
+   * "Free" checkout: the grand total is exactly 0 after every discount (free resources, or a coupon / gift card /
+   * subsidy that covers everything) — no payment provider is involved. The server decides eligibility: the total is
+   * recomputed here from the checkout's own priced lines and must be 0; the request carries nothing but the id.
+   * Orders are created already paid (digital access is granted exactly as for a paid order), then the same
+   * bookkeeping as every other path runs: coupon / voucher usage, gift-card redemption, stock, cart cleanup.
+   * Guarded by an atomic per-checkout claim (a replay or double-tap places one order set) and a per-user daily cap.
+   */
+  async freeCheckout(userId: string, body: any) {
+    const { checkoutId } = body ?? {};
+    if (!checkoutId) throw new BadRequestException('checkoutId is required');
+
+    const { checkoutModel, paymentTransactionModel, orderModel, addressModel, productVariantModel, cartModel } =
+      this.databaseService.repositories;
+
+    const checkout = await checkoutModel.findOne({ _id: checkoutId, userId, isDelete: false });
+    if (!checkout) throw new NotFoundException('Checkout not found');
+    if (checkout.status === 'completed') throw new BadRequestException('Checkout already completed');
+    if (checkout.status === 'cancelled') throw new BadRequestException('Checkout is cancelled');
+    if (checkout.status === 'expired') throw new BadRequestException('Checkout has expired');
+    if (checkout.expiredAt && checkout.expiredAt < new Date()) {
+      await checkoutModel.findByIdAndUpdate(checkout._id, { status: 'expired' });
+      throw new BadRequestException('Checkout has expired');
+    }
+
+    // Eligibility is the server's call: both the stored total and a fresh recomputation from the lines must be 0.
+    if (!(Math.round(this.recomputeCheckoutTotal(checkout) * 100) === 0) || !(Math.round((checkout.totalAmount ?? 0) * 100) === 0)) {
+      throw new BadRequestException('This order is not free — please choose a payment method.');
+    }
+
+    await this.assertStoresStillActive(checkout);
+
+    // Re-price against the live catalogue: a seller who raised a price after this checkout was created
+    // must not hand the buyer the item at the old (free) price.
+    for (const item of checkout.items as any[]) {
+      const variant = await productVariantModel.findOne({ _id: item.variantId, isDelete: false });
+      if (!variant) throw new BadRequestException(`Item not available: ${item.name}`);
+      const listPrice = item.originalPrice ?? item.price;
+      if (variant.price > listPrice) {
+        throw new BadRequestException(`The price of "${item.name}" has changed — please start a new checkout.`);
+      }
+      if (item.type === 'physical' && !variant.unlimitedStock && variant.stock < item.quantity) {
+        throw new BadRequestException(`Insufficient stock for ${item.name}. Available: ${variant.stock}, required: ${item.quantity}`);
+      }
+    }
+    await this.assertGiftCardStillCovers(checkout);
+
+    // Abuse limit: free orders per buyer per rolling 24h. Counted on completed free transactions.
+    const dailyCap = Number(this.configService.get<string>('FREE_ORDERS_PER_USER_PER_DAY')) || DEFAULT_FREE_ORDERS_PER_USER_PER_DAY;
+    const placedToday = await paymentTransactionModel.countDocuments({
+      userId,
+      paymentType: 'free',
+      createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      isDelete: false,
+    });
+    if (placedToday >= dailyCap) {
+      throw new BadRequestException(`You have reached today's limit of ${dailyCap} free orders — please try again tomorrow.`);
+    }
+
+    await this.claimCheckoutForPlacement(checkoutId, userId);
+
+    let orders: any[];
+    try {
+      await checkoutModel.findByIdAndUpdate(checkoutId, { paymentType: 'free', status: 'payment_pending' });
+      const paid = { paymentType: 'free', isPaid: true };
+      orders = await this.createOrder(userId, checkout, orderModel, addressModel, paid, paid);
+    } catch (err) {
+      await this.releaseCheckoutPlacementClaim(checkoutId);
+      throw err;
+    }
+
+    await paymentTransactionModel.create({
+      userId,
+      checkoutId: checkout._id.toString(),
+      orderIds: orders.map((o: any) => o._id.toString()),
+      paymentType: 'free',
+      amount: 0,
+      currency: checkout.currency,
+      fxSnapshots: checkout.fxSnapshots,
+      status: 'completed',
+      stripePaymentIntentId: null,
+      stripeClientSecret: null,
+      paidAt: new Date(),
+    });
+
+    await checkoutModel.findByIdAndUpdate(checkoutId, { status: 'completed' });
+    await this.removeCheckedOutItemsFromCart(userId, checkout, cartModel);
+
+    return {
+      success: true,
+      message: 'Order placed successfully',
+      data: { orders: orders.map((o: any) => this.formatOrder(o)) },
+    };
+  }
+
   async codPayment(userId: string, body: any) {
     const { checkoutId } = body;
     if (!checkoutId) throw new BadRequestException('checkoutId is required');
@@ -1044,6 +1181,8 @@ export class PaymentService {
         `Cash on Delivery isn't available for: ${codDisabledStores.map((s: any) => s.name).join(', ')} — please pay online, or remove those items from your cart.`,
       );
     }
+
+    await this.assertStoresStillActive(checkout);
 
     for (const item of checkout.items) {
       const variant = await productVariantModel.findOne({
@@ -1143,6 +1282,11 @@ export class PaymentService {
       await checkoutModel.findByIdAndUpdate(checkout._id, { status: 'expired' });
       throw new BadRequestException('Checkout has expired');
     }
+
+    if (!(checkout.totalAmount > 0)) {
+      throw new BadRequestException('There is nothing to pay for this order — if it is free, confirm it without a payment.');
+    }
+    await this.assertStoresStillActive(checkout);
 
     for (const item of checkout.items) {
       if (item.type !== 'physical') continue;

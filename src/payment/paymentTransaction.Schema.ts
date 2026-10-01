@@ -16,7 +16,7 @@ export class PaymentTransaction {
   @Prop({ type: [String], default: [] })
   orderIds: string[];
 
-  @Prop({ enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer'], required: true })
+  @Prop({ enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer', 'free'], required: true })
   paymentType: string;
 
   @Prop({ required: true })

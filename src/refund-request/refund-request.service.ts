@@ -248,7 +248,8 @@ export class RefundRequestService {
 
       // Capped by what is still refundable per item (totalPrice minus anything already refunded).
       buyerRefundAmount = this.round(items.reduce((sum: number, i: any) => sum + Math.max(0, i.totalPrice - (i.refundedAmount ?? 0)), 0));
-      if (!(buyerRefundAmount > 0)) throw new BadRequestException('Nothing left to refund on these items');
+      // A free order has no money to return, but its items can still be refunded to revoke access.
+      if (!(buyerRefundAmount > 0) && order.paymentType !== 'free') throw new BadRequestException('Nothing left to refund on these items');
 
       buyerRefundCurrency = order.currency || 'USD';
       settlementCurrency = sellerOrder.settlementCurrency ?? buyerRefundCurrency;
@@ -264,7 +265,7 @@ export class RefundRequestService {
       // COD settled by a commission debit is the exception: the seller returns
       // the cash by hand and the commission is credited back in proportion
       // (see FinanceService.recordRefundForSellerOrder).
-      await this.financeService.recordRefundForSellerOrder({
+      if (order.paymentType !== 'free') await this.financeService.recordRefundForSellerOrder({
         order, sellerOrder,
         storeId: sellerOrder.storeId, sellerId: sellerOrder.sellerId, orderId: order._id.toString(),
         refundedBuyerAmount: buyerRefundAmount,

@@ -798,8 +798,9 @@ export class OrdersService {
           if (!refund) throw new BadRequestException('Online refunds are not available right now — please contact support');
         }
         refundedViaStripe = true;
-      } else {
-        // Bank transfer: there's no API to send the money back — flag it.
+      } else if (refundAmount > 0) {
+        // Bank transfer / COD: there's no API to send the money back — flag it. (A free order
+        // refunds 0: nothing to send, only the items are cancelled.)
         manualRefundNeeded = true;
       }
     }

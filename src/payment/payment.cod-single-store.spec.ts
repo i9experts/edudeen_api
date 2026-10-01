@@ -21,7 +21,7 @@ const digital = (storeId: string, n: number) => ({
   currency: 'USD',
 });
 
-function makeService(items: any[]) {
+function makeService(items: any[], opts: { inactive?: boolean } = {}) {
   const checkout: any = {
     _id: 'c1',
     userId: 'u1',
@@ -43,13 +43,17 @@ function makeService(items: any[]) {
       updateOne: jest.fn().mockResolvedValue({}),
     },
     storeModel: {
-      find: jest
-        .fn()
-        .mockReturnValue({
-          select: jest
-            .fn()
-            .mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }),
+      // codEnabled:false lookups find none; the "still active" lookup finds every store unless the test suspends them
+      find: jest.fn((f: any) => ({
+        select: () => ({
+          lean: async () =>
+            f.codEnabled === false || opts.inactive
+              ? []
+              : [...new Set(items.map((i: any) => i.storeId))].map((_id) => ({
+                  _id,
+                })),
         }),
+      })),
     },
     productVariantModel: {
       findOne: jest
@@ -139,5 +143,24 @@ describe('Cash on Delivery requires all physical items from ONE store (enforced 
       .initiatePayment('u1', { checkoutId: 'c1', paymentMode: 'full' })
       .catch((e: any) => e);
     expect(String(err?.message)).not.toMatch(/Cash on Delivery/);
+  });
+});
+
+describe('a store suspended after the checkout was created blocks placement', () => {
+  it('codPayment refuses and places nothing', async () => {
+    const { svc } = makeService([physical('A', 1)], { inactive: true });
+    await expect(svc.codPayment('u1', { checkoutId: 'c1' })).rejects.toThrow(
+      /store is not active/,
+    );
+    expect(svc.createOrder).not.toHaveBeenCalled();
+  });
+  it('initiatePayment refuses before any Stripe call', async () => {
+    const { svc } = makeService([physical('A', 1), digital('C', 3)], {
+      inactive: true,
+    });
+    svc.assertStripeConfigured = jest.fn(() => ({}));
+    await expect(
+      svc.initiatePayment('u1', { checkoutId: 'c1', paymentMode: 'full' }),
+    ).rejects.toThrow(/store is not active/);
   });
 });

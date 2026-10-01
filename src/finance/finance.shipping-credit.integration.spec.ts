@@ -187,4 +187,43 @@ d('recordSale with a shipping line — real replica set', () => {
     expect(b.availableBalance).toBe(110);
     expect(b.pendingBalance).toBe(0);
   });
+
+  it('a FREE sale (nothing paid, no subsidy owed) writes no ledger rows and creates no balance', async () => {
+    await service.recordSale(
+      's1',
+      'seller1',
+      'free-1',
+      0,
+      'Sale',
+      0,
+      null,
+      'USD',
+      'free',
+      'seller',
+      0,
+    );
+    expect(await Tx.countDocuments({})).toBe(0);
+    expect(await Balance.countDocuments({})).toBe(0);
+  });
+
+  it('a free sale made free by a platform-sponsored discount credits only that sponsored basis, as before', async () => {
+    // the buyer paid 0; the platform owes the seller the sponsored 20 (the settlement basis), commission 10% as for any sponsored sale
+    await service.recordSale(
+      's1',
+      'seller1',
+      'free-2',
+      20,
+      'Sale',
+      20,
+      null,
+      'USD',
+      'free',
+      'seller',
+      0,
+    );
+    expect((await bal()).pendingBalance).toBe(18);
+    expect(
+      await Tx.countDocuments({ type: 'sale', referenceId: 'free-2' }),
+    ).toBe(1);
+  });
 });

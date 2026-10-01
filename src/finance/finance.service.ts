@@ -1395,6 +1395,9 @@ export class FinanceService {
     fulfillmentMode?: string | null,
     shippingCredit = 0,
   ) {
+    // Nothing was paid for and no platform-funded discount is owed (a free order): there is no sale to
+    // credit and no commission to take, so no ledger rows at all.
+    if (!(saleAmount > 0) && !(shippingCredit > 0)) return;
     // Cash collected by the seller's own courier never reaches the platform —
     // crediting sale-minus-commission here would pay the seller for money they
     // already hold. Debit the commission instead.

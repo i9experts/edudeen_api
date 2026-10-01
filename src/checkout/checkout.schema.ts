@@ -172,7 +172,7 @@ export class Checkout {
   @Prop({ type: String, default: null })
   shippingZoneId: string | null;
 
-  @Prop({ type: String, enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer'], default: null })
+  @Prop({ type: String, enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer', 'free'], default: null })
   paymentType: string | null;
 
   @Prop({ type: String, default: null })
