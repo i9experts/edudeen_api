@@ -48,6 +48,21 @@ d('FinanceService — concurrency on a real replica set', () => {
     expect((await bal()).pendingBalance).toBe(90); // 100 - 10% commission, once
   });
 
+  it('recordSale, seller-collected COD: 5 concurrent markPaid/completed calls debit the commission exactly once', async () => {
+    // 'seller' / undefined fulfillment = the seller's courier collected the cash, so the sale is NOT credited.
+    await settle(
+      Array.from({ length: 5 }, (_, i) =>
+        service.recordSale('s1', 'seller1', 'order-cod-1', 100, 'Sale', 0, null, 'USD', 'cash_on_delivery', i % 2 ? 'seller' : undefined),
+      ),
+    );
+    expect(await Tx.countDocuments({ storeId: 's1', type: 'sale', referenceId: 'order-cod-1' })).toBe(0);
+    expect(await Tx.countDocuments({ storeId: 's1', type: 'fee', referenceId: 'order-cod-1' })).toBe(1);
+    const b = await bal();
+    expect(b.availableBalance).toBe(-10); // 10% commission, debited once — not -50
+    expect(b.pendingBalance).toBe(0);
+    expect(b.totalFees).toBe(10);
+  });
+
   it('adminRejectPayout: 5 concurrent rejects refund the seller exactly once', async () => {
     await Balance.create({ storeId: 's1', sellerId: 'seller1', currency: 'USD', availableBalance: 60, totalPayouts: 40 });
     const p = await Payout.create({ storeId: 's1', sellerId: 'seller1', amount: 40, currency: 'USD', status: 'processing', payoutMethodId: 'm1', payoutMethodSnapshot: {}, source: 'seller_manual' } as any);
