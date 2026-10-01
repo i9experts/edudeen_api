@@ -43,7 +43,7 @@ d('FinanceService — concurrency on a real replica set', () => {
   const bal = async (storeId = 's1') => (await Balance.findOne({ storeId, currency: 'USD' }).lean()) as any;
 
   it('recordSale: 5 concurrent calls for one order credit the seller exactly once', async () => {
-    await settle(Array.from({ length: 5 }, () => service.recordSale('s1', 'seller1', 'order-1', 100, 'Sale', 0, null, 'USD', 'cash_on_delivery')));
+    await settle(Array.from({ length: 5 }, () => service.recordSale('s1', 'seller1', 'order-1', 100, 'Sale', 0, null, 'USD', 'cash_on_delivery', 'platform')));
     expect(await Tx.countDocuments({ storeId: 's1', type: 'sale', referenceId: 'order-1' })).toBe(1);
     expect((await bal()).pendingBalance).toBe(90); // 100 - 10% commission, once
   });

@@ -24,6 +24,10 @@ function build(orderOverrides: any = {}, soOverrides: any = {}, fxThrows = false
     refundRequestModel: model,
   };
   const finance: any = { recordRefund: jest.fn().mockResolvedValue(undefined) };
+  // The services now go through recordRefundForSellerOrder; for non-COD orders it is exactly recordRefund.
+  finance.recordRefundForSellerOrder = jest.fn((a: any) =>
+    finance.recordRefund(a.storeId, a.sellerId, a.orderId, a.sellerDebitAmount, a.actorId, a.actorRole, { description: a.description, targetType: a.targetType, currency: a.currency }),
+  );
   const fx: any = { convertWithSnapshots: jest.fn((a: number) => { if (fxThrows) throw new Error('missing fx snapshot'); return a; }) };
   const activity: any = { log: jest.fn().mockResolvedValue(undefined) };
   const svc: any = new RefundRequestService({ repositories: repos } as any, finance, {} as any, fx, activity);

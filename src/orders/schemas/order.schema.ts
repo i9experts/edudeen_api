@@ -170,6 +170,13 @@ export class SellerOrder {
   })
   fulfillmentType: string;
 
+  // Who ships this sub-order's physical items, snapshotted from the store at
+  // order creation. null/absent = 'seller' (every order placed before the
+  // setting existed). 'platform' = the platform collects COD cash and handles
+  // delivery, so the seller is credited the sale (see isSellerCollectedCod).
+  @Prop({ type: String, enum: ['seller', 'platform', null], default: null })
+  fulfillmentMode: string | null;
+
   @Prop({ type: [OrderItemSchema], required: true })
   items: OrderItem[];
 

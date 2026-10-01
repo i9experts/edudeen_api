@@ -493,6 +493,7 @@ export class OrdersService {
             sponsoredCampaignId,
             sellerPayoutCurrency(so, order),
             order.paymentType,
+            so.fulfillmentMode,
           );
         } catch (e) {
           console.error('Finance recordSale failed:', e?.message);
@@ -624,6 +625,7 @@ export class OrdersService {
           sponsoredCampaignId,
           sellerPayoutCurrency(so, order),
           order.paymentType,
+          so.fulfillmentMode,
         );
       } catch (e) {
         console.error('Finance recordSale failed:', e?.message);
@@ -1311,15 +1313,19 @@ export class OrdersService {
           const sellerDebit = this.exchangeRateService.convertWithSnapshots(
             refundAmount, buyerCurrency, settlementCurrency, (order.fxSnapshots as any) ?? [],
           );
-          await this.financeService.recordRefund(
-            storeId,
-            sellerId,
-            orderId,
-            sellerDebit,
-            sellerId,
-            'seller',
-            { currency: settlementCurrency, description: `Approved return — Order #${order.orderNumber ?? orderId}` },
-          );
+          // Seller-collected COD settled by a commission debit: the seller hands
+          // the cash back by hand and the commission is credited back instead of
+          // debiting the refund (see FinanceService.recordRefundForSellerOrder).
+          await this.financeService.recordRefundForSellerOrder({
+            order, sellerOrder, storeId, sellerId, orderId,
+            refundedBuyerAmount: refundAmount,
+            sellerOrderTotal: round((sellerOrder.items as any[]).reduce((sum: number, i: any) => sum + (i.totalPrice || 0), 0)),
+            sellerDebitAmount: sellerDebit,
+            refKey: `return-${orderId}-${targetItems.map((t) => t.item._id.toString()).sort().join(',')}`,
+            currency: settlementCurrency,
+            description: `Approved return — Order #${order.orderNumber ?? orderId}`,
+            actorId: sellerId, actorRole: 'seller',
+          });
           refundProcessed = true;
         } catch (e) {
           // The buyer has already been (or must be) refunded — a failed ledger

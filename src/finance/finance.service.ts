@@ -26,6 +26,16 @@ export const CLEARING_DAYS           = 3;      // default — non-card rails (ma
 // longer before they become payout-eligible is the direct mitigation for
 // "chargeback arrives after the seller has already been paid out".
 export const CLEARING_DAYS_CARD      = 14;
+/** True when the buyer paid CASH to the seller's own courier (Cash on Delivery
+ *  in 'seller' fulfillment — every store unless it opted into platform
+ *  fulfillment). The platform never receives that money, so the seller's ledger
+ *  must be DEBITED the commission, never credited the sale (see
+ *  `recordSale`). A missing `fulfillmentMode` means 'seller' (all pre-existing
+ *  orders). */
+export function isSellerCollectedCod(paymentType: string | null | undefined, sellerOrder: { fulfillmentMode?: string | null } | null | undefined): boolean {
+  return paymentType === 'cash_on_delivery' && sellerOrder?.fulfillmentMode !== 'platform';
+}
+
 function clearingDaysForRail(paymentMethodType: string): number {
   return paymentMethodType === 'stripe' ? CLEARING_DAYS_CARD : CLEARING_DAYS;
 }
@@ -1293,8 +1303,19 @@ export class FinanceService {
           if (claim.modifiedCount !== 1) return null;
           if (netAmount > 0) {
             const balance = await this.getOrCreateBalance(tx.storeId, tx.sellerId, currency, session);
-            balance.pendingBalance = this.round(Math.max(0, balance.pendingBalance - netAmount));
-            balance.availableBalance = this.round(balance.availableBalance + netAmount);
+            // A refund that overdrew the seller can leave pendingBalance
+            // NEGATIVE (see recordRefund). Clamping that to 0 would forgive the
+            // debt and release the full sale to availableBalance, so the
+            // shortfall is netted against what this sale releases instead —
+            // available + pending stays exactly conserved.
+            const pendingAfter = this.round(balance.pendingBalance - netAmount);
+            if (pendingAfter >= 0) {
+              balance.pendingBalance = pendingAfter;
+              balance.availableBalance = this.round(balance.availableBalance + netAmount);
+            } else {
+              balance.pendingBalance = 0;
+              balance.availableBalance = this.round(balance.availableBalance + netAmount + pendingAfter);
+            }
             this.reevaluateDebtFlag(balance);
             await balance.save({ session });
           }
@@ -1338,6 +1359,14 @@ export class FinanceService {
    * the extra audit-trail entry and the `campaignId`'s running subsidy
    * total below, it does not change the balance math itself.
    */
+  /** The ONE commission calculation for order sales (commission rules: seller
+   *  override / category / default) — shared by `recordSale` and the COD
+   *  commission debit so the two can never drift. */
+  private async platformCommission(storeId: string, saleAmount: number) {
+    const { rate, source } = await this.commissionRulesService.resolveRate(storeId);
+    return { rate, source, platformFee: this.round(saleAmount * rate) };
+  }
+
   /**
    * `paymentMethodType` ('stripe' | 'cash_on_delivery' | 'manual_bank_transfer')
    * gates the card-processing-fee component: it models Stripe's real 2.9%+$0.30
@@ -1349,10 +1378,16 @@ export class FinanceService {
   async recordSale(
     storeId: string, sellerId: string, orderId: string, saleAmount: number, description: string,
     platformSponsoredUSD = 0, campaignId?: string | null, currency = 'USD', paymentMethodType = 'stripe',
+    fulfillmentMode?: string | null,
   ) {
+    // Cash collected by the seller's own courier never reaches the platform —
+    // crediting sale-minus-commission here would pay the seller for money they
+    // already hold. Debit the commission instead.
+    if (isSellerCollectedCod(paymentMethodType, { fulfillmentMode })) {
+      return this.recordCodCommissionDebit(storeId, sellerId, orderId, saleAmount, platformSponsoredUSD, campaignId, currency);
+    }
     const chargesProcessingFee = paymentMethodType === 'stripe';
-    const { rate: platformFeeRate, source: feeRateSource } = await this.commissionRulesService.resolveRate(storeId);
-    const platformFee   = this.round(saleAmount * platformFeeRate);
+    const { rate: platformFeeRate, source: feeRateSource, platformFee } = await this.platformCommission(storeId, saleAmount);
     const processingFee = chargesProcessingFee ? this.round(saleAmount * PAYMENT_PROCESSING_RATE + PAYMENT_PROCESSING_FIXED) : 0;
     const netAmount     = this.round(saleAmount - platformFee - processingFee);
 
@@ -1443,6 +1478,183 @@ export class FinanceService {
         }
       }
     });
+  }
+
+  /** True if this store/order was settled by a COD commission debit (as
+   *  opposed to a legacy sale credit, or not settled at all). */
+  private async findCodCommissionDebit(storeId: string, orderId: string, session?: ClientSession) {
+    return this.txModel.findOne(
+      { storeId, referenceId: orderId, referenceType: 'order', type: 'fee', 'metadata.codCommission': true },
+      null,
+      { session },
+    ).lean() as Promise<any>;
+  }
+
+  /**
+   * One entry point for "a paid sub-order is being refunded/returned — fix the
+   * seller's ledger". Seller-collected COD that was settled by a commission
+   * DEBIT: the seller returns the cash by hand and the debited commission is
+   * credited back in proportion to the refunded share (no refund debit — they
+   * were never credited the sale). Everything else (card, bank transfer,
+   * platform-fulfilled COD, and COD orders settled by the OLD sale credit)
+   * debits the refund exactly as before.
+   *
+   * @param refundedBuyerAmount refunded value in the ORDER currency
+   * @param sellerOrderTotal    the sub-order's total in the same currency (proportion denominator)
+   * @param sellerDebitAmount   refunded value in the seller's settlement currency
+   * @param refKey              stable id of this return/refund (idempotency)
+   */
+  async recordRefundForSellerOrder(args: {
+    order: { paymentType?: string | null };
+    sellerOrder: { fulfillmentMode?: string | null };
+    storeId: string; sellerId: string; orderId: string;
+    refundedBuyerAmount: number; sellerOrderTotal: number; sellerDebitAmount: number;
+    refKey: string; currency: string; description: string;
+    actorId?: string; actorRole?: string; targetType?: string;
+  }) {
+    if (isSellerCollectedCod(args.order.paymentType, args.sellerOrder) && (await this.findCodCommissionDebit(args.storeId, args.orderId))) {
+      const fraction = args.sellerOrderTotal > 0 ? Math.min(1, args.refundedBuyerAmount / args.sellerOrderTotal) : 1;
+      return this.reverseCodCommission(args.storeId, args.sellerId, args.orderId, args.refKey, fraction, args.currency);
+    }
+    return this.recordRefund(args.storeId, args.sellerId, args.orderId, args.sellerDebitAmount, args.actorId, args.actorRole, {
+      description: args.description, targetType: args.targetType ?? 'order', currency: args.currency,
+    });
+  }
+
+  /**
+   * Credits back `fraction` (0–1] of the commission debited for this COD
+   * order, so the seller does not pay commission on goods that were returned.
+   * Idempotent per (store, order, refKey) and capped so the total credited back
+   * can never exceed what was debited.
+   */
+  async reverseCodCommission(storeId: string, sellerId: string, orderId: string, refKey: string, fraction: number, currency = 'USD') {
+    return this.withTransaction(async (session) => {
+      const debit = await this.findCodCommissionDebit(storeId, orderId, session);
+      if (!debit) return { creditedBack: 0 };
+
+      const dup = await this.txModel.exists({
+        storeId, referenceId: orderId, referenceType: 'order', type: 'adjustment', 'metadata.codCommissionReversalRef': refKey,
+      }).session(session);
+      if (dup) return { creditedBack: 0 };
+
+      const priorRows = await this.txModel.find(
+        { storeId, referenceId: orderId, referenceType: 'order', type: 'adjustment', 'metadata.codCommissionReversalRef': { $exists: true } },
+        null, { session },
+      ).lean() as any[];
+      const alreadyBack = priorRows.reduce((sum, r) => sum + (r.amount || 0), 0);
+      const originalCommission = Math.abs(debit.amount);
+      const credit = this.round(Math.min(originalCommission - alreadyBack, originalCommission * Math.min(1, Math.max(0, fraction))));
+      if (!(credit > 0)) return { creditedBack: 0 };
+
+      const balance = await this.getOrCreateBalance(storeId, sellerId, debit.currency ?? currency, session);
+      const balanceBefore = balance.availableBalance;
+      balance.availableBalance = this.round(balance.availableBalance + credit);
+      balance.totalFees = this.round(balance.totalFees - credit);
+      this.reevaluateDebtFlag(balance);
+      await balance.save({ session });
+
+      await new this.txModel({
+        storeId, sellerId, currency: debit.currency ?? currency,
+        type: 'adjustment',
+        amount: credit,
+        balanceBefore,
+        balanceAfter: balance.availableBalance,
+        description: `COD commission credited back (returned goods) — Order #${orderId}`,
+        referenceId: orderId,
+        referenceType: 'order',
+        status: 'completed',
+        metadata: { codCommissionReversalRef: refKey, fraction },
+      }).save({ session });
+      return { creditedBack: credit };
+    });
+  }
+
+  /**
+   * COD sale in 'seller' fulfillment: the seller's courier collected the cash,
+   * so the seller already holds the money. The platform's commission
+   * (`saleAmount` × rate) is DEBITED from the seller's availableBalance — which
+   * may go negative (flagged for review; payouts need availableBalance ≥ amount
+   * so they are blocked until future sales net the debt off at clearing).
+   * Platform-sponsored campaign discounts are still owed to the seller (the
+   * buyer paid less cash because the platform funded part of the price), so
+   * they are credited. Idempotent per (store, order): skipped if this
+   * store/order already has a sale or fee entry (including orders credited by
+   * the old behaviour).
+   */
+  private async recordCodCommissionDebit(
+    storeId: string, sellerId: string, orderId: string, saleAmount: number,
+    platformSponsoredUSD = 0, campaignId?: string | null, currency = 'USD',
+  ) {
+    const { rate: feeRate, source: feeRateSource, platformFee: commission } = await this.platformCommission(storeId, saleAmount);
+
+    const { justFlagged, balanceAfter } = await this.withTransaction(async (session) => {
+      const already = await this.txModel.exists({
+        storeId, referenceId: orderId, referenceType: 'order', type: { $in: ['sale', 'fee'] },
+      }).session(session);
+      if (already) {
+        this.logger.warn(`recordCodCommissionDebit skipped — order ${orderId} / store ${storeId} already settled`);
+        return { justFlagged: false, balanceAfter: null as number | null };
+      }
+
+      const balance = await this.getOrCreateBalance(storeId, sellerId, currency, session);
+      const balanceBefore = balance.availableBalance;
+      balance.availableBalance = this.round(balance.availableBalance - commission + platformSponsoredUSD);
+      balance.totalRevenue = this.round(balance.totalRevenue + saleAmount);
+      balance.totalFees = this.round(balance.totalFees + commission);
+      const flag = this.reevaluateDebtFlag(
+        balance,
+        `COD commission on order #${orderId} (${currency} ${commission.toFixed(2)}) was debited — the seller collected the cash, so the balance went negative`,
+      );
+      await balance.save({ session });
+
+      await new this.txModel({
+        storeId, sellerId, currency,
+        type: 'fee',
+        amount: -commission,
+        balanceBefore,
+        balanceAfter: this.round(balance.availableBalance - platformSponsoredUSD),
+        description: `COD commission (${(feeRate * 100).toFixed(1)}%) — Order #${orderId} (cash collected by seller)`,
+        referenceId: orderId,
+        referenceType: 'order',
+        status: 'completed',
+        metadata: { codCommission: true, saleAmount, platformFee: commission, processingFee: 0, feeRate, feeRateSource, paymentMethodType: 'cash_on_delivery' },
+      }).save({ session });
+
+      if (platformSponsoredUSD > 0) {
+        await new this.txModel({
+          storeId, sellerId, currency,
+          type: 'platform_subsidy',
+          amount: platformSponsoredUSD,
+          balanceBefore: this.round(balance.availableBalance - platformSponsoredUSD),
+          balanceAfter: balance.availableBalance,
+          description: `Platform-sponsored sale discount — Order #${orderId}`,
+          referenceId: orderId,
+          referenceType: 'order',
+          status: 'completed',
+          metadata: { campaignId: campaignId ?? null, codCommission: true },
+        }).save({ session });
+        if (campaignId) {
+          await this.db.repositories.campaignModel.findByIdAndUpdate(
+            campaignId, { $inc: { totalPlatformSubsidyUSD: platformSponsoredUSD } }, { session },
+          );
+        }
+      }
+      return { justFlagged: flag.justFlagged, balanceAfter: balance.availableBalance };
+    });
+
+    if (justFlagged) {
+      this.activityLogService.log({
+        storeId,
+        category: 'finance',
+        action: 'seller_balance_negative',
+        description: `Store ${storeId}'s balance went negative (${balanceAfter}) after the COD commission on order #${orderId}. Payouts are blocked until future sales cover it.`,
+        actorId: 'system',
+        actorRole: 'system',
+        targetId: storeId,
+        targetType: 'seller_balance',
+        isSecurityAlert: true,
+      });
+    }
   }
 
   /**

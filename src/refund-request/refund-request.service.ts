@@ -260,16 +260,21 @@ export class RefundRequestService {
       );
 
       // Debit ONLY this seller's wallet — never the other sellerOrders on
-      // this same order, and never proportional across them.
-      await this.financeService.recordRefund(
-        sellerOrder.storeId, sellerOrder.sellerId, order._id.toString(), sellerDebitAmount,
-        actorId, actorRole,
-        {
-          description: `Approved refund — Order #${order.orderNumber}, ${items.length} item(s)`,
-          targetType: 'order',
-          currency: settlementCurrency,
-        },
-      );
+      // this same order, and never proportional across them. Seller-collected
+      // COD settled by a commission debit is the exception: the seller returns
+      // the cash by hand and the commission is credited back in proportion
+      // (see FinanceService.recordRefundForSellerOrder).
+      await this.financeService.recordRefundForSellerOrder({
+        order, sellerOrder,
+        storeId: sellerOrder.storeId, sellerId: sellerOrder.sellerId, orderId: order._id.toString(),
+        refundedBuyerAmount: buyerRefundAmount,
+        sellerOrderTotal: this.round((sellerOrder.items as any[]).reduce((sum: number, i: any) => sum + (i.totalPrice || 0), 0)),
+        sellerDebitAmount,
+        refKey: `refund-request-${request._id}`,
+        currency: settlementCurrency,
+        description: `Approved refund — Order #${order.orderNumber}, ${items.length} item(s)`,
+        actorId, actorRole, targetType: 'order',
+      });
     } catch (err) {
       await revertClaim();
       throw err;

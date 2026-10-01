@@ -141,13 +141,13 @@ describe('FinanceService', () => {
       expect(balance.flaggedReason).toBeNull();
     });
 
-    it('does not charge a card-processing fee for a COD sale — only the platform commission was ever actually incurred', async () => {
+    it('does not charge a card-processing fee for a platform-collected COD sale — only the platform commission was ever actually incurred', async () => {
       const balance = makeBalance();
       balanceModel.findOne.mockResolvedValue(balance);
       commissionRulesService.resolveRate = jest.fn().mockResolvedValue({ rate: 0.05, source: 'seller_override' });
 
       // saleAmount=100, platformFee=5 (5%), processingFee=0 (no card network involved in COD) → net=95
-      await service.recordSale(STORE_ID, SELLER_ID, 'order-cod', 100, 'desc', 0, null, 'USD', 'cash_on_delivery');
+      await service.recordSale(STORE_ID, SELLER_ID, 'order-cod', 100, 'desc', 0, null, 'USD', 'cash_on_delivery', 'platform'); // platform-collected COD keeps the credit flow
 
       expect(balance.pendingBalance).toBe(95);
       expect(balance.totalFees).toBe(5);
