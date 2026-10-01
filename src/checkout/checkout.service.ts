@@ -21,6 +21,10 @@ import { DiscountsService } from 'src/discounts/discounts.service';
 // point of use (addShippingInCheckout) instead.
 const SHIPPING_ZONE_CURRENCY = 'PKR';
 
+/** Upper bounds on one multi-store checkout — each line costs several DB reads. */
+export const MAX_CHECKOUT_STORES = 20;
+export const MAX_CHECKOUT_LINES = 100;
+
 @Injectable()
 export class CheckoutService {
   constructor(
@@ -127,36 +131,57 @@ export class CheckoutService {
 
     const checkoutCurrency = await this.resolveCheckoutCurrency(userId, body.currencyPreference);
 
-    // Cart is now store-scoped (a buyer can have a separate cart per store's
-    // subdomain) — without storeId this lookup would be ambiguous the moment
-    // a buyer has shopped at more than one store.
+    // Carts are stored one document per (buyer, store). With a storeId (a store's own
+    // subdomain storefront) the checkout is that store's cart only — exactly as
+    // before. Without one (the main marketplace) it spans ALL of the buyer's
+    // non-empty carts, so a buyer pays once for items from any number of stores.
     const { storeId } = body;
-    if (!storeId) throw new BadRequestException('storeId is required');
-
-    const cart = await cartModel.findOne({
-      userId,
-      storeId,
-      status: 'active',
-      isDelete: false,
-    });
-    if (!cart) throw new BadRequestException('Cart not found');
-    if (!cart.items || cart.items.length === 0)
-      throw new BadRequestException('Cart is empty');
+    const unifiedCheckout = !storeId;
+    let cartItems: any[];
+    if (!unifiedCheckout) {
+      const cart = await cartModel.findOne({
+        userId,
+        storeId,
+        status: 'active',
+        isDelete: false,
+      });
+      if (!cart) throw new BadRequestException('Cart not found');
+      if (!cart.items || cart.items.length === 0)
+        throw new BadRequestException('Cart is empty');
+      cartItems = cart.items;
+    } else {
+      const carts = await cartModel
+        .find({ userId, status: 'active', isDelete: false, 'items.0': { $exists: true } })
+        .sort({ updatedAt: -1 })
+        .limit(MAX_CHECKOUT_STORES + 1)
+        .lean();
+      if (carts.length === 0) throw new BadRequestException('Cart is empty');
+      cartItems = (carts as any[]).flatMap((c) => c.items);
+    }
 
     // agar items array diya to sirf woh, warna sab cart items
     const selectedItems: any[] =
       body.items && Array.isArray(body.items) && body.items.length > 0
-        ? cart.items.filter((cartItem: any) =>
+        ? cartItems.filter((cartItem: any) =>
             body.items.some(
               (sel: any) =>
                 sel.productId === cartItem.productId &&
                 sel.variantId === cartItem.productVariantId,
             ),
           )
-        : cart.items;
+        : cartItems;
 
     if (selectedItems.length === 0)
       throw new BadRequestException('None of the provided items found in cart');
+
+    // Bound the cost of one request (each line costs several DB reads). Checked
+    // before any per-line work. Cart lines carry no storeId, so the store count is
+    // checked again below, once each product's own store is known.
+    if (unifiedCheckout && selectedItems.length > MAX_CHECKOUT_LINES) {
+      throw new BadRequestException(
+        `A checkout can have at most ${MAX_CHECKOUT_LINES} items — remove some, or select fewer items to check out`,
+      );
+    }
 
     const checkoutItems: any[] = [];
     let hasPhysical = false;
@@ -202,6 +227,7 @@ export class CheckoutService {
     // enforced; every subscriber discount applied unconditionally regardless
     // of cart size.
     const rawItems: Array<{ product: any; variant: any; cartItem: any }> = [];
+    const unavailableItems: Array<{ productId: string; variantId: string; storeId: string; name: string; reason: string }> = [];
     const storeSubtotals = new Map<string, number>();
 
     for (const cartItem of selectedItems) {
@@ -227,6 +253,18 @@ export class CheckoutService {
       // in the buyer's cart — checkout must re-check store status at the
       // moment of purchase, not just at add-to-cart time.
       if (!(await isStoreActive(product.storeId))) {
+        if (unifiedCheckout) {
+          // One suspended store must not block the buyer's other stores: skip the
+          // line and report it. Nothing is removed from the cart.
+          unavailableItems.push({
+            productId: product._id.toString(),
+            variantId: cartItem.productVariantId,
+            storeId: product.storeId,
+            name: product.name,
+            reason: 'store_inactive',
+          });
+          continue;
+        }
         throw new BadRequestException(
           `"${product.name}" is no longer available for purchase because the seller's store is not active. Please remove it from your cart.`,
         );
@@ -263,6 +301,22 @@ export class CheckoutService {
             variant.price * cartItem.quantity,
         ),
       );
+    }
+
+    if (rawItems.length === 0) {
+      // Only reachable in a unified checkout where every selected line was skipped.
+      throw new BadRequestException({
+        message: 'None of the items in your cart can be purchased right now',
+        unavailableItems,
+      });
+    }
+    if (unifiedCheckout) {
+      const storeCount = new Set(rawItems.map((r) => r.product.storeId)).size;
+      if (storeCount > MAX_CHECKOUT_STORES) {
+        throw new BadRequestException(
+          `A checkout can include at most ${MAX_CHECKOUT_STORES} stores — select items from fewer stores`,
+        );
+      }
     }
 
     // Batch-resolve seller name + verification badge across every distinct
@@ -598,8 +652,12 @@ export class CheckoutService {
     const physicalStoreIds = [
       ...new Set(checkoutItems.filter((i) => i.type === 'physical').map((i) => i.storeId)),
     ];
+    // COD is also only offered when all physical items come from ONE store: the
+    // cash is collected per seller, so a multi-seller COD order has no single
+    // party to collect and confirm it (see PaymentService.codPayment).
     const codEligible = hasPhysical
-      ? (
+      ? physicalStoreIds.length <= 1 &&
+        (
           await this.databaseService.repositories.storeModel
             .find({ _id: { $in: physicalStoreIds } })
             .select('codEnabled')
@@ -642,6 +700,8 @@ export class CheckoutService {
         },
         subscriptionSavingsHints,
         appliedCampaigns,
+        // Lines skipped because their store is not active (unified checkout only); still in the cart.
+        unavailableItems,
       },
     };
   }
