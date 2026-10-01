@@ -207,6 +207,15 @@ describe('updateStore', () => {
       svc.updateStore('seller1', OID, { categoryId: 'catB' }),
     ).rejects.toThrow(/cannot be changed once/);
   });
+
+  it('a seller who already has a store cannot create a second one', async () => {
+    const { svc, repos } = make({ store: liveStore() });
+    repos.storeModel.exists.mockResolvedValue({ _id: OID });
+    await expect(
+      svc.createStore('seller1', { name: 'Second Store', baseCurrency: 'PKR' }),
+    ).rejects.toThrow(/already have a store/);
+    expect(repos.storeModel.exists).toHaveBeenCalledWith({ sellerId: 'seller1', isDelete: false });
+  });
 });
 
 describe('announcement bar and pinned products', () => {

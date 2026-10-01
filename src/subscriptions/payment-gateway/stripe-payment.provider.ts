@@ -94,6 +94,15 @@ export class StripePaymentProvider implements IPaymentGateway {
     if (!context?.providerCustomerId) throw new Error('createProviderSubscription requires context.providerCustomerId');
     if (!context?.providerPriceId) throw new Error('createProviderSubscription requires context.providerPriceId');
 
+    // With a saved default card (seller onboarding), charge it now; otherwise
+    // fall back to the frontend-confirmed flow below.
+    let savedCard: string | null = null;
+    if (context.chargeSavedCard) {
+      const customer = await this.stripe.customers.retrieve(context.providerCustomerId);
+      const pm = !customer.deleted ? customer.invoice_settings?.default_payment_method : null;
+      savedCard = typeof pm === 'string' ? pm : pm?.id ?? null;
+    }
+
     const subscription = await this.stripe.subscriptions.create(
       {
         customer: context.providerCustomerId,
@@ -102,7 +111,10 @@ export class StripePaymentProvider implements IPaymentGateway {
         // unpaid until the frontend confirms the returned PaymentIntent
         // client_secret via Stripe.js/Elements. This is the recommended
         // pattern for building a custom (non-Checkout) subscribe UI.
-        payment_behavior: 'default_incomplete',
+        // 'allow_incomplete' with a saved card: Stripe charges it immediately and
+        // only leaves the invoice open if the bank requires 3-D Secure.
+        ...(savedCard ? { default_payment_method: savedCard } : {}),
+        payment_behavior: savedCard ? 'allow_incomplete' : 'default_incomplete',
         payment_settings: { save_default_payment_method: 'on_subscription' },
         expand: ['latest_invoice.payment_intent'],
         metadata: { internalSubscriptionId: subscriptionId, ...(context.metadata ?? {}) },

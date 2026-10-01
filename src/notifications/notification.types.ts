@@ -36,6 +36,7 @@ export const NOTIFICATION_TYPES = {
   STORE_APPROVED: 'store_approved',
   STORE_REJECTED: 'store_rejected',
   VERIFICATION_UNDER_REVIEW: 'verification_under_review',
+  PLATFORM_CAMPAIGN_LIVE: 'platform_campaign_live',
 } as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[keyof typeof NOTIFICATION_TYPES];
@@ -76,4 +77,5 @@ export const NOTIFICATION_CATEGORY: Record<string, 'orders' | 'messages' | 'prom
   [NOTIFICATION_TYPES.STORE_APPROVED]: 'promotions',
   [NOTIFICATION_TYPES.STORE_REJECTED]: 'promotions',
   [NOTIFICATION_TYPES.VERIFICATION_UNDER_REVIEW]: 'promotions',
+  [NOTIFICATION_TYPES.PLATFORM_CAMPAIGN_LIVE]: 'promotions',
 };

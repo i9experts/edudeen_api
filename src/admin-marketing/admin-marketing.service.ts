@@ -1,7 +1,9 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NOTIFICATION_TYPES } from '../notifications/notification.types';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCampaignDto } from './dto/update-campaign.dto';
 import { UpdateCampaignStatusDto } from './dto/update-campaign-status.dto';
@@ -17,10 +19,54 @@ interface AuditMeta {
 
 @Injectable()
 export class AdminMarketingService {
+  private readonly logger = new Logger(AdminMarketingService.name);
+
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly activityLogService: ActivityLogService,
+    @Optional() private readonly notificationsService?: NotificationsService,
   ) {}
+
+  /** Tells every seller with an active store that a sale campaign just went
+   *  live, so they can join it (seller-sponsored) or know their products are
+   *  already discounted (platform-sponsored). Runs in the background — the
+   *  admin's request never waits on hundreds of notifications. */
+  private announceCampaignLive(campaign: { _id: unknown; name: string; sponsorType?: string; discountType?: string | null; discountValue?: number | null; startDate: Date; endDate: Date }) {
+    if (!this.notificationsService) return;
+    const notifications = this.notificationsService;
+    void (async () => {
+      try {
+        const stores = await this.r.storeModel
+          .find({ status: 'active', isDelete: false })
+          .select('_id sellerId')
+          .lean();
+        const off = campaign.discountValue
+          ? campaign.discountType === 'percentage' ? `${campaign.discountValue}% off` : `$${campaign.discountValue} off`
+          : null;
+        const isPlatform = campaign.sponsorType === 'platform';
+        const start = new Date(campaign.startDate);
+        const title = start > new Date()
+          ? `${campaign.name} starts ${start.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`
+          : `${campaign.name} is live`;
+        const body = isPlatform
+          ? `${off ? `${off} — ` : ''}your products are already included and Edudeen covers the discount.`
+          : `${off ? `${off} — ` : ''}join from Marketing → Platform Sales to put your products in the sale.`;
+        const BATCH = 25;
+        for (let i = 0; i < stores.length; i += BATCH) {
+          await Promise.all(stores.slice(i, i + BATCH).map((s: any) => notifications.notify({
+            recipientId: String(s.sellerId),
+            recipientRole: 'seller',
+            type: NOTIFICATION_TYPES.PLATFORM_CAMPAIGN_LIVE,
+            title,
+            body,
+            data: { campaignId: String(campaign._id), storeId: String(s._id), link: `/store/${String(s._id)}/marketing?tab=platform` },
+          })));
+        }
+      } catch (err: any) {
+        this.logger.error(`announceCampaignLive failed: ${err?.message}`);
+      }
+    })();
+  }
 
   private get r() {
     return this.databaseService.repositories;
@@ -150,6 +196,7 @@ export class AdminMarketingService {
     }
     await this.r.campaignModel.findByIdAndUpdate(id, { $set: dto.status === 'ended' ? { status: 'ended', order: 0 } : { status: dto.status } });
     this.log('campaign_status_changed', `Campaign "${campaign.name}" set to ${dto.status}`, meta, id);
+    if (dto.status === 'active' && campaign.status !== 'active') this.announceCampaignLive(campaign as any);
     return { success: true, message: `Campaign set to ${dto.status}` };
   }
 

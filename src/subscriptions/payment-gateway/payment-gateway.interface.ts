@@ -56,6 +56,10 @@ export interface ChargeContext {
   idempotencyKey?: string;
   /** Free-form metadata attached to the provider-side object for support/reconciliation. */
   metadata?: Record<string, string>;
+  /** createProviderSubscription only: charge the customer's saved default card right away
+   *  instead of leaving the first invoice for the frontend to confirm. If the bank asks
+   *  for 3-D Secure, the result still carries a clientSecret for the frontend to finish. */
+  chargeSavedCard?: boolean;
 }
 
 /**

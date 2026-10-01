@@ -55,31 +55,24 @@ describe('CommissionRulesService', () => {
       expect(result).toEqual({ rate: 0.02, source: 'seller_override' });
     });
 
-    it('uses the store\'s active PlatformPlan tier rate when there is no seller override', async () => {
-      ruleModel.findOne = leanFindOne(null); // no seller override, no global default
-      entitlementsService.getActivePlanForStore = jest.fn().mockResolvedValue({ plan: { limits: { transactionFeeRate: 0.03 } } });
-
-      const result = await service.resolveRate(STORE_ID);
-      expect(result).toEqual({ rate: 0.03, source: 'platform_plan' });
-    });
-
-    it('falls back to the global default when the store has no active plan subscription', async () => {
-      entitlementsService.getActivePlanForStore = jest.fn().mockResolvedValue(null);
+    // Monthly-plan model: Edudeen takes no per-sale cut, so a plan tier rate
+    // or a global default left in the DB must never be charged.
+    it('charges 0% when there is no seller override, ignoring plan tier and global default rates', async () => {
       ruleModel.findOne.mockImplementation((filter: any) => ({
         lean: jest.fn().mockResolvedValue(filter.scope === 'global' ? { rate: 0.05 } : null),
       }));
+      entitlementsService.getActivePlanForStore = jest.fn().mockResolvedValue({ plan: { limits: { transactionFeeRate: 0.03 } } });
 
       const result = await service.resolveRate(STORE_ID);
-      expect(result).toEqual({ rate: 0.05, source: 'global_default' });
+      expect(result).toEqual({ rate: 0, source: 'hardcoded_fallback' });
     });
 
-    it('falls back to EntitlementsService\'s own resolution (hardcoded 8%) when nothing else is configured', async () => {
-      entitlementsService.getActivePlanForStore = jest.fn().mockResolvedValue(null);
+    it('charges 0% when nothing is configured at all', async () => {
       ruleModel.findOne = leanFindOne(null);
-      entitlementsService.getTransactionFeeRate = jest.fn().mockResolvedValue(0.08);
+      entitlementsService.getActivePlanForStore = jest.fn().mockResolvedValue(null);
 
       const result = await service.resolveRate(STORE_ID);
-      expect(result).toEqual({ rate: 0.08, source: 'hardcoded_fallback' });
+      expect(result).toEqual({ rate: 0, source: 'hardcoded_fallback' });
     });
   });
 

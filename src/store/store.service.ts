@@ -7,6 +7,7 @@ import {
   BadRequestException,
   NotFoundException,
   UnauthorizedException,
+  ConflictException,
 } from '@nestjs/common';
 import { promises as dns } from 'dns';
 import { DatabaseService } from 'src/database/databaseservice';
@@ -126,7 +127,10 @@ export class StoreService {
       }
     }
 
-    // ✅ multiple stores allowed — koi "already have a store" check nahi
+    // One seller = one store. A second store is refused — the seller manages
+    // everything from that single store's workspace.
+    const existingStore = await this.databaseService.repositories.storeModel.exists({ sellerId, isDelete: false });
+    if (existingStore) throw new ConflictException('You already have a store — each seller account can run one store');
 
     const baseSlug = this.generateSlug(name);
     let slug = baseSlug;

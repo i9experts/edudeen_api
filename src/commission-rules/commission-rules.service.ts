@@ -6,6 +6,9 @@ import { EntitlementsService } from '../platform-plans/entitlements.service';
 import { verifyStoreExists } from '../common/store-ownership.util';
 
 import { clampInt } from 'src/common/query-safety.util';
+/** Off: Edudeen earns from monthly store plans, not a cut of each sale. */
+export const PER_SALE_COMMISSION_ENABLED = false;
+
 export type CommissionRateSource = 'seller_override' | 'platform_plan' | 'global_default' | 'hardcoded_fallback';
 
 export interface ResolvedCommissionRate {
@@ -47,6 +50,11 @@ export class CommissionRulesService {
   async resolveRate(storeId: string): Promise<ResolvedCommissionRate> {
     const sellerOverride = await this.ruleModel.findOne({ scope: 'seller', storeId, isActive: true }).lean();
     if (sellerOverride) return { rate: (sellerOverride as any).rate, source: 'seller_override' };
+
+    // Sellers pay Edudeen a monthly plan fee instead of a per-sale cut, so
+    // unless an admin set a seller override above, the seller keeps the full
+    // sale (only the card processing fee comes off — see recordSale).
+    if (!PER_SALE_COMMISSION_ENABLED) return { rate: 0, source: 'hardcoded_fallback' };
 
     const activePlan = await this.entitlementsService.getActivePlanForStore(storeId);
     if (activePlan?.plan?.limits?.transactionFeeRate !== undefined) {

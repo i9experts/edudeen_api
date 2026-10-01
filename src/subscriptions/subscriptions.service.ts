@@ -59,7 +59,7 @@ export class SubscriptionsService {
     @InjectQueue(QUEUE_NAMES.SUBSCRIPTION_EMAILS) private readonly emailQueue: Queue,
     @InjectQueue(QUEUE_NAMES.STRIPE_WEBHOOKS) private readonly webhookQueue: Queue,
   ) {
-    this.platformCommissionRate = Number(this.config.get<string>('SUBSCRIPTION_PLATFORM_COMMISSION_RATE') ?? '0.20');
+    this.platformCommissionRate = Number(this.config.get<string>('SUBSCRIPTION_PLATFORM_COMMISSION_RATE') ?? '0') // sellers keep the full amount (monthly-plan model);
   }
 
   // ── Shorthand getters ────────────────────────────────────────────────────

@@ -271,6 +271,32 @@ describe('AdminMarketingService', () => {
     expect(campaignModel.findByIdAndUpdate).not.toHaveBeenCalled();
   });
 
+  it('activating a campaign notifies every seller with an active store, linking to Platform Sales', async () => {
+    const campaignModel = {
+      findOne: jest.fn().mockResolvedValue({
+        _id: 'camp1', name: '11.11 Sale', status: 'draft', order: null, sponsorType: 'seller',
+        discountType: 'percentage', discountValue: 20,
+        startDate: new Date(Date.now() - 1000), endDate: new Date(Date.now() + 86_400_000),
+      }),
+      findByIdAndUpdate: jest.fn(),
+    };
+    const storeModel = {
+      find: jest.fn(() => ({ select: () => ({ lean: () => Promise.resolve([{ _id: 's1', sellerId: 'sel1' }, { _id: 's2', sellerId: 'sel2' }]) }) })),
+    };
+    const notifications = { notify: jest.fn().mockResolvedValue(undefined) };
+    const svc = new AdminMarketingService({ repositories: { campaignModel, storeModel } } as any, activity, notifications as any);
+
+    await svc.setCampaignStatus(OID(), { status: 'active' } as any, { adminId: 'a' });
+    await new Promise(r => setImmediate(r)); // fan-out runs in the background
+
+    expect(storeModel.find).toHaveBeenCalledWith({ status: 'active', isDelete: false });
+    expect(notifications.notify).toHaveBeenCalledTimes(2);
+    expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({
+      recipientId: 'sel1', recipientRole: 'seller', type: 'platform_campaign_live', title: '11.11 Sale is live',
+      data: expect.objectContaining({ link: '/store/s1/marketing?tab=platform' }),
+    }));
+  });
+
   it('listCampaigns rejects an operator-object status', async () => {
     const svc = svcWith({}, { find: jest.fn(), updateMany: jest.fn() }) as any;
     svc.expireCampaigns = jest.fn().mockResolvedValue({ expired: 0 });

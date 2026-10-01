@@ -468,7 +468,7 @@ export class SellerPlatformSubscriptionsService {
 
         const created = await this.gateway.createProviderSubscription(
           sub._id.toString(), `Platform: ${newPlan.name}`, newAmountUSD, newInterval,
-          { providerCustomerId: seller.stripeCustomerId, providerPriceId, idempotencyKey, metadata: { kind: PLATFORM_PLAN_STRIPE_METADATA_KIND, storeId } },
+          { providerCustomerId: seller.stripeCustomerId, providerPriceId, idempotencyKey, metadata: { kind: PLATFORM_PLAN_STRIPE_METADATA_KIND, storeId }, chargeSavedCard: true },
         );
         sub.stripeCustomerId = seller.stripeCustomerId;
         sub.paymentProvider = 'stripe';
@@ -508,8 +508,8 @@ export class SellerPlatformSubscriptionsService {
 
         return {
           success: true,
-          message: `Subscribing to "${newPlan.name}" — confirm payment to activate`,
-          data: { subscription: sub, requiresAction: !!created.clientSecret, clientSecret: created.clientSecret ?? null },
+          message: created.status === 'active' ? `Subscribed to "${newPlan.name}"` : `Subscribing to "${newPlan.name}" — confirm payment to activate`,
+          data: { subscription: sub, requiresAction: created.status !== 'active' && !!created.clientSecret, clientSecret: created.status !== 'active' ? created.clientSecret ?? null : null },
         };
       }
 
