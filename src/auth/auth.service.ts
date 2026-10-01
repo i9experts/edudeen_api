@@ -68,27 +68,39 @@ export class AuthService {
     return new InternalServerErrorException(context);
   }
 
+  /** An OTP failure: same HTTP status (401) and message as ever, plus a machine-readable `code` so the app does
+   *  not have to string-match the message, and optionally `attemptsLeft`. */
+  private static otpError(message: string, code: 'OTP_INVALID' | 'OTP_EXPIRED' | 'OTP_LOCKED', extra: Record<string, unknown> = {}) {
+    return new UnauthorizedException({ statusCode: 401, message, error: 'Unauthorized', code, ...extra });
+  }
+
   /** Validates an OTP against the account and burns it after
    *  MAX_OTP_ATTEMPTS wrong tries — the per-IP throttle alone does not stop
-   *  a distributed brute force of a 6-digit code. */
+   *  a distributed brute force of a 6-digit code.
+   *  Failures carry `code`: OTP_EXPIRED (none issued / past its time), OTP_INVALID (wrong, with `attemptsLeft`),
+   *  OTP_LOCKED (the attempt that burned the code, or any attempt on a code already out of tries). */
   private async checkOtp(user: any, otp: string): Promise<void> {
     if (!user.otp || !user.otpExpiresAt || new Date() > user.otpExpiresAt) {
-      throw new UnauthorizedException('OTP has expired, please request a new one');
+      throw AuthService.otpError('OTP has expired, please request a new one', 'OTP_EXPIRED');
     }
     if ((user.otpAttempts ?? 0) >= AuthService.MAX_OTP_ATTEMPTS) {
-      throw new UnauthorizedException('Too many wrong attempts, please request a new OTP');
+      throw AuthService.otpError('Too many wrong attempts, please request a new OTP', 'OTP_LOCKED');
     }
     const a = Buffer.from(AuthService.hashOtp(otp));
     const b = Buffer.from(String(user.otp));
     const ok = a.length === b.length && timingSafeEqual(a, b);
     if (!ok) {
       user.otpAttempts = (user.otpAttempts ?? 0) + 1;
-      if (user.otpAttempts >= AuthService.MAX_OTP_ATTEMPTS) {
+      const burned = user.otpAttempts >= AuthService.MAX_OTP_ATTEMPTS;
+      if (burned) {
         user.otp = null;
         user.otpExpiresAt = null;
       }
       await user.save();
-      throw new UnauthorizedException('Invalid OTP');
+      if (burned) throw AuthService.otpError('Invalid OTP', 'OTP_LOCKED');
+      throw AuthService.otpError('Invalid OTP', 'OTP_INVALID', {
+        attemptsLeft: AuthService.MAX_OTP_ATTEMPTS - user.otpAttempts,
+      });
     }
   }
 
@@ -702,8 +714,9 @@ export class AuthService {
 
       const user = await userModel.findOne({ email });
       if (!user) {
-        // Same generic failure as a wrong code — don't confirm which emails exist.
-        throw new UnauthorizedException('Invalid OTP');
+        // Same generic failure as a wrong code — don't confirm which emails exist. `attemptsLeft` looks like a
+        // first wrong attempt (a constant, since there is no account to count against).
+        throw AuthService.otpError('Invalid OTP', 'OTP_INVALID', { attemptsLeft: AuthService.MAX_OTP_ATTEMPTS - 1 });
       }
 
       await this.checkOtp(user, otp);
