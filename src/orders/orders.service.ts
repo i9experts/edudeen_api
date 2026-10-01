@@ -6,6 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { Readable } from 'stream';
+import { isValidObjectId } from 'mongoose';
 import { DatabaseService } from 'src/database/databaseservice';
 import { UploadService } from 'src/upload/upload.service';
 import { JwtService } from '@nestjs/jwt';
@@ -78,28 +79,10 @@ export class OrdersService {
     );
   }
 
-  async getOrdersByUserId(userId: string, query: any) {
-    const { orderModel, sellerModel } = this.databaseService.repositories;
-
-    const page = clampInt(query.page, 1, 1, 100000);
-    const limit = clampInt(query.limit, 10, 1, 100);
-    const skip = (page - 1) * limit;
-
-    const filter: any = { userId, isDelete: false };
-
-    if (query.status && query.status !== 'all') {
-      filter.orderStatus = query.status;
-    }
-
-    const total = await orderModel.countDocuments(filter);
-    const totalPages = Math.ceil(total / limit);
-
-    const orders = await orderModel
-      .find(filter)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
+  /** The buyer-facing shape of a page of Orders (my-orders, orders-by-checkout) — one batched seller lookup
+   *  for the whole page. */
+  private async toBuyerOrderViews(orders: any[]) {
+    const { sellerModel } = this.databaseService.repositories;
 
     // Batch-resolve seller name + verification badge across every distinct
     // seller in this page — same one-query-instead-of-N pattern used on the
@@ -173,6 +156,33 @@ export class OrdersService {
       createdAt: order.createdAt,
       paidAt: order.paidAt,
     }));
+    return list;
+  }
+
+  async getOrdersByUserId(userId: string, query: any) {
+    const { orderModel } = this.databaseService.repositories;
+
+    const page = clampInt(query.page, 1, 1, 100000);
+    const limit = clampInt(query.limit, 10, 1, 100);
+    const skip = (page - 1) * limit;
+
+    const filter: any = { userId, isDelete: false };
+
+    if (query.status && query.status !== 'all') {
+      filter.orderStatus = query.status;
+    }
+
+    const total = await orderModel.countDocuments(filter);
+    const totalPages = Math.ceil(total / limit);
+
+    const orders = await orderModel
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    const list = await this.toBuyerOrderViews(orders);
 
     return {
       success: true,
@@ -180,6 +190,22 @@ export class OrdersService {
         pagination: { page, limit, totalPages, total },
         orders: list,
       },
+    };
+  }
+
+  /** Every Order a checkout produced (a checkout yields up to two: digital + physical), in the same shape as
+   *  my-orders. Buyer-owned only: another user's checkout is indistinguishable from a missing one (404). */
+  async getOrdersByCheckout(userId: string, checkoutId: string) {
+    if (typeof checkoutId !== 'string' || !isValidObjectId(checkoutId)) throw new NotFoundException('Checkout not found');
+    const orders = await this.databaseService.repositories.orderModel
+      .find({ checkoutId, userId, isDelete: false })
+      .sort({ createdAt: 1 })
+      .lean();
+    if (orders.length === 0) throw new NotFoundException('Checkout not found');
+    const list = await this.toBuyerOrderViews(orders);
+    return {
+      success: true,
+      data: { pagination: { page: 1, limit: list.length, totalPages: 1, total: list.length }, orders: list },
     };
   }
 

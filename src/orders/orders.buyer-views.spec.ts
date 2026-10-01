@@ -1,5 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/require-await -- mock-heavy tests */
 import { NotFoundException } from '@nestjs/common';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { OrdersService } from './orders.service';
 
 const chain = (v: any) => {
@@ -192,5 +194,56 @@ describe('seller order list rows', () => {
       amount: 10,
       currency: 'USD',
     });
+  });
+});
+
+describe('GET /api/orders/by-checkout/:checkoutId', () => {
+  const digital = order('D', {
+    checkoutId: 'chk1',
+    sellerOrders: [so('A', { fulfillmentType: 'digital' })],
+  });
+  const physical = order('P', {
+    checkoutId: 'chk1',
+    sellerOrders: [so('B', { shippingFee: 2 }), so('C', { shippingFee: 2 })],
+  });
+  const CHK = '64f0c0ffee0c0ffee0c0ff01';
+  const inCheckout = (o: any) => ({ ...o, checkoutId: CHK });
+
+  it('returns every Order the checkout produced (digital + physical) in the same shape as my-orders', async () => {
+    const { svc } = build([inCheckout(digital), inCheckout(physical)]);
+    const res = await svc.getOrdersByCheckout('buyer1', CHK);
+    expect(res.data.orders.map((o: any) => o.orderNumber)).toEqual([
+      'ORD-D',
+      'ORD-P',
+    ]);
+    expect(res.data.orders[1].stores).toHaveLength(2);
+    // identical per-order shape to my-orders
+    const mine = await build([
+      inCheckout(digital),
+      inCheckout(physical),
+    ]).svc.getOrdersByUserId('buyer1', {});
+    expect(res.data.orders).toEqual(mine.data.orders);
+    expect(res.data.pagination).toMatchObject({ total: 2, page: 1 });
+  });
+
+  it("another buyer's checkout, an unknown one and a malformed id are all the same 404", async () => {
+    const { svc } = build([inCheckout(physical)]);
+    await expect(
+      svc.getOrdersByCheckout('someone-else', CHK),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(
+      svc.getOrdersByCheckout('buyer1', '64f0c0ffee0c0ffee0c0ff99'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(
+      svc.getOrdersByCheckout('buyer1', 'not-an-id'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('is declared before the catch-all GET /:orderId, which would otherwise swallow it', () => {
+    const src = readFileSync(join(__dirname, 'orders.controller.ts'), 'utf8');
+    expect(src.indexOf("@Get('by-checkout/:checkoutId')")).toBeGreaterThan(-1);
+    expect(src.indexOf("@Get('by-checkout/:checkoutId')")).toBeLessThan(
+      src.indexOf("@Get(':orderId')"),
+    );
   });
 });

@@ -37,6 +37,16 @@ export class OrdersController {
     return this.ordersService.getOrdersByUserId(userId, query);
   }
 
+  // Every Order (digital + physical) a checkout produced — same shape as my-orders. Static prefix, so it is
+  // declared before the catch-all `:orderId` route at the bottom of this controller.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('user')
+  @Get('by-checkout/:checkoutId')
+  async getOrdersByCheckout(@Req() req: any, @Param('checkoutId') checkoutId: string) {
+    const { userId } = req.user;
+    return this.ordersService.getOrdersByCheckout(userId, checkoutId);
+  }
+
   // signed URLs (non-stamped) + stamped stream URLs list
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('user')
