@@ -19,6 +19,17 @@ import { CommissionRulesService } from 'src/commission-rules/commission-rules.se
 import Stripe from 'stripe';
 import { orderPlacedEmail } from 'src/notifications/templates/notification-email.template';
 
+/** Cash on Delivery is collected and confirmed per seller, so it only works when all of the
+ *  checkout's physical items come from ONE store. Enforced here as well as hidden in the
+ *  offered payment methods (CheckoutService.createCheckout) — the client is never trusted. */
+function assertSingleStoreForCod(physicalStoreIds: unknown[]) {
+  if (physicalStoreIds.length > 1) {
+    throw new BadRequestException(
+      'Cash on Delivery is only available when all physical items are from one store — please pay online, or check out one store at a time.',
+    );
+  }
+}
+
 @Injectable()
 export class PaymentService {
   private stripe: InstanceType<typeof Stripe> | undefined;
@@ -216,6 +227,7 @@ export class PaymentService {
     // this endpoint doesn't trust that client-side state alone.
     if (useSplit) {
       const physicalStoreIds = [...new Set(physicalItems.map((i: any) => i.storeId))];
+      assertSingleStoreForCod(physicalStoreIds);
       const codDisabledStores = await this.databaseService.repositories.storeModel
         .find({ _id: { $in: physicalStoreIds }, codEnabled: false })
         .select('name')
@@ -978,6 +990,7 @@ export class PaymentService {
     // Per-seller opt-out — a store can disable COD on its own listings.
     // No platform-wide order-value ceiling — COD is available for any amount.
     const storeIds = [...new Set(checkout.items.map((i: any) => i.storeId))];
+    assertSingleStoreForCod(storeIds);
     const codDisabledStores = await this.databaseService.repositories.storeModel
       .find({ _id: { $in: storeIds }, codEnabled: false })
       .select('name')
