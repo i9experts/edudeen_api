@@ -876,26 +876,28 @@ export class PaymentService {
 
   // Remove ONLY the lines that were part of this checkout — a checkout created
   // from selected cart items must leave the unselected lines in the cart.
+  // Carts are one document per (user, store) and a checkout can span several
+  // stores, so the purchased lines are grouped by their own storeId and pulled
+  // from EACH store's cart. Idempotent ($pull of lines already gone is a no-op),
+  // so a webhook replay or retry cannot over-clean.
   private async removeCheckedOutItemsFromCart(
     userId: string,
     checkout: any,
     cartModel: any,
   ) {
-    const purchasedLines = (checkout.items as any[]).map((i: any) => ({
-      productId: i.productId,
-      productVariantId: i.variantId,
-    }));
-    if (purchasedLines.length === 0) return;
-
-    // Cart is store-scoped — pull the storeId off the checkout's own items
-    // (already carried per-item on CheckoutItem) rather than needing a new
-    // field, since every item in a checkout now belongs to one store.
-    const storeId = (checkout.items as any[])[0]?.storeId;
-
-    await cartModel.findOneAndUpdate(
-      { userId, storeId, status: 'active', isDelete: false },
-      { $pull: { items: { $or: purchasedLines } } },
-    );
+    const linesByStore = new Map<string, { productId: string; productVariantId: string }[]>();
+    for (const i of checkout.items as any[]) {
+      if (!i.storeId) continue;
+      const lines = linesByStore.get(i.storeId) ?? [];
+      lines.push({ productId: i.productId, productVariantId: i.variantId });
+      linesByStore.set(i.storeId, lines);
+    }
+    for (const [storeId, purchasedLines] of linesByStore) {
+      await cartModel.updateOne(
+        { userId, storeId, status: 'active', isDelete: false },
+        { $pull: { items: { $or: purchasedLines } } },
+      );
+    }
   }
 
   /** A gift card discount was computed when the code was applied; before we
