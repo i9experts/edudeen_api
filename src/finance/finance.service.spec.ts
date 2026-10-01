@@ -98,7 +98,7 @@ describe('FinanceService', () => {
 
     activityLogService = { log: jest.fn() } as any;
     commissionRulesService = { resolveRate: jest.fn().mockResolvedValue({ rate: 0.08, source: 'hardcoded_fallback' }) } as any;
-    adminConfigService = { getPayoutMinimum: jest.fn().mockResolvedValue(5) } as any;
+    adminConfigService = { getPayoutMinimum: jest.fn().mockResolvedValue(5), getPayoutFrequency: jest.fn().mockResolvedValue('monthly') } as any;
     notificationsService = { notify: jest.fn().mockResolvedValue(undefined) };
 
     // `connection.transaction(fn)` just runs fn with a stand-in session —
@@ -141,19 +141,26 @@ describe('FinanceService', () => {
       expect(balance.flaggedReason).toBeNull();
     });
 
-    it('does not charge a card-processing fee for a COD sale — only the platform commission was ever actually incurred', async () => {
+    it('for a COD sale credits nothing (the seller holds the cash) and records only the platform commission as a debt against availableBalance', async () => {
       const balance = makeBalance();
       balanceModel.findOne.mockResolvedValue(balance);
       commissionRulesService.resolveRate = jest.fn().mockResolvedValue({ rate: 0.05, source: 'seller_override' });
 
-      // saleAmount=100, platformFee=5 (5%), processingFee=0 (no card network involved in COD) → net=95
+      // saleAmount=100, platformFee=5 (5%), no processing fee → wallet -5, nothing pending
       await service.recordSale(STORE_ID, SELLER_ID, 'order-cod', 100, 'desc', 0, null, 'USD', 'cash_on_delivery');
 
-      expect(balance.pendingBalance).toBe(95);
+      expect(balance.pendingBalance).toBe(0);
+      expect(balance.availableBalance).toBe(-5);
+      expect(balance.totalRevenue).toBe(100);
       expect(balance.totalFees).toBe(5);
+      expect(balance.isFlaggedForReview).toBe(true);
+      const saleTx = txModel.created.find((t: any) => t.referenceId === 'order-cod' && t.type === 'sale');
+      expect(saleTx.metadata.collectedBy).toBe('seller');
+      expect(saleTx.status).toBe('completed');
       const feeTx = txModel.created.find((t: any) => t.referenceId === 'order-cod' && t.type === 'fee');
       expect(feeTx.amount).toBe(-5);
       expect(feeTx.metadata.processingFee).toBe(0);
+      expect(feeTx.description).toContain('Platform commission owed on cash order');
     });
 
     it('does not charge a card-processing fee for a manual bank-transfer sale either', async () => {
@@ -218,6 +225,22 @@ describe('FinanceService', () => {
       expect(activityLogService.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'seller_balance_negative', isSecurityAlert: true }),
       );
+    });
+
+    it('for a refunded COD sale does not debit the wallet and reverses the commission debt pro-rata', async () => {
+      const balance = makeBalance({ availableBalance: -5, isFlaggedForReview: true, flaggedReason: 'cod debt' });
+      balanceModel.findOne.mockResolvedValue(balance);
+      txModel.findOne.mockResolvedValue({ amount: 100, metadata: { platformFee: 5, collectedBy: 'seller' } });
+
+      await service.recordRefund(STORE_ID, SELLER_ID, 'order-cod', 100);
+
+      expect(balance.availableBalance).toBe(0);
+      expect(balance.pendingBalance).toBe(0);
+      expect(balance.totalRefunds).toBe(100);
+      expect(balance.isFlaggedForReview).toBe(false);
+      const reversal = txModel.created.find((t: any) => t.type === 'adjustment');
+      expect(reversal.amount).toBe(5);
+      expect(reversal.metadata.codCommissionReversal).toBe(true);
     });
 
     it('does not re-fire the negative-balance alert on a second refund while already flagged', async () => {

@@ -401,7 +401,10 @@ export class CartService {
     return this.databaseService.repositories.productVariantModel.findOne({ _id: variantId, isDelete: false }).lean();
   }
 
-  async addToWishlist(userId: string, storeId: string, body: any) {
+  // Wishlist is saved per store (the item's own store), but the buyer's
+  // main-site wishlist spans every store — so storeId is taken from the
+  // product when adding, and optional (= all stores) when reading/removing.
+  async addToWishlist(userId: string, storeId: string | undefined, body: any) {
     try {
       const { productId, productVariantId } = body ?? {};
 
@@ -449,10 +452,11 @@ export class CartService {
     }
   }
 
-  async getWishlist(userId: string, storeId: string) {
+  async getWishlist(userId: string, storeId?: string) {
     try {
+      // User wishlist — one store, or every store on the main site.
       const wishlist = await this.databaseService.repositories.wishListModel
-        .find({ userId, storeId })
+        .find({ userId, ...(storeId ? { storeId } : {}) })
         .sort({ createdAt: -1 })
         .limit(MAX_WISHLIST_ITEMS);
 
@@ -477,13 +481,15 @@ export class CartService {
     }
   }
 
-  async getWishlistItem(userId: string, storeId: string, query: any) {
+  async getWishlistItem(userId: string, storeId: string | undefined, query: any) {
     try {
       const productId = typeof query?.productId === 'string' ? query.productId : undefined;
       const productVariantId = typeof query?.productVariantId === 'string' ? query.productVariantId : undefined;
       if (!productId || !productVariantId) throw new BadRequestException('productId and productVariantId are required');
 
-      const wishlistItem = await this.databaseService.repositories.wishListModel.findOne({ userId, storeId, productId, productVariantId });
+      const wishlistItem = await this.databaseService.repositories.wishListModel.findOne({
+        userId, ...(storeId ? { storeId } : {}), productId, productVariantId,
+      });
       if (!wishlistItem) return { message: 'Wishlist item not found', data: null };
 
       const product = await this.loadViewableProduct(productId);
@@ -494,7 +500,7 @@ export class CartService {
     }
   }
 
-  async removeFromWishlist(userId: string, storeId: string, wishlistId: string) {
+  async removeFromWishlist(userId: string, storeId: string | undefined, wishlistId: string) {
     try {
       // 1. find wishlist item
       const wishlistItem =
@@ -505,7 +511,7 @@ export class CartService {
       if (!wishlistItem) {
         throw new BadRequestException('Wishlist item not found');
       }
-      if (wishlistItem.userId !== userId || wishlistItem.storeId !== storeId) {
+      if (wishlistItem.userId !== userId || (storeId && wishlistItem.storeId !== storeId)) {
         throw new ForbiddenException('Access denied');
       }
 
@@ -536,19 +542,20 @@ export class CartService {
     }
   }
 
-  async clearWishlist(userId: string, storeId: string) {
+  async clearWishlist(userId: string, storeId?: string) {
     try {
       const wishlistModel = this.databaseService.repositories.wishListModel;
+      const scope = { userId, ...(storeId ? { storeId } : {}) };
 
-      // 🔍 check if user has any wishlist items (in this store)
-      const wishlistItems = await wishlistModel.find({ userId, storeId });
+      // 🔍 check if user has any wishlist items (in this store, or anywhere)
+      const wishlistItems = await wishlistModel.find(scope);
 
       if (!wishlistItems.length) {
         throw new BadRequestException('Wishlist is already empty');
       }
 
-      // 🗑️ delete all wishlist items of this user (in this store)
-      await wishlistModel.deleteMany({ userId, storeId });
+      // 🗑️ delete all wishlist items of this user (in this store, or anywhere)
+      await wishlistModel.deleteMany(scope);
 
       // 📉 update wishlist count in all related products
       const productModel = this.databaseService.repositories.productModel;

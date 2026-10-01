@@ -5,6 +5,7 @@ import {
   InternalServerErrorException,
   UnauthorizedException,
   BadRequestException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
@@ -201,7 +202,7 @@ export class AuthService {
       }
 
       const existingUser = await userModel.findOne({ email });
-      if (existingUser) {
+      if (existingUser && (existingUser.isVerified || existingUser.isDelete)) {
         throw new UnauthorizedException('User already exists');
       }
 
@@ -210,9 +211,12 @@ export class AuthService {
 
       const hashedPassword = await bcrypt.hash(password, 10);
 
-      const user = new userModel({
+      // An unverified account (e.g. the OTP email never arrived last time)
+      // is taken over by the new sign-up instead of blocking it forever
+      // with "User already exists".
+      const user = existingUser ?? new userModel({ email, role });
+      Object.assign(user, {
         name,
-        email,
         password: hashedPassword,
         phone,
         address,
@@ -225,7 +229,13 @@ export class AuthService {
 
       await user.save();
 
-      await this.otpService.sendOtp(email, otp);
+      try {
+        await this.otpService.sendOtp(email, otp);
+      } catch {
+        throw new ServiceUnavailableException(
+          "We couldn't send the verification email right now. Please try again in a few minutes.",
+        );
+      }
 
       return {
         message: 'OTP sent successfully',

@@ -18,7 +18,10 @@ export class PayoutSchedule {
   @Prop({
     type: String,
     enum: ['daily', 'weekly', 'biweekly', 'monthly', 'manual'],
-    default: 'weekly',
+    // Monthly by default (platform settles sellers once a month) — the
+    // effective default for new schedules comes from AdminConfig
+    // payoutConfig.payoutFrequency, see FinanceService.getOrCreateSchedule.
+    default: 'monthly',
   })
   frequency: string;
 

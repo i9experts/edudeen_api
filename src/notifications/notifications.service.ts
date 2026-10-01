@@ -186,10 +186,14 @@ export class NotificationsService {
   // ── Preferences ─────────────────────────────────────────────────────────
 
   async getPreferences(userId: string, role: string) {
-    let prefs = await this.databaseService.repositories.notificationPreferenceModel.findOne({ userId }).lean();
-    if (!prefs) {
-      prefs = await this.databaseService.repositories.notificationPreferenceModel.create({ userId, role });
-    }
+    // Atomic get-or-create: the web app asks for preferences from more than one
+    // place at once, and two parallel find-then-create calls for a brand-new
+    // user used to collide on the unique userId index (E11000 → 500).
+    const prefs = await this.databaseService.repositories.notificationPreferenceModel.findOneAndUpdate(
+      { userId },
+      { $setOnInsert: { role } },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    ).lean();
     return { success: true, data: prefs };
   }
 

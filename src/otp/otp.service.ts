@@ -1,39 +1,25 @@
 import { Injectable, Logger } from '@nestjs/common';
-import * as nodemailer from 'nodemailer';
-import { ConfigService } from '@nestjs/config';
+import { sendMail } from 'src/common/mailer.util';
 
 @Injectable()
 export class OtpService {
-  private transporter: nodemailer.Transporter;
   private readonly logger = new Logger(OtpService.name);
 
-  constructor(private configService: ConfigService) {
-    this.transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: this.configService.get<string>('SMTP_USER'),
-        pass: this.configService.get<string>('SMTP_PASSWORD'),
-      },
-    });
-  }
-
   async sendOtp(toEmail: string, otp: string): Promise<void> {
+    const appName = process.env.APP_NAME || 'Edudeen';
     try {
-      const mailOptions = {
-        // Was a hard-coded personal Gmail address: mail from any other SMTP_USER was rejected/spoofed. Uses the configured sender.
-        from: this.configService.get<string>('SMTP_FROM') || this.configService.get<string>('SMTP_USER'),
+      const id = await sendMail({
         to: toEmail,
-        subject: 'Your OTP Code',
-        text: `Your OTP code is: ${otp}`,
-        html: `<p>Your OTP code is: <b>${otp}</b></p>`,
-      };
-
-      const result = await this.transporter.sendMail(mailOptions);
-
-      // No recipient address or SMTP response in the log line (PII); the message id is enough to trace a delivery.
-      this.logger.log(`OTP email sent (id ${result.messageId ?? 'n/a'})`);
-    } catch (error) {
-      this.logger.error(`Failed to send OTP email: ${(error as Error)?.message}`);
+        subject: `Your ${appName} verification code`,
+        text: `Your ${appName} verification code is: ${otp}`,
+        html: `<p>Your ${appName} verification code is: <b>${otp}</b></p><p>It expires in 5 minutes. Never share this code with anyone.</p>`,
+      });
+      // No recipient address in the log line (PII); the message id is enough to trace a delivery.
+      this.logger.log(`OTP email sent (id ${id ?? 'n/a'})`);
+    } catch (error: any) {
+      // The real cause (EAUTH = wrong credentials, ETIMEDOUT / ECONNREFUSED = host blocks SMTP,
+      // Brevo 401 = bad API key) so the deploy logs say exactly what to fix — without the recipient.
+      this.logger.error(`Failed to send OTP email: ${error?.code ?? ''} ${error?.message ?? error}`);
       throw new Error('Failed to send OTP email');
     }
   }

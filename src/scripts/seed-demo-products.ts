@@ -259,7 +259,10 @@ async function run() {
           productType: p.kind,
           type: p.kind,
           categoryId,
-          images: [p.image],
+          // No stock photos — the generic ones didn't match the products.
+          // The storefront renders a titled "worksheet" cover for image-less
+          // products; the seller uploads real photos from the dashboard.
+          images: [],
           tags: p.tags,
           digital: isDigital
             ? {

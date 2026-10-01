@@ -390,6 +390,17 @@ export class AdminFinanceService {
       () => this.financeService.processScheduledPayouts());
   }
 
+  // Monthly settlement — not cached: the run below changes it immediately.
+  async getMonthlySettlement(query: { month?: string; currency?: string }) {
+    const data = await this.financeService.adminGetMonthlySettlement(query);
+    return { success: true, data };
+  }
+
+  async runMonthlySettlement(adminId: string, dto: { currency?: string; month?: string }, ip?: string, userAgent?: string) {
+    const data = await this.financeService.adminRunMonthlySettlement(adminId, dto, ip, userAgent);
+    return { success: true, data };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // PAYOUT METHOD VERIFICATION — every new method starts 'pending_verification'
   // (see PayoutMethod schema) since no automated bank/wallet verification
@@ -454,7 +465,7 @@ export class AdminFinanceService {
           period: { from, to },
           byCurrency,
           byStore,
-          note: 'Platform commission is not clawed back when a refund is issued (see finance.service.ts#recordRefund — only the seller\'s balance is debited) — the platform keeps its original commission on refunded sales. This report shows refund volume only, not a commission adjustment. Totals are broken down per settlement currency — PKR and USD are never summed together.',
+          note: 'Platform commission is not clawed back when a refund is issued (see finance.service.ts#recordRefund — only the seller\'s balance is debited) — the platform keeps its original commission on refunded sales. Exception: a refunded cash-on-delivery sale (cash returned by the seller directly) does not debit the wallet and instead reverses the commission debt owed on it pro-rata (an "adjustment" ledger row). This report shows refund volume only, not a commission adjustment. Totals are broken down per settlement currency — PKR and USD are never summed together.',
         },
       };
     });

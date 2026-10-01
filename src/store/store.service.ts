@@ -190,21 +190,36 @@ export class StoreService {
         onboardingDraft: null,
       });
 
-      // Every store always has exactly one platform-plan subscription — auto
-      // start on the free tier so onboarding has zero friction (see EntitlementsService).
-      await this.sellerPlatformSubscriptionsService.ensureDefaultSubscription(store._id.toString(), sellerId);
-
-      // Every store gets its own storefront chrome (theme/header/footer) and a
-      // home page seeded at creation time, not lazily on first public visit —
-      // lazy-on-a-public-GET would let two simultaneous buyer visits race on
-      // creating the same home page. Both calls are idempotent upserts.
-      await this.storeThemeService.ensureDefaultTheme(store._id.toString());
-      await this.storePagesService.ensureHomePage(store._id.toString());
     } catch (err) {
+      // The seller could not be marked onboarded — roll the store back so a retry starts clean.
       await this.databaseService.repositories.storeModel
         .updateOne({ _id: store._id }, { $set: { isDelete: true } })
         .catch(() => undefined);
       throw err;
+    }
+
+    // The store itself now exists — the setup steps below must never turn
+    // that into a 500 (the seller would retry and end up with a duplicate
+    // store). Each is an idempotent upsert that is also re-run later (the
+    // dashboard/builder ensure the theme and home page on load), so a failure
+    // here is logged and retried rather than failing store creation.
+    const storeId = store._id.toString();
+    const setupSteps: [string, () => Promise<unknown>][] = [
+      // Every store always has exactly one platform-plan subscription — auto
+      // start on the free tier so onboarding has zero friction (see EntitlementsService).
+      ['platform subscription', () => this.sellerPlatformSubscriptionsService.ensureDefaultSubscription(storeId, sellerId)],
+      // Storefront chrome (theme/header/footer) and a home page seeded at
+      // creation time, not lazily on first public visit — lazy-on-a-public-GET
+      // would let two simultaneous buyer visits race on creating the same page.
+      ['storefront theme', () => this.storeThemeService.ensureDefaultTheme(storeId)],
+      ['home page', () => this.storePagesService.ensureHomePage(storeId)],
+    ];
+    for (const [label, run] of setupSteps) {
+      try {
+        await run();
+      } catch (err: any) {
+        console.error(`[createStore] ${label} setup failed for store ${storeId}: ${err?.name ?? ''} ${err?.message ?? err}`);
+      }
     }
 
     return {

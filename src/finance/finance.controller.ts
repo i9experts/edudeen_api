@@ -32,6 +32,17 @@ export class FinanceController {
     return this.financeService.getDashboard(req.user.userId, storeId);
   }
 
+  // Monthly settlement statement — ?month=YYYY-MM (default: current UTC month), ?currency= (default: store baseCurrency)
+  @Get(':storeId/monthly-statement')
+  getMonthlyStatement(
+    @Req() req: any,
+    @Param('storeId') storeId: string,
+    @Query('month') month?: string,
+    @Query('currency') currency?: string,
+  ) {
+    return this.financeService.getMonthlyStatement(req.user.userId, storeId, { month, currency });
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // TRANSACTIONS  (static routes before parameterized)
   // ═══════════════════════════════════════════════════════════════════════════

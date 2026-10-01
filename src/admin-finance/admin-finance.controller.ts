@@ -14,6 +14,7 @@ import { RejectPayoutDto } from './dto/reject-payout.dto';
 import { ManualPayoutDto } from './dto/manual-payout.dto';
 import { AdminFinanceExportQueryDto } from './dto/admin-finance-export-query.dto';
 import { VerifyPayoutMethodDto } from './dto/verify-payout-method.dto';
+import { RunMonthlySettlementDto } from './dto/run-monthly-settlement.dto';
 
 interface AdminReq { user: { userId: string }; ip?: string; headers: Record<string, string | undefined> }
 
@@ -119,6 +120,18 @@ export class AdminFinanceController {
   @Post('process-scheduled-payouts')
   triggerScheduledPayouts(@Req() req: AdminReq) {
     return this.adminFinanceService.triggerScheduledPayouts({ adminId: req.user.userId, ip: req.ip, userAgent: req.headers['user-agent'] });
+  }
+
+  // ─── Monthly settlement (platform collects all, pays sellers monthly) ────
+
+  @Get('monthly-settlement')
+  getMonthlySettlement(@Query('month') month?: string, @Query('currency') currency?: string) {
+    return this.adminFinanceService.getMonthlySettlement({ month, currency });
+  }
+
+  @Post('monthly-settlement/run')
+  runMonthlySettlement(@Req() req: any, @Body() dto: RunMonthlySettlementDto) {
+    return this.adminFinanceService.runMonthlySettlement(req.user.userId, dto, req.ip, req.headers['user-agent']);
   }
 
   // ─── Payout method verification ──────────────────────────────────────────
