@@ -369,8 +369,10 @@ export class OrdersService {
     body: any,
     ip?: string,
     userAgent?: string,
+    actorRole: string = 'seller',
   ) {
     const { orderId, storeId, status, tracking } = body;
+    const isAdmin = actorRole === 'admin';
 
     if (!orderId) throw new BadRequestException('orderId is required');
     if (!storeId) throw new BadRequestException('storeId is required');
@@ -385,10 +387,10 @@ export class OrdersService {
 
     const { orderModel, storeModel } = this.databaseService.repositories;
 
-    // store ownership check
+    // store ownership check (an admin acts on any store, but only where the platform fulfills — see below)
     const store = await storeModel.findOne({
       _id: storeId,
-      sellerId,
+      ...(isAdmin ? {} : { sellerId }),
       isDelete: false,
     });
     if (!store) throw new ForbiddenException('Store not found or unauthorized');
@@ -397,9 +399,22 @@ export class OrdersService {
     if (!order) throw new NotFoundException('Order not found');
 
     const sellerOrderIndex = order.sellerOrders.findIndex(
-      (so: any) => so.storeId === storeId && so.sellerId === sellerId,
+      (so: any) => so.storeId === storeId && (isAdmin || so.sellerId === sellerId),
     );
     if (sellerOrderIndex === -1) throw new ForbiddenException('Unauthorized');
+
+    // Who may move a sub-order through shipped/delivered is fixed by the mode
+    // snapshotted on it at order creation: the seller where the seller ships
+    // (every pre-existing order), an admin only where the platform ships.
+    // Digital sub-orders ship nothing and stay seller-managed.
+    const target = order.sellerOrders[sellerOrderIndex] as any;
+    const platformFulfilled = target.fulfillmentType === 'physical' && target.fulfillmentMode === 'platform';
+    if (isAdmin && !platformFulfilled) {
+      throw new ForbiddenException('This sub-order is fulfilled by the seller — only the seller can update its status');
+    }
+    if (!isAdmin && platformFulfilled) {
+      throw new ForbiddenException('This sub-order is fulfilled by Edudeen — its shipping status and tracking are handled by the Edudeen team');
+    }
 
     // Guards against double-crediting the finance ledger if this sellerOrder was already
     // completed before this call (duplicate/retried request, double-click, etc.) — mirrors
@@ -517,7 +532,7 @@ export class OrdersService {
         ? `Order #${orderId} — shipped via ${tracking.carrier ?? tracking}`
         : `Order #${orderId} — status changed to ${status}`,
       actorId: sellerId,
-      actorRole: 'seller',
+      actorRole: isAdmin ? 'admin' : 'seller',
       targetId: orderId,
       targetType: 'order',
       ip,
@@ -561,6 +576,12 @@ export class OrdersService {
     // own sub-orders — marking paid credits every seller in the order's
     // ledger, so one seller must never be able to do it for another's sale.
     // A multi-store order has to be confirmed by an admin.
+    // Cash collected by Edudeen's own couriers (fulfillmentMode 'platform') is
+    // confirmed by the Edudeen team only — a seller must never be able to book
+    // a credit for money the platform has not yet received.
+    if (actor.role !== 'admin' && order.sellerOrders.some((so: any) => so.fulfillmentMode === 'platform')) {
+      throw new ForbiddenException('Payment on Edudeen-fulfilled orders is confirmed by the Edudeen team');
+    }
     if (actor.role !== 'admin') {
       const ownsAll =
         order.sellerOrders.length > 0 &&

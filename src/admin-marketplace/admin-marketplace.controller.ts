@@ -9,6 +9,7 @@ import { AdminMarketplaceService } from './admin-marketplace.service';
 import { MarketplaceListingQueryDto } from './dto/marketplace-listing-query.dto';
 import { SetFeaturedDto } from './dto/set-featured.dto';
 import { SetStoreBadgeDto } from './dto/set-store-badge.dto';
+import { SetFulfillmentModeDto } from './dto/set-fulfillment-mode.dto';
 import { LeadsQueryDto } from './dto/leads-query.dto';
 import { RejectLeadDto } from './dto/reject-lead.dto';
 
@@ -48,6 +49,11 @@ export class AdminMarketplaceController {
   @Patch('stores/:id/badge')
   setStoreBadge(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: SetStoreBadgeDto) {
     return this.adminMarketplaceService.setStoreBadge(id, dto.badge, dto.grant, this.meta(req));
+  }
+
+  @Patch('stores/:id/fulfillment-mode')
+  setFulfillmentMode(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: SetFulfillmentModeDto) {
+    return this.adminMarketplaceService.setFulfillmentMode(id, dto.fulfillmentMode, this.meta(req));
   }
 
   @Get('leads')

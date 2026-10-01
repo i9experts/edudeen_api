@@ -62,12 +62,13 @@ export class OrdersController {
   @Roles('seller', 'admin')
   @Put('update-status')
   async updateSellerOrderStatus(@Req() req: any, @Body() body: any) {
-    const { userId } = req.user;
+    const { userId, role } = req.user;
     return this.ordersService.updateSellerOrderStatus(
       userId,
       body,
       req.ip,
       req.headers['user-agent'],
+      role,
     );
   }
 

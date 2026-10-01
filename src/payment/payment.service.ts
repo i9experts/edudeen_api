@@ -1333,7 +1333,7 @@ export class PaymentService {
     const allStoreIds = [...new Set(checkout.items.map((i: any) => i.storeId))] as string[];
     const storesById = new Map(
       (
-        await storeModel.find({ _id: { $in: allStoreIds } }).select('baseCurrency').lean()
+        await storeModel.find({ _id: { $in: allStoreIds } }).select('baseCurrency fulfillmentMode').lean()
       ).map((s: any) => [s._id.toString(), s]),
     );
 
@@ -1378,6 +1378,9 @@ export class PaymentService {
           sellerId: storeItems[0].sellerId,
           storeId: storeItems[0].storeId,
           fulfillmentType: storeItems[0].type, // 'physical' ya 'digital'
+          // Snapshot of who ships this sub-order (Store.fulfillmentMode now, not whenever it is read later).
+          // Digital sub-orders ship nothing, so they carry none.
+          fulfillmentMode: storeItems[0].type === 'physical' ? (storesById.get(sellerStoreId)?.fulfillmentMode ?? 'seller') : null,
           settlementCurrency,
           settlementAmount,
           settledViaConnect: isConnectSettled,

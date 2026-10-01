@@ -190,6 +190,24 @@ export class AdminMarketplaceService {
     return { success: true, message: grant ? 'Badge granted' : 'Badge revoked', data: { badges: next } };
   }
 
+  /** Admin override of who ships a store's physical orders (see Store.fulfillmentMode). New orders only. */
+  async setFulfillmentMode(storeId: string, fulfillmentMode: 'seller' | 'platform', meta: AuditMeta) {
+    const updated = await this.r.storeModel.findOneAndUpdate(
+      { _id: storeId, isDelete: false },
+      { $set: { fulfillmentMode } },
+      { returnDocument: 'after' },
+    );
+    if (!updated) throw new NotFoundException('Store not found');
+    this.log(
+      'store_fulfillment_mode_set',
+      `Fulfillment mode of store "${updated.name}" set to ${fulfillmentMode} (applies to new orders only)`,
+      meta,
+      storeId,
+      'store',
+    );
+    return { success: true, message: 'Fulfillment mode updated', data: { fulfillmentMode } };
+  }
+
   /** New-store Leads queue — filtered by `verificationStatus`, NOT the
    *  store's marketplace `status` (they're deliberately separate fields —
    *  see store.schema.ts). List view is deliberately light (no documents/

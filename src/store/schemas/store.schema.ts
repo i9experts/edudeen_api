@@ -492,6 +492,15 @@ export class Store {
   @Prop({ type: Boolean, default: true })
   codEnabled: boolean;
 
+  // Who ships this store's PHYSICAL orders. 'seller' (default — every existing
+  // store): the seller's own courier delivers and collects any COD cash, and
+  // the seller manages shipping status/tracking. 'platform': the platform ships
+  // and collects COD, an admin manages shipping status/tracking and confirms COD
+  // payment. Snapshotted onto each physical sellerOrder at order creation, so
+  // changing it only affects NEW orders.
+  @Prop({ type: String, enum: ['seller', 'platform'], default: 'seller' })
+  fulfillmentMode: string;
+
   @Prop({ type: StoreSeoSchema, default: () => ({}) })
   seo: StoreSeo;
 
