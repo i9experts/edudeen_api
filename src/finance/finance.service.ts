@@ -36,6 +36,20 @@ export function isSellerCollectedCod(paymentType: string | null | undefined, sel
   return paymentType === 'cash_on_delivery' && sellerOrder?.fulfillmentMode !== 'platform';
 }
 
+/** The shipping line a store is credited for a sub-order, in the seller's settlement currency.
+ *  Only a store that ships its own physical orders ('seller' fulfillment) is paid for shipping, and only
+ *  when the platform collected that money (card / bank transfer): on COD the seller's courier collects
+ *  the shipping cash along with the sale, and when the platform ships ('platform') it keeps the fee. */
+export function shippingCreditFor(
+  order: { paymentType?: string | null },
+  sellerOrder: { fulfillmentType?: string | null; fulfillmentMode?: string | null; settlementShippingFee?: number | null },
+): number {
+  if (sellerOrder.fulfillmentType !== 'physical') return 0;
+  if (sellerOrder.fulfillmentMode === 'platform') return 0;
+  if (order.paymentType === 'cash_on_delivery') return 0;
+  return sellerOrder.settlementShippingFee ?? 0;
+}
+
 function clearingDaysForRail(paymentMethodType: string): number {
   return paymentMethodType === 'stripe' ? CLEARING_DAYS_CARD : CLEARING_DAYS;
 }
@@ -1379,6 +1393,7 @@ export class FinanceService {
     storeId: string, sellerId: string, orderId: string, saleAmount: number, description: string,
     platformSponsoredUSD = 0, campaignId?: string | null, currency = 'USD', paymentMethodType = 'stripe',
     fulfillmentMode?: string | null,
+    shippingCredit = 0,
   ) {
     // Cash collected by the seller's own courier never reaches the platform —
     // crediting sale-minus-commission here would pay the seller for money they
@@ -1388,8 +1403,10 @@ export class FinanceService {
     }
     const chargesProcessingFee = paymentMethodType === 'stripe';
     const { rate: platformFeeRate, source: feeRateSource, platformFee } = await this.platformCommission(storeId, saleAmount);
-    const processingFee = chargesProcessingFee ? this.round(saleAmount * PAYMENT_PROCESSING_RATE + PAYMENT_PROCESSING_FIXED) : 0;
-    const netAmount     = this.round(saleAmount - platformFee - processingFee);
+    // The card network charges on everything the buyer paid, shipping included; the platform
+    // commission is on the sale only — never on shipping, which passes through to the seller.
+    const processingFee = chargesProcessingFee ? this.round((saleAmount + shippingCredit) * PAYMENT_PROCESSING_RATE + PAYMENT_PROCESSING_FIXED) : 0;
+    const netAmount     = this.round(saleAmount - platformFee - processingFee + shippingCredit);
 
     await this.withTransaction(async (session) => {
       // Idempotent per (order, store): a repeated call (double-click on
@@ -1428,7 +1445,7 @@ export class FinanceService {
         referenceId: orderId,
         referenceType: 'order',
         status: 'pending',
-        metadata: { platformFee, processingFee, netAmount, clearingDays: clearingDaysForRail(paymentMethodType), feeRate: platformFeeRate, feeRateSource },
+        metadata: { platformFee, processingFee, netAmount, clearingDays: clearingDaysForRail(paymentMethodType), feeRate: platformFeeRate, feeRateSource, ...(shippingCredit > 0 ? { shippingCredit } : {}) },
       });
       await saleTx.save({ session });
 
@@ -1448,6 +1465,24 @@ export class FinanceService {
         metadata: { platformFee, processingFee, paymentMethodType },
       });
       await feeTx.save({ session });
+
+      // Ledger: shipping audit entry — informational only (already folded into
+      // `netAmount` above, no commission taken on it), so the seller's history can
+      // show the shipping line separately from the sale. Same idempotency as the sale.
+      if (shippingCredit > 0) {
+        await new this.txModel({
+          storeId, sellerId, currency,
+          type: 'adjustment',
+          amount: shippingCredit,
+          balanceBefore: balance.availableBalance,
+          balanceAfter: balance.availableBalance,
+          description: `Shipping — Order #${orderId} (no commission)`,
+          referenceId: orderId,
+          referenceType: 'order',
+          status: 'completed',
+          metadata: { shippingCredit: true },
+        }).save({ session });
+      }
 
       // Ledger: platform-subsidy audit entry — informational only, doesn't move
       // the balance again (already folded into `saleAmount`/netAmount above);

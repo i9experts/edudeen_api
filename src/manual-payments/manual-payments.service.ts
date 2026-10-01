@@ -3,7 +3,7 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { DatabaseService } from 'src/database/databaseservice';
 import { UploadService } from 'src/upload/upload.service';
 import { PaymentService } from 'src/payment/payment.service';
-import { FinanceService } from 'src/finance/finance.service';
+import { FinanceService, shippingCreditFor } from 'src/finance/finance.service';
 import { AdminConfigService } from 'src/admin-config/admin-config.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
@@ -286,6 +286,7 @@ export class ManualPaymentsService {
             `Sale — Order #${order._id} (manual bank transfer, verified)`,
             platformSponsoredUSD, sponsoredCampaignId, sellerPayoutCurrency(so, order),
             order.paymentType || 'manual_bank_transfer',
+            so.fulfillmentMode, shippingCreditFor(order, so),
           );
         } catch (e: any) {
           console.error('Finance recordSale failed (manual payment approval):', e?.message);

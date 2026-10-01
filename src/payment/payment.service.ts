@@ -317,7 +317,13 @@ export class PaymentService {
       connectAccountId = await this.stripeConnectService.getEligibleConnectAccountForStore(checkoutStoreIds[0]);
       if (connectAccountId) {
         const { rate } = await this.commissionRulesService.resolveRate(checkoutStoreIds[0]);
-        applicationFeeAmountCents = Math.round(amountCents * rate);
+        // Commission is on the sale only — never on shipping. A seller-fulfilled store keeps
+        // the shipping line (no fee on it); on a platform-fulfilled store the platform keeps it
+        // (the whole shipping amount goes in the application fee).
+        const shippingCents = Math.min(amountCents, Math.round((checkout.shippingFee || 0) * 100));
+        const storeDoc: any = await this.databaseService.repositories.storeModel.findById(checkoutStoreIds[0]).select('fulfillmentMode').lean();
+        applicationFeeAmountCents =
+          Math.round((amountCents - shippingCents) * rate) + (storeDoc?.fulfillmentMode === 'platform' ? shippingCents : 0);
       }
     }
 
@@ -1352,6 +1358,18 @@ export class PaymentService {
       ).map((s: any) => [s._id.toString(), s]),
     );
 
+    // Each store with physical items has its own shipping line on the checkout
+    // (CheckoutService.addShippingInCheckout). A checkout created before per-store
+    // shipping existed has none: it was single-store by construction, so the whole
+    // flat fee belongs to that one store.
+    const shippingByStoreId = new Map<string, number>(
+      ((checkout.shippingByStore as any[]) ?? []).map((l: any) => [l.storeId, l.fee ?? 0] as [string, number]),
+    );
+    if (shippingByStoreId.size === 0 && (checkout.shippingFee || 0) > 0) {
+      const firstPhysicalStore = physicalItems[0]?.storeId;
+      if (firstPhysicalStore) shippingByStoreId.set(firstPhysicalStore, checkout.shippingFee);
+    }
+
     // --- helper: ek type ke items ko store-wise sellerOrders me ---
     const buildSellerOrders = (items: any[]) => {
       const storeMap: Record<string, any[]> = {};
@@ -1389,6 +1407,18 @@ export class PaymentService {
         // and back again just to arrive at the same number.
         const settlementAmount = this.round(subtotalNative + platformSponsoredDiscountUSDNative);
         const isConnectSettled = connectInfo?.storeId === sellerStoreId;
+        // This store's own shipping line: in the order's currency, and in the
+        // seller's settlement currency (what a seller-fulfilled store is credited).
+        const lineFeeInCheckoutCurrency = storeItems[0].type === 'physical' ? (shippingByStoreId.get(sellerStoreId) ?? 0) : 0;
+        const sellerShippingFee = convFrom(lineFeeInCheckoutCurrency, checkout.currency) ?? 0;
+        let settlementShippingFee = 0;
+        if (lineFeeInCheckoutCurrency > 0) {
+          try {
+            settlementShippingFee = this.exchangeRateService.convertWithSnapshots(lineFeeInCheckoutCurrency, checkout.currency, settlementCurrency, fxSnapshots);
+          } catch (err: any) {
+            console.error('Shipping settlement conversion failed:', err?.message, { storeId: sellerStoreId });
+          }
+        }
         return {
           sellerId: storeItems[0].sellerId,
           storeId: storeItems[0].storeId,
@@ -1398,6 +1428,8 @@ export class PaymentService {
           fulfillmentMode: storeItems[0].type === 'physical' ? (storesById.get(sellerStoreId)?.fulfillmentMode ?? 'seller') : null,
           settlementCurrency,
           settlementAmount,
+          shippingFee: sellerShippingFee,
+          settlementShippingFee,
           settledViaConnect: isConnectSettled,
           stripeConnectedAccountId: isConnectSettled ? connectInfo!.accountId : null,
           items: storeItems.map((i) => ({
@@ -1459,7 +1491,8 @@ export class PaymentService {
       // CheckoutService.addShippingInCheckout) — convert it into
       // orderCurrency the same way (a no-op when they're the same, as in
       // every case except manual-bank-transfer).
-      const shippingFee = convFrom(checkout.shippingFee || 0, checkout.currency) ?? 0;
+      // The order's shipping is the sum of its sub-orders' own lines.
+      const shippingFee = this.round(sellerOrders.reduce((sum: number, so: any) => sum + (so.shippingFee ?? 0), 0));
       const subscriberDiscountTotal = convertedSum(physicalItems, 'subscriberDiscountUSD');
       const couponDiscountTotal = convertedSum(physicalItems, 'couponDiscountUSD');
       const giftCardDiscountTotal = convertedSum(physicalItems, 'giftCardDiscountUSD');

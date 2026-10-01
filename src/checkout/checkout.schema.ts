@@ -184,6 +184,17 @@ export class Checkout {
   @Prop({ default: 0 })
   shippingFee: number;
 
+  // Per-seller shipping lines (sellers ship separately): one entry per store with
+  // physical items, in the checkout's currency. `shippingFee` above is their sum.
+  // `baseFee` is the platform shipping-zone fee before that store's free/discounted
+  // shipping subscriber benefit; `discountPercent` the benefit applied (0 = none).
+  // Empty on checkouts created before per-store shipping existed.
+  @Prop({
+    type: [{ _id: false, storeId: String, fee: Number, baseFee: Number, discountPercent: Number }],
+    default: [],
+  })
+  shippingByStore: { storeId: string; fee: number; baseFee: number; discountPercent: number }[];
+
   @Prop({ default: 0 })
   taxAmount: number;
 

@@ -744,47 +744,53 @@ export class CheckoutService {
     // ShippingZone.shippingPrice is always PKR (see SHIPPING_ZONE_CURRENCY's
     // comment) — converted into this checkout's own currency using its
     // already-frozen fxSnapshots, never a fresh live rate.
-    let shippingFee = this.exchangeRateService.convertWithSnapshots(
+    const baseFee = this.exchangeRateService.convertWithSnapshots(
       shippingZone.shippingPrice || 0,
       SHIPPING_ZONE_CURRENCY,
       checkout.currency,
       (checkout.fxSnapshots as any) ?? [],
     );
 
-    // Free/discounted shipping benefit — only applied when every item in the
-    // checkout belongs to a single store (the shipping fee itself is a flat,
-    // whole-checkout amount, not per-seller, so a mixed-store cart can't
-    // unambiguously attribute the waiver to one store's membership).
-    const storeIdsInCheckout = [
-      ...new Set((checkout.items as any[]).map((i) => i.storeId)),
-    ];
-    if (storeIdsInCheckout.length === 1) {
-      const benefitsEntry = await this.subscriptionBenefits.getActiveBenefits(
-        userId,
-        storeIdsInCheckout[0],
-      );
+    // Sellers ship separately, so every store with PHYSICAL items gets its own
+    // shipping line (the platform zone fee), and each store's free/discounted
+    // shipping subscriber benefit applies to that store's line only. A checkout
+    // with no physical items (digital only) has no shipping at all.
+    const items = checkout.items as any[];
+    const physicalStoreIds = [...new Set(items.filter((i) => i.type === 'physical').map((i) => i.storeId))];
+    const shippingByStore: { storeId: string; fee: number; baseFee: number; discountPercent: number }[] = [];
+    for (const storeId of physicalStoreIds) {
+      let discountPercent = 0;
+      const benefitsEntry = await this.subscriptionBenefits.getActiveBenefits(userId, storeId);
       if (benefitsEntry) {
-        const shippingBenefit =
-          this.subscriptionBenefits.resolveShippingBenefit(
-            benefitsEntry.benefits,
-          );
+        const shippingBenefit = this.subscriptionBenefits.resolveShippingBenefit(benefitsEntry.benefits);
+        const storeSubtotal = this.convertedSubtotal(
+          items.filter((i) => i.storeId === storeId),
+          checkout.currency,
+          (checkout.fxSnapshots as any) ?? [],
+        );
         if (
           shippingBenefit &&
           (shippingBenefit.minOrderValueForShippingUSD == null ||
-            checkout.subtotal >= shippingBenefit.minOrderValueForShippingUSD)
+            storeSubtotal >= shippingBenefit.minOrderValueForShippingUSD)
         ) {
-          shippingFee = this.round(
-            shippingFee * (1 - shippingBenefit.discountPercent / 100),
-          );
+          discountPercent = shippingBenefit.discountPercent;
         }
       }
+      shippingByStore.push({
+        storeId,
+        baseFee,
+        discountPercent,
+        fee: this.round(baseFee * (1 - discountPercent / 100)),
+      });
     }
+    const shippingFee = this.round(shippingByStore.reduce((sum, l) => sum + l.fee, 0));
 
     const totalAmount = this.round(checkout.subtotal + shippingFee);
 
     await checkoutModel.findByIdAndUpdate(checkoutId, {
       shippingZoneId,
       shippingFee,
+      shippingByStore,
       totalAmount,
     });
 
@@ -795,6 +801,7 @@ export class CheckoutService {
         checkoutId,
         shippingZoneId,
         shippingFee,
+        shippingByStore,
         subtotal: checkout.subtotal,
         totalAmount,
         ...this.splitSubtotalsByType(checkout.items as any[]),

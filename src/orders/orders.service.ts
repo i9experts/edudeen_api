@@ -10,7 +10,7 @@ import { DatabaseService } from 'src/database/databaseservice';
 import { UploadService } from 'src/upload/upload.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { FinanceService } from 'src/finance/finance.service';
+import { FinanceService, shippingCreditFor } from 'src/finance/finance.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { LoyaltyService } from 'src/loyalty/loyalty.service';
 import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-benefits.service';
@@ -509,6 +509,7 @@ export class OrdersService {
             sellerPayoutCurrency(so, order),
             order.paymentType,
             so.fulfillmentMode,
+            shippingCreditFor(order, so),
           );
         } catch (e) {
           console.error('Finance recordSale failed:', e?.message);
@@ -647,6 +648,7 @@ export class OrdersService {
           sellerPayoutCurrency(so, order),
           order.paymentType,
           so.fulfillmentMode,
+          shippingCreditFor(order, so),
         );
       } catch (e) {
         console.error('Finance recordSale failed:', e?.message);
@@ -757,9 +759,23 @@ export class OrdersService {
     let refundedViaStripe = false;
     let manualRefundNeeded = false;
     if (order.isPaid) {
+      // Each store ships (and is charged for shipping) separately, so a store's shipping line is
+      // refunded exactly when this cancel removes the LAST live item of that store's sub-order.
+      // Orders placed before per-store shipping existed have no line on their sub-orders: the old
+      // whole-order rule applies to them.
+      const hasShippingLines = order.sellerOrders.some((so: any) => (so.shippingFee ?? 0) > 0);
+      let shippingRefund = 0;
+      if (hasShippingLines) {
+        order.sellerOrders.forEach((so: any, soIndex: number) => {
+          const live = so.items.filter((i: any) => i.status !== 'cancelled').length;
+          const cancelling = targetItems.filter((t) => t.soIndex === soIndex).length;
+          if (live > 0 && cancelling === live) shippingRefund += so.shippingFee ?? 0;
+        });
+      } else if (cancelsWholeOrder) {
+        shippingRefund = order.shippingFee ?? 0;
+      }
       const refundAmount = round(
-        targetItems.reduce((s, { item }) => s + (item.totalPrice ?? 0), 0) +
-          (cancelsWholeOrder ? (order.shippingFee ?? 0) : 0),
+        targetItems.reduce((s, { item }) => s + (item.totalPrice ?? 0), 0) + shippingRefund,
       );
       if (order.paymentType === 'stripe') {
         const { paymentTransactionModel } = this.databaseService.repositories;
