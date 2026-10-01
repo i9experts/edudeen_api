@@ -4,6 +4,7 @@ import { AppModule } from './app.module';
 import cookieParser from 'cookie-parser';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
+import { GLOBAL_VALIDATION_OPTIONS } from './common/validation.config';
 
 async function bootstrap() {
   // rawBody: Stripe webhook signature verification (payment + subscriptions
@@ -11,16 +12,27 @@ async function bootstrap() {
   // `req.rawBody` — without it every webhook is rejected with a 400.
   const app = await NestFactory.create(AppModule, { rawBody: true });
 
+  // Behind a reverse proxy (Railway, Cloudflare, a load balancer) `req.ip` is the PROXY's address unless Express is
+  // told how many proxy hops to trust. That makes the per-IP rate limiter share one bucket across every user and
+  // records the proxy IP in audit logs. Opt-in via TRUST_PROXY (a hop count such as `1`, or `true`/`false`) so a
+  // deployment sets it deliberately: trusting too many hops lets a client spoof X-Forwarded-For.
+  const trustProxy = process.env.TRUST_PROXY;
+  if (trustProxy !== undefined && trustProxy !== '') {
+    const value: boolean | number = trustProxy === 'true' ? true : trustProxy === 'false' ? false : Number(trustProxy);
+    if (typeof value === 'number' && (!Number.isInteger(value) || value < 0)) {
+      throw new Error('TRUST_PROXY must be "true", "false" or a non-negative integer hop count');
+    }
+    app.getHttpAdapter().getInstance().set('trust proxy', value);
+  }
+
   app.use(cookieParser());
 
-  // Global DTO validation. Before this, only the ~27 controllers that opted
-  // in with a local @UsePipes ran their class-validator rules — every other
-  // DTO (auth, cart, messaging, categories, ...) was decoration only.
-  // `transform: true` matches the local pipes already used across the app,
-  // so query DTOs relying on @Type(() => Number) behave identically.
-  // No `whitelist` here on purpose: stripping unknown props globally could
-  // silently drop fields that `body: any` handlers still rely on.
-  app.useGlobalPipes(new ValidationPipe({ transform: true }));
+  // Global DTO validation. `transform: true` matches the local pipes already used across the app, so query DTOs
+  // relying on @Type(() => Number) behave identically. `whitelist: true` strips any property a DTO does not declare:
+  // most controllers have no local whitelist pipe, so `{ ...dto }` / `$set: dto` / `Object.assign(doc, dto)` in the
+  // services let a client write fields it was never meant to (ownership ids, status, flags). Parameters typed `any`
+  // (no DTO class) are not touched by the pipe and must pick their fields explicitly. See validation.config.ts.
+  app.useGlobalPipes(new ValidationPipe(GLOBAL_VALIDATION_OPTIONS));
 
   const config = new DocumentBuilder()
     .setTitle('Edudeen API')

@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsNumber, IsArray, ValidateNested, Min } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsArray, IsOptional, MaxLength, ValidateNested, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class TierDto {
@@ -15,6 +15,10 @@ export class TierDto {
   minPoints: number;
 
   @ApiProperty({ type: [String], required: false })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(200, { each: true })
   benefits?: string[];
 }
 

@@ -1,8 +1,37 @@
 /* eslint-disable prettier/prettier */
 import { Injectable } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { BadRequestException } from '@nestjs/common';
+import { isValidObjectId } from 'mongoose';
 import { DatabaseService } from 'src/database/databaseservice';
+
+const ADDRESS_TEXT_FIELDS = ['label', 'recipientName', 'phoneNumber', 'addressLine1', 'addressLine2', 'state', 'city', 'zipCode', 'country'] as const;
+
+/**
+ * The only address fields a user may write. updateAddress used to `$set` the whole request body, so a user could
+ * rewrite `userId` (hand an address to someone else), flip `isDelete` (resurrect a deleted one) or set `status`.
+ */
+export function pickAddressUpdate(body: unknown): Record<string, unknown> {
+  const src = (body ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of ADDRESS_TEXT_FIELDS) {
+    if (src[key] === undefined) continue;
+    const v = src[key];
+    if (v === null && (key === 'addressLine2' || key === 'country')) { out[key] = null; continue; }
+    if (typeof v !== 'string' || v.length > 200) throw new BadRequestException(`${key} must be a string of at most 200 characters`);
+    out[key] = v;
+  }
+  for (const key of ['latitude', 'longitude'] as const) {
+    if (src[key] === undefined) continue;
+    const v = src[key];
+    if (v !== null && (typeof v !== 'number' || !Number.isFinite(v))) throw new BadRequestException(`${key} must be a number`);
+    out[key] = v;
+  }
+  if (src.isDefault !== undefined) {
+    if (typeof src.isDefault !== 'boolean') throw new BadRequestException('isDefault must be a boolean');
+    out.isDefault = src.isDefault;
+  }
+  return out;
+}
 
 @Injectable()
 export class AddressService {
@@ -78,9 +107,17 @@ export class AddressService {
 
     async updateAddress(userId: string, addressId: string, body: any) {
     try {
+      if (typeof addressId !== 'string' || !isValidObjectId(addressId)) throw new BadRequestException('Invalid addressId');
+      const fields = pickAddressUpdate(body);
+      if (fields.isDefault === true) {
+        await this.databaseService.repositories.addressModel.updateMany(
+          { userId, isDelete: false, _id: { $ne: addressId } },
+          { $set: { isDefault: false } },
+        );
+      }
       const updated = await this.databaseService.repositories.addressModel.findOneAndUpdate(
-        { _id: addressId, userId },
-        { $set: body },
+        { _id: addressId, userId, isDelete: false },
+        { $set: fields },
         { returnDocument: 'after' },
       );
 
