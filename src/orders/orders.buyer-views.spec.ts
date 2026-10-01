@@ -145,3 +145,52 @@ describe('buyer order views — fulfillment mode and per-store shipping (additiv
     expect(data.orderNumber).toBe('ORD-1');
   });
 });
+
+describe('seller order list rows', () => {
+  it('carry fulfillmentMode of THEIR sub-order (missing → "seller"), so the app need not infer it from a 403', async () => {
+    const orders = [
+      order('1', {
+        sellerOrders: [so('A', { fulfillmentMode: 'platform' }), so('B')],
+      }),
+      order('2', { sellerOrders: [so('A')] }),
+    ];
+    const orderModel: any = {
+      countDocuments: jest.fn(async () => orders.length),
+      find: jest.fn(() => chain(orders)),
+    };
+    const repos: any = {
+      orderModel,
+      storeModel: { findOne: jest.fn(async () => ({ _id: 'A' })) },
+      userModel: {
+        findOne: jest.fn(() => chain({ name: 'Buyer', email: 'b@x.test' })),
+      },
+    };
+    const svc = new OrdersService(
+      { repositories: repos } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    const { data } = await svc.getSellerOrders('seller-A', 'A', {});
+    expect(
+      data.orders.map((r: any) => [r.orderNumber, r.fulfillmentMode]),
+    ).toEqual([
+      ['ORD-1', 'platform'],
+      ['ORD-2', 'seller'],
+    ]);
+    // existing columns are unchanged
+    expect(data.orders[0]).toMatchObject({
+      type: 'physical',
+      status: 'pending',
+      amount: 10,
+      currency: 'USD',
+    });
+  });
+});

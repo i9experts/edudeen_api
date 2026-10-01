@@ -336,6 +336,9 @@ export class OrdersService {
           },
           product: firstItem?.name || '',
           type: so.fulfillmentType,
+          // Who ships this sub-order, so the seller app can hide status controls on Edudeen-fulfilled
+          // rows instead of discovering it from a 403 (missing = seller-fulfilled).
+          fulfillmentMode: so.fulfillmentMode ?? 'seller',
           productType: firstItem?.productType ?? null,
           date: order.createdAt,
           amount: so.subtotal,
