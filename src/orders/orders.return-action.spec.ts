@@ -28,7 +28,7 @@ function build(opts: { currency?: string; settlement?: string; paymentType?: str
   );
   const activity: any = { log: jest.fn().mockResolvedValue(undefined) };
   const loyalty: any = { clawbackPurchasePoints: jest.fn().mockResolvedValue(undefined) };
-  const payment: any = { refundStripePaymentIntent: jest.fn().mockResolvedValue({ id: 're_1' }) };
+  const payment: any = { refundStripePaymentIntent: jest.fn().mockResolvedValue({ id: 're_1' }), restoreGiftCardForItems: jest.fn().mockResolvedValue(undefined) };
   const fx: any = { convertWithSnapshots: jest.fn((amt: number, from: string, to: string) => (from === 'PKR' && to === 'USD' ? amt / 280 : amt)) };
   const svc = new OrdersService({ repositories: repos } as any, {} as any, {} as any, {} as any, finance, activity, loyalty, {} as any, {} as any, payment, fx);
   return { svc, orderModel, variants, finance, activity, payment, fx };

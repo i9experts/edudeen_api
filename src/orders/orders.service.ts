@@ -859,6 +859,18 @@ export class OrdersService {
 
     await orderModel.findByIdAndUpdate(orderId, { $set: updateData });
 
+    // Items paid (partly) with a gift card: that part goes back on the card — the buyer's money refund
+    // above only covers what they paid otherwise. Idempotent per cancel request.
+    const cancelRefKey = `cancel-${orderId}-${targetItems.map(({ item }) => item._id.toString()).sort().join(',')}`;
+    for (const soIndex of new Set(targetItems.map((t) => t.soIndex))) {
+      await this.paymentService.restoreGiftCardForItems(
+        order,
+        order.sellerOrders[soIndex],
+        targetItems.filter((t) => t.soIndex === soIndex).map((t) => t.item),
+        cancelRefKey,
+      );
+    }
+
     if (manualRefundNeeded) {
       this.activityLogService.log({
         storeId: order.sellerOrders[targetItems[0].soIndex].storeId,
@@ -1317,6 +1329,16 @@ export class OrdersService {
           );
         }
       }
+    }
+
+    // Gift-card value that paid for the returned items goes back on the card (idempotent per return).
+    if (action === 'approve') {
+      await this.paymentService.restoreGiftCardForItems(
+        order,
+        sellerOrder,
+        targetItems.map((t) => t.item),
+        `return-${orderId}-${targetItems.map((t) => t.item._id.toString()).sort().join(',')}`,
+      );
     }
 
     if (manualRefundNeeded) {

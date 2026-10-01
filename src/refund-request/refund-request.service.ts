@@ -275,6 +275,8 @@ export class RefundRequestService {
         description: `Approved refund — Order #${order.orderNumber}, ${items.length} item(s)`,
         actorId, actorRole, targetType: 'order',
       });
+      // The gift-card part of the refunded items goes back on the card (idempotent per request).
+      await this.paymentService.restoreGiftCardForItems(order, sellerOrder, items, `refund-request-${request._id}`);
     } catch (err) {
       await revertClaim();
       throw err;

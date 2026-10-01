@@ -30,7 +30,7 @@ function build(orderOverrides: any = {}, soOverrides: any = {}, fxThrows = false
   );
   const fx: any = { convertWithSnapshots: jest.fn((a: number) => { if (fxThrows) throw new Error('missing fx snapshot'); return a; }) };
   const activity: any = { log: jest.fn().mockResolvedValue(undefined) };
-  const svc: any = new RefundRequestService({ repositories: repos } as any, finance, {} as any, fx, activity);
+  const svc: any = new RefundRequestService({ repositories: repos } as any, finance, { restoreGiftCardForItems: jest.fn().mockResolvedValue(undefined) } as any, fx, activity);
   return { svc, model, finance, liveOrder };
 }
 

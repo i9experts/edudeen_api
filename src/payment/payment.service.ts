@@ -30,6 +30,14 @@ function assertSingleStoreForCod(physicalStoreIds: unknown[]) {
   }
 }
 
+/** The id of the Order that actually holds this store's items (a checkout yields up to two Orders —
+ *  digital and physical — and a gift card / reward voucher belongs to ONE store). Falls back to the
+ *  first Order only if no sub-order matches. */
+export function orderIdForStore(createdOrders: any[], storeId: string | null | undefined): string {
+  const match = storeId ? createdOrders.find((o: any) => (o.sellerOrders ?? []).some((so: any) => so.storeId === storeId)) : null;
+  return String((match ?? createdOrders[0])?._id ?? '');
+}
+
 @Injectable()
 export class PaymentService {
   private stripe: InstanceType<typeof Stripe> | undefined;
@@ -892,6 +900,36 @@ export class PaymentService {
     return { success: true, data: { status: 'pending', orders: [] } };
   }
 
+  /** Gift-card balance that paid for `items` (cancelled / refunded / returned from one sub-order) goes
+   *  back on the card: the buyer's refund covers only what they paid otherwise, so without this the
+   *  card's value would simply vanish. Idempotent per `refKey`; never throws (the buyer's money has
+   *  already moved by now) — a failure is logged for follow-up. */
+  async restoreGiftCardForItems(order: any, sellerOrder: any, items: any[], refKey: string) {
+    try {
+      if (!order.giftCardCode) return;
+      const share = this.round(items.reduce((sum: number, i: any) => sum + (i.giftCardDiscountUSD || 0), 0));
+      if (!(share > 0)) return;
+      // Item discounts are stored in the ORDER currency; the card is in its store's currency.
+      const cardCurrency = sellerOrder.settlementCurrency ?? order.currency;
+      const amount = this.exchangeRateService.convertWithSnapshots(share, order.currency, cardCurrency, (order.fxSnapshots as any) ?? []);
+      await this.giftCardsService.restoreBalance(sellerOrder.storeId, order.giftCardCode, amount, order.checkoutId, String(order._id), refKey);
+    } catch (err: any) {
+      await this.activityLogService
+        .log({
+          storeId: sellerOrder?.storeId ?? 'platform',
+          category: 'marketing',
+          action: 'gift_card_restore_failed',
+          description: `Could not restore gift card ${order.giftCardCode} for order ${order._id} (${refKey}): ${err?.message}`,
+          actorId: 'system',
+          actorRole: 'system',
+          isSecurityAlert: true,
+          targetId: String(order._id),
+          targetType: 'order',
+        })
+        .catch(() => undefined);
+    }
+  }
+
   // Remove ONLY the lines that were part of this checkout — a checkout created
   // from selected cart items must leave the unselected lines in the cart.
   // Carts are one document per (user, store) and a checkout can span several
@@ -1614,7 +1652,7 @@ export class PaymentService {
       if (checkout.couponSourceType === 'reward_voucher') {
         await this.databaseService.repositories.rewardVoucherModel.updateOne(
           { storeId: checkout.couponStoreId, code: checkout.couponCode, status: 'active' },
-          { status: 'used', usedAt: new Date(), checkoutId: String(checkout._id), orderId: String(createdOrders[0]?._id ?? '') },
+          { status: 'used', usedAt: new Date(), checkoutId: String(checkout._id), orderId: orderIdForStore(createdOrders, checkout.couponStoreId) },
         );
       } else {
         const couponFilter = checkout.couponStoreId
@@ -1657,7 +1695,7 @@ export class PaymentService {
         checkout.giftCardCode,
         checkout.giftCardDiscountTotalUSD,
         String(checkout._id),
-        String(createdOrders[0]?._id ?? ''),
+        orderIdForStore(createdOrders, checkout.giftCardStoreId),
       );
     }
 

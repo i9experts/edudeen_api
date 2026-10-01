@@ -46,17 +46,16 @@ function build(over: { legacy?: boolean } = {}) {
     },
     productVariantModel: { updateOne: jest.fn().mockResolvedValue({}) },
     paymentTransactionModel: {
-      findOne: jest
-        .fn()
-        .mockResolvedValue({
-          amount: 4600,
-          amountRefunded: 0,
-          stripePaymentIntentId: 'pi_1',
-        }),
+      findOne: jest.fn().mockResolvedValue({
+        amount: 4600,
+        amountRefunded: 0,
+        stripePaymentIntentId: 'pi_1',
+      }),
     },
   };
   const payment: any = {
     refundStripePaymentIntent: jest.fn().mockResolvedValue({ id: 're_1' }),
+    restoreGiftCardForItems: jest.fn().mockResolvedValue(undefined),
   };
   const svc = new OrdersService(
     { repositories: repos } as any,
@@ -71,7 +70,7 @@ function build(over: { legacy?: boolean } = {}) {
     payment,
     {} as any,
   );
-  return { svc, payment };
+  return { svc, payment, order };
 }
 const refunded = (p: any) => p.refundStripePaymentIntent.mock.calls[0]?.[1];
 
@@ -118,5 +117,21 @@ describe("cancelOrder refunds the cancelled store's own shipping share", () => {
       itemIds: ['b1'],
     });
     expect(refunded(partial.payment)).toBe(2000);
+  });
+});
+
+describe('cancelOrder hands the cancelled items back to the gift-card restore (per sub-order, idempotent key)', () => {
+  it('restores only for the sub-order and items being cancelled', async () => {
+    const { svc, payment, order } = build();
+    await svc.cancelOrder('buyer-1', 'order-1', {
+      reason: 'x',
+      itemIds: ['b1'],
+    });
+    expect(payment.restoreGiftCardForItems).toHaveBeenCalledTimes(1);
+    const [o, so, items, key] = payment.restoreGiftCardForItems.mock.calls[0];
+    expect(o).toBe(order);
+    expect(so.storeId).toBe('B');
+    expect(items.map((i: any) => i._id.toString())).toEqual(['b1']);
+    expect(key).toBe('cancel-order-1-b1');
   });
 });
