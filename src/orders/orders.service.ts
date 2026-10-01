@@ -142,6 +142,11 @@ export class OrdersService {
           sellerName: seller ? seller.name : null,
           sellerVerified: seller ? !!seller.isVerified : false,
           fulfillmentType: so.fulfillmentType,
+          // Who ships this sub-order (snapshotted at order creation); orders placed before the
+          // setting existed carry none and were seller-fulfilled.
+          fulfillmentMode: so.fulfillmentMode ?? 'seller',
+          // This store's own shipping line, in the order's currency (0 on digital sub-orders).
+          shippingFee: so.shippingFee ?? 0,
           status: so.status,
           subtotal: so.subtotal,
           itemCount: (so.items ?? []).length,
@@ -206,6 +211,8 @@ export class OrdersService {
         const seller = sellerMap.get(so.sellerId?.toString());
         return {
           ...so,
+          fulfillmentMode: so.fulfillmentMode ?? 'seller',
+          shippingFee: so.shippingFee ?? 0,
           sellerName: seller ? seller.name : null,
           sellerVerified: seller ? !!seller.isVerified : false,
         };
