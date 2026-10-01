@@ -162,7 +162,7 @@ describe('ManualPaymentsService', () => {
         { _id: 'order-1', isPaid: { $ne: true }, orderStatus: { $ne: 'cancelled' } },
         { $set: expect.objectContaining({ isPaid: true, paymentStatus: 'paid', orderStatus: 'completed' }) },
       );
-      expect(financeService.recordSale).toHaveBeenCalledWith('store-1', 'seller-1', 'order-1', 100, expect.any(String), 0, null, 'PKR', 'manual_bank_transfer');
+      expect(financeService.recordSale).toHaveBeenCalledWith('store-1', 'seller-1', 'order-1', 100, expect.any(String), 0, null, 'PKR', 'manual_bank_transfer', undefined, 0); // + the sub-order's fulfillment mode and shipping credit
       expect(activityLogService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'manual_payment_approved' }));
       expect(notificationsService.notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'manual_payment_approved' }));
     });
@@ -183,7 +183,7 @@ describe('ManualPaymentsService', () => {
       orderModel.find.mockResolvedValue([{ _id: 'order-1', currency: 'PKR', orderStatus: 'pending', sellerOrders: [live, dead] }]);
       await service.adminApprove('p1', 'admin-1');
       expect(financeService.recordSale).toHaveBeenCalledTimes(1);
-      expect(financeService.recordSale).toHaveBeenCalledWith('store-1', 'seller-1', 'order-1', 100, expect.any(String), 0, null, 'PKR', 'manual_bank_transfer'); // store-2 (cancelled) is never credited
+      expect(financeService.recordSale).toHaveBeenCalledWith('store-1', 'seller-1', 'order-1', 100, expect.any(String), 0, null, 'PKR', 'manual_bank_transfer', undefined, 0); // + the sub-order's fulfillment mode and shipping credit // store-2 (cancelled) is never credited
       const set = (orderModel.findOneAndUpdate as jest.Mock).mock.calls[0][1].$set;
       expect(Object.keys(set).some((k) => k.startsWith('sellerOrders.1.'))).toBe(false);
     });
