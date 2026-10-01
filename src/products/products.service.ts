@@ -7,6 +7,7 @@ import {
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
+import { checkVerifiedPurchase } from 'src/rating/verified-purchase.util';
 import { isValidObjectId } from 'mongoose';
 
 import { DatabaseService } from 'src/database/databaseservice';
@@ -1004,6 +1005,12 @@ export class ProductsService {
           )
         : null;
 
+    // Only for a logged-in caller: may THIS buyer review the product? Same rule as RatingService.addReview.
+    // One indexed-by-user query on the single-product endpoint — never on list endpoints.
+    const canReview = customerId
+      ? await checkVerifiedPurchase(this.databaseService.repositories.orderModel, customerId, product._id.toString(), null)
+      : undefined;
+
     return {
       message: 'Product fetched successfully',
       success: true,
@@ -1011,6 +1018,7 @@ export class ProductsService {
         product: productWithSeller,
         variants,
         defaultVariant,
+        ...(canReview === undefined ? {} : { canReview }),
       },
     };
   }

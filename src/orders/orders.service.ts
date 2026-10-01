@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Readable } from 'stream';
 import { isValidObjectId } from 'mongoose';
+import { isVerifiedPurchaseLine } from 'src/rating/verified-purchase.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { UploadService } from 'src/upload/upload.service';
 import { JwtService } from '@nestjs/jwt';
@@ -147,6 +148,10 @@ export class OrdersService {
             originalPrice: item.originalPrice ?? null,
             subscriberDiscountUSD: item.subscriberDiscountUSD ?? 0,
             status: item.status,
+            // Would a review of this line be accepted? Same rule as RatingService.addReview (paid +
+            // delivered, or paid + not refunded for digital). Computed from the data already loaded here,
+            // so it costs no extra query.
+            canReview: isVerifiedPurchaseLine(order, item),
           })),
           tracking: so.tracking,
           shippedAt: so.shippedAt,
@@ -237,6 +242,7 @@ export class OrdersService {
         const seller = sellerMap.get(so.sellerId?.toString());
         return {
           ...so,
+          items: (so.items ?? []).map((item: any) => ({ ...item, canReview: isVerifiedPurchaseLine(order as any, item) })),
           fulfillmentMode: so.fulfillmentMode ?? 'seller',
           shippingFee: so.shippingFee ?? 0,
           sellerName: seller ? seller.name : null,

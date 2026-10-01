@@ -11,7 +11,7 @@ import { SellerReplyDto } from './dto/seller-reply.dto';
 import { LoyaltyService } from 'src/loyalty/loyalty.service';
 
 import { clampInt } from 'src/common/query-safety.util';
-const DELIVERED_ITEM_STATUSES = ['delivered', 'completed'];
+import { checkVerifiedPurchase } from './verified-purchase.util';
 
 @Injectable()
 export class RatingService {
@@ -98,43 +98,14 @@ export class RatingService {
   // A review is a "Verified Purchase" if the reviewer has a non-deleted order
   // containing this product (and variant, if given) with an item that was
   // actually delivered/completed — not just placed.
-  // Checked in application code rather than a single Mongo query — sellerOrders
-  // and items are both arrays, so a flat multi-field filter could match
-  // productId on one item and status on a different item of the same order.
-  private async checkVerifiedPurchase(
+  // The rule lives in verified-purchase.util.ts so the UI's `canReview` flags use exactly the same code.
+  private checkVerifiedPurchase(
     userId: string,
     productId: string,
     productVariantId: string | null,
     orderId?: string | null,
   ) {
-    const { orderModel } = this.r;
-
-    const filter: any = { userId, isDelete: false };
-    if (orderId) filter._id = orderId;
-
-    const orders = await orderModel.find(filter).select('sellerOrders isPaid').lean();
-
-    for (const order of orders) {
-      for (const sellerOrder of (order as any).sellerOrders || []) {
-        for (const item of sellerOrder.items || []) {
-          if (item.productId !== productId) continue;
-          if (productVariantId && item.variantId !== productVariantId) continue;
-          // Physical goods: must actually have been delivered.
-          if (DELIVERED_ITEM_STATUSES.includes(item.status)) return true;
-          // Digital goods are delivered at payment (their item status is
-          // never moved to delivered/completed), so a paid, non-refunded
-          // digital line is a real purchase.
-          if (
-            item.type === 'digital' &&
-            (order as any).isPaid &&
-            !['cancelled', 'refunded'].includes(item.status)
-          ) {
-            return true;
-          }
-        }
-      }
-    }
-    return false;
+    return checkVerifiedPurchase(this.r.orderModel, userId, productId, productVariantId, orderId);
   }
 
   // ── BUYER: WRITE ──────────────────────────────────────────────────────────
