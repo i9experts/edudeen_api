@@ -115,8 +115,13 @@ Requests that still send `storeId` to `create-checkout` (store-subdomain checkou
   Decide on a corrective action (debit or clawback) — **none is implemented**, and the fix only changes behaviour going forward.
 - Take a database snapshot/backup before deploying.
 - Proposed backfills that were **never written or run** (see `QA_REPORT.md` §4): `isListedOnEdudeen`, `UploadedAsset`.
-- A Redis dump (`dump.rdb`, ~3.7 KB) is tracked in the repo. Its contents were not inspected. Remove it from git
-  (`git rm --cached dump.rdb`, add to `.gitignore`) after checking it holds nothing sensitive.
+- A Redis dump (`dump.rdb`, ~3.7 KB) is tracked in the repo, and it is already on the remote. Its contents were not inspected. **Before
+  removing it from git, inspect it for session or refresh tokens, OTPs and anything else sensitive** (e.g. `redis-check-rdb dump.rdb`, or load it into a
+  throwaway local Redis and list the keys; do not paste its contents into tickets or chats).
+  - If it holds **production** tokens or sessions: **rotate `JWT_SECRET` (and `JWT_REFRESH_SECRET`)** — that invalidates every issued token, so
+    plan it as a forced re-login for all users — and flush the affected Redis keys.
+  - Either way, then `git rm --cached dump.rdb`, add `*.rdb` to `.gitignore`, and commit. Removing it from the current tree does not remove it from
+    history; if it held production secrets, treat them as leaked and rotate them rather than relying on history rewriting.
 
 ### Staging (do all of these; each was only exercised locally)
 1. Deploy the branch to staging with production-like env (live-like Stripe **test** keys, real Cloudinary, SMTP, Redis, an Atlas replica set).
@@ -157,6 +162,23 @@ new COD rule remain and would need handling.
 Not verified (local throwaway DB + Stripe test mode only): a real webhook delivery, a real Cloudinary download, staging behind a real proxy,
 a multi-instance deployment (the throttler store is per-instance memory), platform-fulfilled orders end-to-end, and any web/mobile client run
 against these changes.
+
+### REQUIRED before enabling COD in production: COD debt control (not built)
+
+The COD fix makes a seller's balance go negative when their own courier collects the cash (the platform debits the commission). Nothing yet
+limits how deep that debt can get, so **do not enable COD for production sellers until this exists**:
+
+1. **Auto-disable COD per store** once its negative balance (per currency) exceeds an **admin-configured limit**, and **re-enable it
+   automatically when the debt is cleared** (balance back at or above the limit/zero). The existing per-store `codEnabled` flag and
+   `seller_balance_negative` alert are the natural hooks; the disable must be recorded in the activity log so a seller's manual setting is not
+   overwritten silently.
+2. **Admin endpoint to record a seller's offline debt payment** (cash / bank transfer received outside the platform): a ledger credit to the
+   store's balance that is **idempotent** (a client-supplied reference, applied at most once) and **audit-logged** (admin id, amount, method,
+   reference). It must clear the debt flag and trigger the re-enable check above.
+3. Tests on a real replica set: limit crossed → COD disabled and hidden from `allowedPaymentMethods`; payment recorded twice → one credit; debt
+   cleared → COD re-enabled; a seller who disabled COD themselves stays disabled.
+
+Until then, either keep COD off in production (set `codEnabled: false` on all stores, or hide the option in the apps) or accept uncapped seller debt.
 
 Follow-ups (not built):
 - Reduce a cart line's quantity on cleanup instead of removing the whole line.
