@@ -4,14 +4,22 @@ import { sanitizeDigitalForPublicView } from 'src/products/product-public-view.u
 import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
 
 import { DatabaseService } from 'src/database/databaseservice';
+import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
+import { SUPPORTED_CURRENCIES } from 'src/exchange-rate/schemas/exchange-rate.schema';
 import { AddToCartDto, MAX_CART_LINE_QUANTITY } from './dto/add-to-cart.dto';
 
 /** Per-user cap so a wishlist can't grow without bound. */
 const MAX_WISHLIST_ITEMS = 200;
 
+/** Upper bound on store carts read in one request (checkout's own cap is lower, see Phase 2). */
+const MAX_UNIFIED_CART_STORES = 100;
+
 @Injectable()
 export class CartService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly exchangeRateService: ExchangeRateService,
+  ) {}
 
   async addToCart(userId: string, requestedStoreId: string | undefined, dto: AddToCartDto) {
     try {
@@ -261,6 +269,7 @@ export class CartService {
           image: images,
           options: (item as any).options ?? [],
 
+          currency: (item as any).currency ?? null,
           unitPrice: item.price, // single product price
           quantity: item.quantity, // quantity
           itemTotal: itemTotal, // quantity × price
@@ -283,35 +292,138 @@ export class CartService {
     }
   }
 
-  /** Every non-empty cart the buyer has, one per store — the main
-   *  marketplace site shows them together and checks out one store at a
-   *  time (checkout is per store). */
-  async getMyCarts(userId: string) {
+  /** Every non-empty cart the buyer has, one per store (the shared source for
+   *  `getMyCarts` and `getUnifiedCart`). Carts of deleted stores are skipped. */
+  private async collectStoreCarts(userId: string) {
     const carts = await this.databaseService.repositories.cartModel
       .find({ userId, isDelete: false, 'items.0': { $exists: true } })
       .select('storeId')
       .sort({ updatedAt: -1 })
+      .limit(MAX_UNIFIED_CART_STORES)
       .lean();
     const storeIds = [...new Set((carts as any[]).map((c) => c.storeId).filter(Boolean))];
-    if (storeIds.length === 0) return { message: 'Cart is empty', data: [] };
+    if (storeIds.length === 0) return [];
 
     const stores = await this.databaseService.repositories.storeModel
       .find({ _id: { $in: storeIds }, isDelete: false })
-      .select('name slug logo status')
+      .select('name slug logo status baseCurrency')
       .lean();
     const storeById = new Map((stores as any[]).map((s) => [s._id.toString(), s]));
 
-    const data: any[] = [];
+    const rows: { cart: any; store: any; storeId: string }[] = [];
     for (const storeId of storeIds) {
       const store = storeById.get(storeId);
       if (!store) continue;
       const { data: cart } = await this.getCart(userId, storeId);
-      data.push({
-        ...cart,
-        store: { storeId, name: store.name, slug: store.slug, logo: store.logo ?? null, isActive: store.status === 'active' },
-      });
+      rows.push({ cart, store, storeId });
     }
+    return rows;
+  }
+
+  /** Every non-empty cart the buyer has, one per store — the main
+   *  marketplace site shows them together. */
+  async getMyCarts(userId: string) {
+    const rows = await this.collectStoreCarts(userId);
+    if (rows.length === 0) return { message: 'Cart is empty', data: [] };
+    const data = rows.map(({ cart, store, storeId }) => ({
+      ...cart,
+      store: { storeId, name: store.name, slug: store.slug, logo: store.logo ?? null, isActive: store.status === 'active' },
+    }));
     return { message: 'Carts fetched successfully', data };
+  }
+
+  /** The buyer's display currency: an explicit, allow-listed request, else
+   *  their saved preference (PKR for buyers who never set one — same default
+   *  as checkout). Never trusted blindly from the client. */
+  private async resolveDisplayCurrency(userId: string, requested?: string): Promise<string> {
+    if (requested) {
+      if (!SUPPORTED_CURRENCIES.includes(requested as any)) {
+        throw new BadRequestException(
+          `Unsupported currency "${requested}" — must be one of: ${SUPPORTED_CURRENCIES.join(', ')}`,
+        );
+      }
+      return requested;
+    }
+    const user = await this.databaseService.repositories.userModel.findById(userId).select('currencyPreference').lean();
+    return (user as any)?.currencyPreference ?? 'PKR';
+  }
+
+  /** One flat list of every line across all of the buyer's store carts, with
+   *  per-store subtotals and a grand total in the buyer's display currency.
+   *  Read-only view over the existing per-store carts; prices are the
+   *  add-to-cart snapshots (like `get-cart`) — checkout re-prices from the DB.
+   *  If no usable exchange rates exist for a mixed-currency cart, lines keep
+   *  their native currency and the converted totals are null rather than the
+   *  whole cart failing to load. */
+  async getUnifiedCart(userId: string, requestedCurrency?: string) {
+    const displayCurrency = await this.resolveDisplayCurrency(userId, requestedCurrency);
+    const rows = await this.collectStoreCarts(userId);
+    if (rows.length === 0) {
+      return {
+        message: 'Cart is empty',
+        data: { displayCurrency, conversionAvailable: true, items: [], stores: [], totalItems: 0, grandTotal: 0 },
+      };
+    }
+
+    const lineCurrency = (item: any, store: any) => item.currency ?? store.baseCurrency ?? displayCurrency;
+    const currencies = new Set<string>([displayCurrency]);
+    for (const { cart, store } of rows) {
+      for (const item of cart.items) currencies.add(lineCurrency(item, store));
+    }
+
+    let snapshots: any[] | null = null;
+    try {
+      snapshots = await this.exchangeRateService.buildSnapshots([...currencies]);
+    } catch {
+      snapshots = null; // stale/missing rates — fall back to native amounts
+    }
+    const convert = (amount: number, from: string): number | null => {
+      if (from === displayCurrency) return amount;
+      if (!snapshots) return null;
+      try {
+        return this.exchangeRateService.convertWithSnapshots(amount, from, displayCurrency, snapshots);
+      } catch {
+        return null;
+      }
+    };
+
+    const items: any[] = [];
+    const stores: any[] = [];
+    let totalItems = 0;
+    let grandTotal: number | null = 0;
+
+    for (const { cart, store, storeId } of rows) {
+      const storeInfo = { storeId, name: store.name, slug: store.slug, logo: store.logo ?? null, isActive: store.status === 'active' };
+      let storeSubtotal: number | null = 0;
+      let storeItemCount = 0;
+      for (const item of cart.items) {
+        const currency = lineCurrency(item, store);
+        const displayItemTotal = convert(item.itemTotal, currency);
+        const displayUnitPrice = convert(item.unitPrice, currency);
+        storeSubtotal = storeSubtotal === null || displayItemTotal === null ? null : storeSubtotal + displayItemTotal;
+        storeItemCount += item.quantity;
+        items.push({ ...item, currency, storeId, store: storeInfo, displayUnitPrice, displayItemTotal });
+      }
+      storeSubtotal = storeSubtotal === null ? null : Math.round(storeSubtotal * 100) / 100;
+      grandTotal = grandTotal === null || storeSubtotal === null ? null : grandTotal + storeSubtotal;
+      totalItems += storeItemCount;
+      stores.push({ ...storeInfo, totalItems: storeItemCount, subtotal: storeSubtotal });
+    }
+    if (grandTotal !== null) grandTotal = Math.round(grandTotal * 100) / 100;
+
+    return {
+      message: 'Unified cart fetched successfully',
+      data: { displayCurrency, conversionAvailable: grandTotal !== null, items, stores, totalItems, grandTotal },
+    };
+  }
+
+  /** Empties every cart the buyer owns (all stores). Owner-scoped by userId. */
+  async clearAllCarts(userId: string) {
+    const res = await this.databaseService.repositories.cartModel.updateMany(
+      { userId, isDelete: false, 'items.0': { $exists: true } },
+      { $set: { items: [] } },
+    );
+    return { message: 'All carts cleared successfully', data: { cartsCleared: res.modifiedCount } };
   }
 
   async removeCartItem(userId: string, storeId: string, requestBody: any) {
