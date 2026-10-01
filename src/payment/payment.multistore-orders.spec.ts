@@ -121,7 +121,18 @@ function build() {
       physicalPayment,
       digitalPayment,
     );
-  return { place, created, notifications, checkout };
+  const activityLog = (svc as any).activityLogService.log as jest.Mock;
+  const giftCards = (svc as any).giftCardsService
+    .redeemAtOrderPlacement as jest.Mock;
+  return {
+    place,
+    created,
+    notifications,
+    checkout,
+    repos,
+    activityLog,
+    giftCards,
+  };
 }
 
 describe('createOrder — a multi-store checkout becomes up to 2 Orders (digital + physical), one sellerOrder per store', () => {
@@ -235,5 +246,62 @@ describe('createOrder — a multi-store checkout becomes up to 2 Orders (digital
     const again = await ctx.place();
     expect(again).toHaveLength(first.length);
     expect(ctx.created).toHaveLength(2); // still only the two Orders
+  });
+});
+
+describe('createOrder — coupon usage and gift-card redemption in a multi-store checkout', () => {
+  it("a platform coupon's usage is counted once, atomically (only while under its limit)", async () => {
+    const ctx = build();
+    Object.assign(ctx.checkout, {
+      couponCode: 'PLAT10',
+      couponStoreId: null,
+      couponSourceType: 'coupon',
+    });
+    ctx.repos.couponModel.updateOne.mockResolvedValue({ modifiedCount: 1 });
+    await ctx.place();
+    expect(ctx.repos.couponModel.updateOne).toHaveBeenCalledTimes(1);
+    const [filter, update] = ctx.repos.couponModel.updateOne.mock.calls[0];
+    expect(filter).toMatchObject({ code: 'PLAT10', scope: 'platform' });
+    expect(filter.$or).toBeDefined(); // the limit check is part of the same update, not a separate read
+    expect(update).toEqual({ $inc: { usageCount: 1 } });
+    expect(ctx.activityLog).not.toHaveBeenCalled();
+  });
+
+  it('a concurrent order that finds the coupon already at its limit is honoured (it is paid for) but flagged', async () => {
+    const ctx = build();
+    Object.assign(ctx.checkout, {
+      couponCode: 'PLAT10',
+      couponStoreId: null,
+      couponSourceType: 'coupon',
+    });
+    ctx.repos.couponModel.updateOne
+      .mockResolvedValueOnce({ modifiedCount: 0 })
+      .mockResolvedValueOnce({ modifiedCount: 1 });
+    await ctx.place();
+    expect(ctx.repos.couponModel.updateOne).toHaveBeenCalledTimes(2);
+    expect(ctx.activityLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'coupon_usage_limit_exceeded' }),
+    );
+  });
+
+  it("a store gift card is redeemed once, linked to the Order that holds THAT store's items", async () => {
+    const ctx = build();
+    // the digital Order (store A) is created second, so [0] is the physical one — a card for store A must link to the digital Order
+    Object.assign(ctx.checkout, {
+      giftCardCode: 'GC1',
+      giftCardStoreId: 'A',
+      giftCardDiscountTotalUSD: 100,
+    });
+    const orders = await ctx.place();
+    const digital = orders.find((o: any) => o.sellerOrders[0].storeId === 'A');
+    expect(ctx.giftCards).toHaveBeenCalledTimes(1);
+    expect(ctx.giftCards).toHaveBeenCalledWith(
+      'A',
+      'GC1',
+      100,
+      'chk1',
+      digital._id,
+    );
+    expect(digital._id).not.toBe(orders[0]._id);
   });
 });
