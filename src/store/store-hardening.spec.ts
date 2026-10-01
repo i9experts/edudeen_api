@@ -207,6 +207,30 @@ describe('updateStore', () => {
       svc.updateStore('seller1', OID, { categoryId: 'catB' }),
     ).rejects.toThrow(/cannot be changed once/);
   });
+
+  describe('fulfillmentMode (who ships physical orders)', () => {
+    const live = (mode: string) => ({ _id: OID, sellerId: 'seller1', status: 'active', fulfillmentMode: mode });
+
+    it("a seller can choose 'seller', but cannot grant their store Edudeen-fulfilled shipping", async () => {
+      const { svc, repos } = make({ store: live('seller') });
+      await expect(svc.updateStore('seller1', OID, { fulfillmentMode: 'platform' })).rejects.toThrow(/only be enabled by the Edudeen team/);
+      expect(repos.storeModel.findByIdAndUpdate).not.toHaveBeenCalled();
+      await expect(svc.updateStore('seller1', OID, { fulfillmentMode: 'seller' })).resolves.toBeDefined();
+      expect(repos.storeModel.findByIdAndUpdate.mock.calls[0][1]).toMatchObject({ fulfillmentMode: 'seller' });
+    });
+
+    it("an admin-granted 'platform' store can be set back to 'seller', and re-sending the unchanged value is not an error", async () => {
+      const { svc, repos } = make({ store: live('platform') });
+      await expect(svc.updateStore('seller1', OID, { fulfillmentMode: 'platform', name: 'Same' })).resolves.toBeDefined();
+      await expect(svc.updateStore('seller1', OID, { fulfillmentMode: 'seller' })).resolves.toBeDefined();
+      expect(repos.storeModel.findByIdAndUpdate.mock.calls[1][1]).toMatchObject({ fulfillmentMode: 'seller' });
+    });
+
+    it('rejects unknown values', async () => {
+      const { svc } = make({ store: live('seller') });
+      await expect(svc.updateStore('seller1', OID, { fulfillmentMode: 'courier' })).rejects.toThrow(/must be 'seller' or 'platform'/);
+    });
+  });
 });
 
 describe('announcement bar and pinned products', () => {

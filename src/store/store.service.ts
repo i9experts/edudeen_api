@@ -942,6 +942,15 @@ export class StoreService {
       if (fulfillmentMode !== 'seller' && fulfillmentMode !== 'platform') {
         throw new BadRequestException("fulfillmentMode must be 'seller' or 'platform'");
       }
+      // A seller can only ever choose to ship their own orders. Edudeen-fulfilled ('platform') is granted by
+      // an admin (PATCH /api/admin/marketplace/stores/:id/fulfillment-mode) because it makes the platform
+      // responsible for delivery and for collecting COD cash. Re-sending the store's current value (a form
+      // that submits every field) is not a change and is allowed.
+      if (fulfillmentMode === 'platform' && store.fulfillmentMode !== 'platform') {
+        throw new BadRequestException(
+          'Edudeen-fulfilled shipping can only be enabled by the Edudeen team. Contact support to request it.',
+        );
+      }
       updateData.fulfillmentMode = fulfillmentMode; // affects NEW orders only (snapshotted per order)
     }
 
