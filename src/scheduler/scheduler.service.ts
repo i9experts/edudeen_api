@@ -58,9 +58,17 @@ export class SchedulerService {
    * simply catch up on the next successful tick.
    */
   private async runLocked(jobName: string, ttlMs: number, fn: () => Promise<void>) {
-    const result = await this.redis.withLock(`cron-lock:${jobName}`, ttlMs, async () => {
-      await fn();
-    });
+    let result: 'ran' | 'lock_not_acquired';
+    try {
+      result = await this.redis.withLock(`cron-lock:${jobName}`, ttlMs, async () => {
+        await fn();
+      });
+    } catch (err) {
+      // A failing job must be logged by name and must not escape the cron callback as an unhandled rejection
+      // (which can take the whole process down on Node 15+). The lock is already released by withLock's finally.
+      this.logger.error(`Cron job "${jobName}" failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
     if (result === 'lock_not_acquired') {
       if (this.redis.isConnected) {
         this.logger.debug(`Skipped "${jobName}" — another instance already holds the lock`);

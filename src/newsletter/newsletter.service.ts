@@ -98,7 +98,6 @@ export class NewsletterService {
       )
       .catch(() => undefined);
 
-    console.log('✅ Newsletter subscription saved:', normalizedEmail);
     return { success: true, message: "You're subscribed — welcome aboard!" };
   }
 

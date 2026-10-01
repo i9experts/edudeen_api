@@ -41,7 +41,8 @@ export class EmailService {
       console.log('✅ Email sent:', info.messageId);
       return true;
     } catch (error) {
-      console.error('❌ Error sending email:', error);
+      // Message only: the raw error carries the recipient address and the SMTP server's response.
+      console.error('❌ Error sending email:', (error as Error)?.message);
       return false;
     }
   }
@@ -204,7 +205,7 @@ export class EmailService {
       console.log('✅ Email server connection verified');
       return true;
     } catch (error) {
-      console.error('❌ Email server connection failed:', error);
+      console.error('❌ Email server connection failed:', (error as Error)?.message);
       return false;
     }
   }
