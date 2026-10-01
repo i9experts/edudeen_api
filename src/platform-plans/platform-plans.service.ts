@@ -5,6 +5,7 @@ import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { CreatePlatformPlanDto } from './dto/create-platform-plan.dto';
 import { UpdatePlatformPlanDto } from './dto/update-platform-plan.dto';
 
+import { clampInt } from 'src/common/query-safety.util';
 const DEFAULT_LIMITS = {
   maxProducts: 10, maxStaffAccounts: 0, maxPosLocations: 1, aiCreditsPerMonth: 0,
   transactionFeeRate: 0.03, customDomainAllowed: false, whiteLabelAllowed: false,
@@ -143,8 +144,8 @@ export class PlatformPlansService {
   }
 
   async adminGetSubscribers(id: string, query: any) {
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(100, parseInt(query.limit) || 20);
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, clampInt(query.limit, 20, 1, 100));
     const skip = (page - 1) * limit;
 
     const [subs, total] = await Promise.all([

@@ -16,6 +16,7 @@ import {
   EMAIL_CAMPAIGN_SCHEMA, SEO_WRITING_SCHEMA, buildEmailCampaignPrompt, buildSeoWritingPrompt,
 } from './tools/tool-definitions';
 
+import { clampInt } from 'src/common/query-safety.util';
 /**
  * Admin-facing counterpart to AiStudioService — two distinct responsibilities:
  *
@@ -123,8 +124,8 @@ export class AdminAiStudioService {
     if (query.toolType) filter.toolType = query.toolType;
     if (query.status) filter.status = query.status;
 
-    const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, Math.max(1, clampInt(query.limit, 20, 1, 100)));
 
     const [items, total] = await Promise.all([
       this.generationModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
@@ -157,8 +158,8 @@ export class AdminAiStudioService {
   }
 
   async listWallets(query: { page?: number; limit?: number; search?: string }) {
-    const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, Math.max(1, clampInt(query.limit, 20, 1, 100)));
 
     const [wallets, total] = await Promise.all([
       this.walletModel.find({}).sort({ balance: 1 }).skip((page - 1) * limit).limit(limit).lean(),
@@ -230,8 +231,8 @@ export class AdminAiStudioService {
     if (query.toolUsed) filter.toolUsed = query.toolUsed;
     if (query.status) filter.status = query.status;
 
-    const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, Math.max(1, clampInt(query.limit, 20, 1, 100)));
 
     const [items, total] = await Promise.all([
       this.txnModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),

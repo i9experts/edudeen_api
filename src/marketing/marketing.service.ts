@@ -7,6 +7,7 @@ import { UpdateCouponDto } from './dto/update-coupon.dto';
 import { ActiveCampaignForStore } from './campaign-pricing.util';
 import { generateUniqueSlug } from 'src/common/slug.util';
 
+import { clampInt } from 'src/common/query-safety.util';
 @Injectable()
 export class MarketingService {
   constructor(
@@ -76,8 +77,8 @@ export class MarketingService {
   async getCoupons(sellerId: string, storeId: string, query: any) {
     await this.verifyStoreOwnership(storeId, sellerId);
 
-    const page = parseInt(query.page) || 1;
-    const limit = parseInt(query.limit) || 20;
+    const page = clampInt(query.page, 1, 1, 100000);
+    const limit = clampInt(query.limit, 20, 1, 100);
     const skip = (page - 1) * limit;
 
     const filter: any = { storeId, isDelete: false };

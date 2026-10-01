@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { reserveInvoiceRefund, releaseInvoiceRefund, invoiceRefundKey } from 'src/common/invoice-refund.util';
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { DatabaseService } from 'src/database/databaseservice';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
@@ -11,6 +11,7 @@ import { SubscribePlatformPlanDto, ChangePlatformPlanDto } from './dto/subscribe
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 
+import { clampInt } from 'src/common/query-safety.util';
 const MAX_RENEWAL_ATTEMPTS = 3;
 const RETRY_INTERVAL_DAYS = 1;
 // Every Stripe object created by THIS module is tagged with this so the shared
@@ -340,8 +341,8 @@ export class SellerPlatformSubscriptionsService {
   async listInvoices(sellerId: string, storeId: string, query: any) {
     await this.verifyStoreOwnership(storeId, sellerId);
 
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(50, parseInt(query.limit) || 20);
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(50, clampInt(query.limit, 20, 1, 100));
     const skip = (page - 1) * limit;
 
     const filter: any = { storeId, isDelete: false };

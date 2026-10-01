@@ -6,6 +6,7 @@ import { CreateRedirectDto } from '../dto/create-redirect.dto';
 import { UpdateRedirectDto } from '../dto/update-redirect.dto';
 import { assertSafeSeoDestination } from './seo-url-safety.util';
 
+import { clampInt } from 'src/common/query-safety.util';
 /**
  * Shared between the admin (`storeId: null`, platform-wide) and seller
  * (`storeId` set, gated by `customRedirectsAllowed`) redirect controllers —
@@ -54,8 +55,8 @@ export class SeoRedirectsService {
   }
 
   async list(storeId: string | null, query: { page?: number; limit?: number; isActive?: boolean }) {
-    const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, Math.max(1, clampInt(query.limit, 20, 1, 100)));
     const filter: Record<string, any> = { storeId, isDelete: false };
     if (query.isActive !== undefined) filter.isActive = query.isActive;
 

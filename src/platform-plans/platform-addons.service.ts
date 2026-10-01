@@ -7,6 +7,7 @@ import { AiCreditsService } from './ai-credits.service';
 import { verifyStoreOwnershipStrict } from 'src/common/store-ownership.util';
 import { PurchaseAddonDto } from './dto/purchase-addon.dto';
 
+import { clampInt } from 'src/common/query-safety.util';
 /**
  * One-off / recurring add-on purchases — "Extra AI Credits", "Additional
  * Staff Seats", "Priority Marketplace Placement" etc. from the pricing
@@ -227,8 +228,8 @@ export class PlatformAddonsService {
   // ── Admin visibility ─────────────────────────────────────────────────────
 
   async adminListAddonPurchases(query: any) {
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(100, parseInt(query.limit) || 20);
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, clampInt(query.limit, 20, 1, 100));
     const skip = (page - 1) * limit;
 
     const filter: any = {};

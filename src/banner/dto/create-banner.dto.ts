@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsOptional, IsUrl, IsString, IsNumber, IsIn, IsArray, IsDateString, Min } from 'class-validator';
+import { IsOptional, IsUrl, IsNumber, IsIn, IsArray, IsDateString, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PROMOTION_PLACEMENTS, PromotionPlacement } from '../../common/promotion-placements.const';
 

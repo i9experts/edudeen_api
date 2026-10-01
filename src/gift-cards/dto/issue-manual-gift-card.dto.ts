@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsNumber, IsOptional, IsEmail, Min, MaxLength } from 'class-validator';
+import { IsString, IsNumber, IsOptional, IsEmail, Min, MaxLength } from 'class-validator';
 
 export class IssueManualGiftCardDto {
   @ApiProperty({ example: 25 })

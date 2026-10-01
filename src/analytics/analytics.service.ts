@@ -27,6 +27,7 @@ import {
 import { toCsv } from './utils/csv.util';
 import { PdfReportBuilder } from './utils/pdf-report.util';
 
+import { clampInt } from 'src/common/query-safety.util';
 const ATTRIBUTION_SOURCES = ['marketplace_search', 'direct_link', 'social_media', 'email', 'other'] as const;
 const CACHE_TTL_SECONDS = 600; // 10 minutes
 
@@ -360,7 +361,7 @@ export class AnalyticsService {
   async getTopProducts(sellerId: string, storeId: string | null | undefined, query: any) {
     const { scope } = await this.resolveScope(sellerId, storeId);
     const { from, to } = resolveDateRange(query);
-    const limit = Number(query.limit) || 10;
+    const limit = clampInt(query.limit, 10, 1, 100);
     const sort = query.sort === 'units_sold' ? 'units_sold' : 'revenue';
 
     return this.cached(this.key('top-products', this.scopeLabel(sellerId, storeId), { from, to, limit, sort }), async () => {
@@ -482,8 +483,8 @@ export class AnalyticsService {
   async getProductPerformance(sellerId: string, storeId: string | null | undefined, query: any) {
     const { scope, storeIds } = await this.resolveScope(sellerId, storeId);
     const { from, to } = resolveDateRange(query);
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 20;
+    const page = clampInt(query.page, 1, 1, 100000);
+    const limit = clampInt(query.limit, 20, 1, 100);
 
     return this.cached(this.key('product-performance', this.scopeLabel(sellerId, storeId), { from, to, page, limit }), async () => {
       const [sales, products] = await Promise.all([

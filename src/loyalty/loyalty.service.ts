@@ -14,6 +14,7 @@ import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 import { randomBytes } from 'crypto';
 
+import { clampInt } from 'src/common/query-safety.util';
 const EARN_TYPES: LoyaltyTransactionType[] = ['purchase', 'review', 'referral', 'birthday'];
 // How long a redeemed reward's voucher code stays claimable at checkout —
 // generous enough that "redeem now, check out later" is never punished, but
@@ -246,8 +247,8 @@ export class LoyaltyService {
   async getMembers(sellerId: string, storeId: string, query: any) {
     await this.verifyStoreOwnership(storeId, sellerId);
 
-    const page = parseInt(query.page) || 1;
-    const limit = parseInt(query.limit) || 20;
+    const page = clampInt(query.page, 1, 1, 100000);
+    const limit = clampInt(query.limit, 20, 1, 100);
     const skip = (page - 1) * limit;
 
     const total = await this.r.loyaltyMemberModel.countDocuments({ storeId });
@@ -264,8 +265,8 @@ export class LoyaltyService {
   async getMemberTransactions(sellerId: string, storeId: string, memberId: string, query: any) {
     await this.verifyStoreOwnership(storeId, sellerId);
 
-    const page = parseInt(query.page) || 1;
-    const limit = parseInt(query.limit) || 20;
+    const page = clampInt(query.page, 1, 1, 100000);
+    const limit = clampInt(query.limit, 20, 1, 100);
     const skip = (page - 1) * limit;
 
     const filter = { storeId, memberId };

@@ -13,6 +13,7 @@ import type { ManualPaymentProof } from './schemas/manual-payment-proof.schema';
 import { SubmitManualPaymentDto } from './dto/submit-manual-payment.dto';
 import { ReuploadManualPaymentDto } from './dto/reupload-manual-payment.dto';
 
+import { clampInt } from 'src/common/query-safety.util';
 /** Mirrors OrdersService's local `sellerPayoutBasis`/`sellerPayoutCurrency` —
  *  settlement must always be computed and labeled in the SELLER'S OWN
  *  currency (so.settlementCurrency), independent of `order.currency` (the
@@ -188,8 +189,8 @@ export class ManualPaymentsService {
   // ═══════════════════════════════════════════════════════════════════════
 
   async adminListQueue(query: any) {
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(100, parseInt(query.limit) || 20);
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, clampInt(query.limit, 20, 1, 100));
     const skip = (page - 1) * limit;
 
     const filter: Record<string, any> = {};

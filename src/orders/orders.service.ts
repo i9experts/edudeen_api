@@ -20,6 +20,7 @@ import { round } from 'src/common/number.util';
 import { PaymentService } from 'src/payment/payment.service';
 import { orderStatusEmail } from 'src/notifications/templates/notification-email.template';
 
+import { clampInt } from 'src/common/query-safety.util';
 /** A sellerOrder's true payout basis for FinanceService.recordSale, in the
  *  SELLER'S OWN currency (so.settlementCurrency) — independent of what
  *  currency the buyer actually paid in (order.currency). Computed once at
@@ -80,8 +81,8 @@ export class OrdersService {
   async getOrdersByUserId(userId: string, query: any) {
     const { orderModel, sellerModel } = this.databaseService.repositories;
 
-    const page = parseInt(query.page) || 1;
-    const limit = parseInt(query.limit) || 10;
+    const page = clampInt(query.page, 1, 1, 100000);
+    const limit = clampInt(query.limit, 10, 1, 100);
     const skip = (page - 1) * limit;
 
     const filter: any = { userId, isDelete: false };
@@ -241,8 +242,8 @@ export class OrdersService {
       storeIds = stores.map((s: any) => s._id.toString());
     }
 
-    const page = parseInt(query.page) || 1;
-    const limit = Math.min(50, parseInt(query.limit) || 10);
+    const page = clampInt(query.page, 1, 1, 100000);
+    const limit = Math.min(50, clampInt(query.limit, 10, 1, 100));
     const skip = (page - 1) * limit;
 
     // base filter — orders touching any of the scoped store(s)

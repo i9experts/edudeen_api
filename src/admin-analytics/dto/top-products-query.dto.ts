@@ -1,7 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Max, Min, IsMongoId } from 'class-validator';
+import { IsIn, IsInt, IsOptional, Max, Min, IsMongoId } from 'class-validator';
 import { AdminAnalyticsQueryDto } from './admin-analytics-query.dto';
 
 // 'profit_margin' is intentionally NOT offered here either — same data-model gap as

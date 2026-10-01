@@ -1,12 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { isValidObjectId } from 'mongoose';
 import { sanitizeDigitalForPublicView } from 'src/products/product-public-view.util';
-import {
-  Injectable,
-  UnauthorizedException,
-  BadRequestException,
-  ForbiddenException,
-} from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
 
 import { DatabaseService } from 'src/database/databaseservice';
 import { AddToCartDto, MAX_CART_LINE_QUANTITY } from './dto/add-to-cart.dto';

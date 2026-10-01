@@ -1,7 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, Min, IsMongoId } from 'class-validator';
+import { IsInt, IsOptional, Max, Min, IsMongoId } from 'class-validator';
 import { AdminAnalyticsQueryDto } from './admin-analytics-query.dto';
 
 export class AdminProductPerformanceQueryDto extends AdminAnalyticsQueryDto {

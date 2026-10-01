@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsBoolean, IsDateString, IsNumber, IsOptional, Min, Matches, Max } from 'class-validator';
+import { IsBoolean, IsDateString, IsNumber, IsOptional, Min, Max } from 'class-validator';
 
 export class UpdatePlatformCouponDto {
   @ApiProperty({ required: false })

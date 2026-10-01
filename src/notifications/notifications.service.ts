@@ -10,6 +10,7 @@ import { NotificationsGateway } from './notifications.gateway';
 import { QUEUE_NAMES, NOTIFICATION_PUSH_JOB, NOTIFICATION_EMAIL_JOB } from 'src/queues/queue.constants';
 import { NOTIFICATION_CATEGORY } from './notification.types';
 
+import { clampInt } from 'src/common/query-safety.util';
 export interface NotifyParams {
   recipientId: string;
   recipientRole: 'user' | 'seller';
@@ -109,8 +110,8 @@ export class NotificationsService {
   // ── Inbox REST surface (called by NotificationsController) ────────────────
 
   async list(userId: string, query: { page?: string; limit?: string; unreadOnly?: string; type?: string }) {
-    const page = Math.max(1, parseInt(query.page as string) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(query.limit as string) || 20));
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, Math.max(1, clampInt(query.limit, 20, 1, 100)));
     const filter: Record<string, any> = { recipientId: userId };
     if (query.unreadOnly === 'true') filter.isRead = false;
     if (query.type) filter.type = query.type;

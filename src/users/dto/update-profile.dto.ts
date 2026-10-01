@@ -1,12 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import {
-  IsEmail,
-  IsString,
-  IsOptional,
-  MaxLength,
-  IsUrl,
-  IsIn,
-} from 'class-validator';
+import { IsEmail, IsString, IsOptional, MaxLength, IsIn } from 'class-validator';
 import { SUPPORTED_CURRENCIES } from 'src/exchange-rate/schemas/exchange-rate.schema';
 
 export class UpdateProfileDto {

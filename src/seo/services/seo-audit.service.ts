@@ -9,6 +9,7 @@ import { EntitlementsService } from 'src/platform-plans/entitlements.service';
 import { PlatformSeoService } from './platform-seo-settings.service';
 import { StoreSeoService } from './store-seo.service';
 
+import { clampInt } from 'src/common/query-safety.util';
 interface AuditIssue {
   severity: 'info' | 'warning' | 'error';
   code: string;
@@ -68,8 +69,8 @@ export class SeoAuditService {
   }
 
   async getHistory(storeId: string, query: { page?: number; limit?: number }) {
-    const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.min(50, Math.max(1, Number(query.limit) || 10));
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(50, Math.max(1, clampInt(query.limit, 10, 1, 100)));
     const filter = { storeId };
 
     const [items, total] = await Promise.all([

@@ -1,9 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { reserveInvoiceRefund, releaseInvoiceRefund, invoiceRefundKey } from 'src/common/invoice-refund.util';
-import {
-  Injectable, NotFoundException, ForbiddenException,
-  BadRequestException, ConflictException, Logger,
-} from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectConnection } from '@nestjs/mongoose';
@@ -29,6 +26,7 @@ import type { SubscriptionNotificationPreference } from './schemas/subscription-
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 
+import { clampInt } from 'src/common/query-safety.util';
 // Dunning: how many consecutive renewal-charge failures before we give up
 // and cancel the subscription, and how long to wait before each retry.
 const MAX_RENEWAL_ATTEMPTS = 3;
@@ -504,8 +502,8 @@ export class SubscriptionsService {
   async listSubscriptions(sellerId: string, storeId: string, query: any) {
     await this.verifyStoreOwnership(sellerId, storeId);
 
-    const page  = Math.max(1, parseInt(query.page)  || 1);
-    const limit = Math.min(100, parseInt(query.limit) || 20);
+    const page  = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, clampInt(query.limit, 20, 1, 100));
     const skip  = (page - 1) * limit;
 
     const filter: any = { storeId, isDelete: false };
@@ -1117,8 +1115,8 @@ export class SubscriptionsService {
   }
 
   async listMySubscriptions(customerId: string, query: any) {
-    const page  = Math.max(1, parseInt(query.page)  || 1);
-    const limit = Math.min(100, parseInt(query.limit) || 20);
+    const page  = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, clampInt(query.limit, 20, 1, 100));
     const skip  = (page - 1) * limit;
 
     const filter: any = { customerId, isDelete: false };
@@ -1457,8 +1455,8 @@ export class SubscriptionsService {
 
   /** Dead-letter / audit view of every Stripe webhook event received, including permanently-failed jobs. */
   async adminGetWebhookHistory(query: any) {
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(100, parseInt(query.limit) || 20);
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, clampInt(query.limit, 20, 1, 100));
     const skip = (page - 1) * limit;
 
     const filter: any = {};
@@ -1487,8 +1485,8 @@ export class SubscriptionsService {
   // ── Dunning / retry history ──────────────────────────────────────────────
 
   async adminGetPaymentFailures(query: any) {
-    const page  = Math.max(1, parseInt(query.page)  || 1);
-    const limit = Math.min(100, parseInt(query.limit) || 20);
+    const page  = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, clampInt(query.limit, 20, 1, 100));
     const skip  = (page - 1) * limit;
 
     const filter: any = { outcome: 'failed' };
@@ -1545,8 +1543,8 @@ export class SubscriptionsService {
     const exists = await this.subModel.exists({ _id: subId });
     if (!exists) throw new NotFoundException('Subscription not found');
 
-    const page  = Math.max(1, parseInt(query.page)  || 1);
-    const limit = Math.min(100, parseInt(query.limit) || 20);
+    const page  = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, clampInt(query.limit, 20, 1, 100));
     const skip  = (page - 1) * limit;
 
     const filter: any = { subscriptionId: subId };
@@ -1561,8 +1559,8 @@ export class SubscriptionsService {
   }
 
   async adminGetStoreBreakdown(query: any) {
-    const page  = Math.max(1, parseInt(query.page)  || 1);
-    const limit = Math.min(100, parseInt(query.limit) || 20);
+    const page  = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, clampInt(query.limit, 20, 1, 100));
     const skip  = (page - 1) * limit;
 
     const grouped = await this.subModel.aggregate([

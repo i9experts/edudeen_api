@@ -11,6 +11,7 @@ import { SeoContentService } from './seo-content.service';
 import { AnthropicSeoAiProvider } from '../providers/anthropic-seo-ai.provider';
 import { PlatformSeoService } from './platform-seo-settings.service';
 
+import { clampInt } from 'src/common/query-safety.util';
 export const AI_SEO_SUGGESTION_CREDIT_COST = 5;
 
 /**
@@ -102,8 +103,8 @@ export class SeoAiService {
   }
 
   async getSuggestionHistory(storeId: string, query: { page?: number; limit?: number }) {
-    const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, Math.max(1, clampInt(query.limit, 20, 1, 100)));
     const filter = { storeId };
 
     const [items, total] = await Promise.all([

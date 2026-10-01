@@ -28,20 +28,7 @@ export function sanitizeDigitalForPublicView<T extends { digital?: unknown }>(
   } as T;
 }
 
-/** Coerces an untrusted query value to a bounded integer (query strings can arrive as arrays/objects). */
-export function clampInt(
-  value: unknown,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
-  const n =
-    typeof value === 'string' || typeof value === 'number'
-      ? Math.trunc(Number(value))
-      : NaN;
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, n));
-}
+export { clampInt } from '../common/query-safety.util';
 
 /** Only accepts a real string; `?x[$ne]=y` (an object) and `?x[]=a` (an array) become undefined. */
 export function queryString(

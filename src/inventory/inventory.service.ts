@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { DatabaseService } from 'src/database/databaseservice';
 
+import { clampInt } from 'src/common/query-safety.util';
 const LOW_STOCK_THRESHOLD = 10;
 
 @Injectable()
@@ -30,7 +31,7 @@ export class InventoryService {
     if (query.type && query.type !== 'all') filter.type = query.type;
     if (query.status && query.status !== 'all') filter.status = query.status;
 
-    const page = parseInt(query.page) || 1;
+    const page = clampInt(query.page, 1, 1, 100000);
     const limit = 10;
     const skip = (page - 1) * limit;
 

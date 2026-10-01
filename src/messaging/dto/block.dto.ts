@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsMongoId, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEnum, IsMongoId, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class BlockDto {
   @ApiProperty({ example: '665user001' })

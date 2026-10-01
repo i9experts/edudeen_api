@@ -7,8 +7,7 @@ import {
   UnauthorizedException,
   ForbiddenException,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model, isValidObjectId } from 'mongoose';
+import { isValidObjectId } from 'mongoose';
 
 import { DatabaseService } from 'src/database/databaseservice';
 import { CreateCategoryDto } from './dto/create-category.dto';

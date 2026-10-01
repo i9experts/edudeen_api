@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { DatabaseService } from 'src/database/databaseservice';
 import { SeoIntegrationsService } from './seo-integrations.service';
 
+import { clampInt } from 'src/common/query-safety.util';
 const FLUSH_INTERVAL_MS = 10_000;
 const MAX_BUFFER_SIZE = 5_000; // oldest-drop safety valve under extreme load
 
@@ -82,8 +83,8 @@ export class SeoMonitoringService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getCrawlLogs(storeId: string | null, query: { page?: number; limit?: number; botName?: string }) {
-    const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.min(200, Math.max(1, Number(query.limit) || 50));
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(200, Math.max(1, clampInt(query.limit, 50, 1, 100)));
     const filter: Record<string, any> = storeId ? { storeId } : {};
     if (query.botName) filter.botName = query.botName;
 

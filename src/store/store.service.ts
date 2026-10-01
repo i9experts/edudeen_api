@@ -10,12 +10,7 @@ import {
 } from '@nestjs/common';
 import { promises as dns } from 'dns';
 import { DatabaseService } from 'src/database/databaseservice';
-import {
-  SellerType, ProductType, resolveTools, SELECTABLE_STORE_PRODUCT_TYPES,
-  BUSINESS_TYPES, ID_DOCUMENT_TYPES, VERIFICATION_DOCUMENT_TYPES,
-  determineVerificationLevel, assertValidVerificationTransition,
-  type BusinessType, type VerificationDocumentType, type VerificationDocument,
-  type VerificationStatus, STORE_ANNOUNCEMENT_TYPES } from './schemas/store.schema';
+import { SellerType, resolveTools, SELECTABLE_STORE_PRODUCT_TYPES, BUSINESS_TYPES, ID_DOCUMENT_TYPES, VERIFICATION_DOCUMENT_TYPES, determineVerificationLevel, assertValidVerificationTransition, type BusinessType, type VerificationDocumentType, type VerificationDocument, type VerificationStatus, STORE_ANNOUNCEMENT_TYPES } from './schemas/store.schema';
 import { getVerificationRequirements, isFieldSatisfied } from './verification-requirements.config';
 import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
 import { UploadService } from 'src/upload/upload.service';
@@ -1158,8 +1153,8 @@ export class StoreService {
   async listPublicStores(query: any) {
     const { storeModel, productModel } = this.databaseService.repositories;
 
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(50, parseInt(query.limit) || 20);
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(50, clampInt(query.limit, 20, 1, 100));
     const skip = (page - 1) * limit;
 
     const filter: any = { status: 'active', isDelete: false };

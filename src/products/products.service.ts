@@ -32,6 +32,7 @@ import {
 import { optionNameSet, optionsKey, validateOptions } from './variant-options.util';
 import { AttributesService } from 'src/attributes/attributes.service';
 
+import { clampInt } from 'src/common/query-safety.util';
 const EDUCATION_LEVEL_VALUES: string[] = Object.values(EducationLevel);
 
 /** Prices arrive on `body: any` endpoints, so they are checked here rather
@@ -1439,7 +1440,7 @@ export class ProductsService {
     if (!store)
       throw new UnauthorizedException('Store not found or unauthorized');
 
-    const page = parseInt(query.page) || 1;
+    const page = clampInt(query.page, 1, 1, 100000);
     const limit = 10;
     const skip = (page - 1) * limit;
 

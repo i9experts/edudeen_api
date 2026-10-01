@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsMongoId, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEnum, IsMongoId, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class ReportDto {
   @ApiProperty({ enum: ['user', 'message', 'conversation'] })

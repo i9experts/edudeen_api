@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString, IsMongoId } from 'class-validator';
+import { IsIn, IsOptional, IsMongoId } from 'class-validator';
 import { BaseAnalyticsQueryDto, RANGE_PRESETS } from '../../analytics/dto/base-analytics-query.dto';
 
 export { RANGE_PRESETS };

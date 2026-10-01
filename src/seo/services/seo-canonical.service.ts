@@ -6,6 +6,7 @@ import { CreateCanonicalRuleDto } from '../dto/create-canonical-rule.dto';
 import { UpdateCanonicalRuleDto } from '../dto/update-canonical-rule.dto';
 import { assertSafeSeoDestination } from './seo-url-safety.util';
 
+import { clampInt } from 'src/common/query-safety.util';
 @Injectable()
 export class SeoCanonicalService {
   constructor(
@@ -46,8 +47,8 @@ export class SeoCanonicalService {
   }
 
   async list(storeId: string | null, query: { page?: number; limit?: number }) {
-    const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, Math.max(1, clampInt(query.limit, 20, 1, 100)));
     const filter = { storeId, isDelete: false };
 
     const [items, total] = await Promise.all([

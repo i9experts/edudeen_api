@@ -12,6 +12,7 @@ import { CreatePurchaseIntentDto } from './dto/create-purchase-intent.dto';
 import { randomBytes } from 'crypto';
 import Stripe from 'stripe';
 
+import { clampInt } from 'src/common/query-safety.util';
 function generateGiftCardCode(): string {
   // Grouped for readability when a buyer types it in manually (e.g. reading
   // it off a printed/emailed card) — e.g. "GC4F2A-9KRT".
@@ -109,8 +110,8 @@ export class GiftCardsService {
 
   async listGiftCards(sellerId: string, storeId: string, query: any) {
     await this.verifyStoreOwnership(storeId, sellerId);
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(query.limit) || 20));
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, Math.max(1, clampInt(query.limit, 20, 1, 100)));
     const filter: any = { storeId, isDelete: false };
     if (query.status) filter.status = query.status;
     if (query.code) filter.code = new RegExp(String(query.code).trim(), 'i');

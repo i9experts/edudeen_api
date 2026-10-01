@@ -7,6 +7,7 @@ import { UpdateSeoMetaDto } from '../dto/update-seo-meta.dto';
 import { assertSafeSeoDestination, pickSeoMeta } from './seo-url-safety.util';
 import { toCsv } from 'src/analytics/utils/csv.util';
 
+import { clampInt } from 'src/common/query-safety.util';
 /**
  * Manages the embedded `.seo` field on content entities. Category methods
  * live here from Phase 2 (admin-only, root categories are admin-curated
@@ -121,8 +122,8 @@ export class SeoContentService {
   // ── Seller-facing: Product SEO (Phase 7) ─────────────────────────────────
 
   async listProductSeo(storeId: string, query: { page?: number; limit?: number }) {
-    const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, Math.max(1, clampInt(query.limit, 20, 1, 100)));
     const filter = { storeId, isDelete: false };
 
     const [items, total] = await Promise.all([

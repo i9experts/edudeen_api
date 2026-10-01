@@ -10,6 +10,7 @@ import { EditReviewDto } from './dto/edit-review.dto';
 import { SellerReplyDto } from './dto/seller-reply.dto';
 import { LoyaltyService } from 'src/loyalty/loyalty.service';
 
+import { clampInt } from 'src/common/query-safety.util';
 const DELIVERED_ITEM_STATUSES = ['delivered', 'completed'];
 
 @Injectable()
@@ -293,7 +294,7 @@ export class RatingService {
   async getMyReviews(userId: string, query: any) {
     const { ratingModel, productModel } = this.r;
 
-    const page = parseInt(query.page) || 1;
+    const page = clampInt(query.page, 1, 1, 100000);
     const limit = 10;
     const skip = (page - 1) * limit;
 
@@ -354,8 +355,8 @@ export class RatingService {
   ) {
     const { ratingModel, userModel } = this.r;
 
-    const page = parseInt(query.page) || 1;
-    const limit = parseInt(query.limit) || 10;
+    const page = clampInt(query.page, 1, 1, 100000);
+    const limit = clampInt(query.limit, 10, 1, 100);
     const skip = (page - 1) * limit;
 
     const filter: any = { productId, isDelete: false };
@@ -495,7 +496,7 @@ export class RatingService {
     const { ratingModel, userModel } = this.r;
     await this.verifyStoreAccess(storeId, sellerId, role);
 
-    const page = parseInt(query.page) || 1;
+    const page = clampInt(query.page, 1, 1, 100000);
     const limit = 10;
     const skip = (page - 1) * limit;
 

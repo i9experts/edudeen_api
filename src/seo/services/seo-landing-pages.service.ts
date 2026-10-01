@@ -5,6 +5,7 @@ import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { CreateLandingPageDto } from '../dto/create-landing-page.dto';
 import { UpdateLandingPageDto } from '../dto/update-landing-page.dto';
 
+import { clampInt } from 'src/common/query-safety.util';
 @Injectable()
 export class SeoLandingPagesService {
   constructor(
@@ -34,8 +35,8 @@ export class SeoLandingPagesService {
   }
 
   async list(query: { page?: number; limit?: number; status?: string }) {
-    const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, Math.max(1, clampInt(query.limit, 20, 1, 100)));
     const filter: Record<string, any> = { isDelete: false };
     if (query.status) filter.status = query.status;
 

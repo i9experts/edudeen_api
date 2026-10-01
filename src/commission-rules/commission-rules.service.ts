@@ -5,6 +5,7 @@ import { ActivityLogService } from '../activity-log/activity-log.service';
 import { EntitlementsService } from '../platform-plans/entitlements.service';
 import { verifyStoreExists } from '../common/store-ownership.util';
 
+import { clampInt } from 'src/common/query-safety.util';
 export type CommissionRateSource = 'seller_override' | 'platform_plan' | 'global_default' | 'hardcoded_fallback';
 
 export interface ResolvedCommissionRate {
@@ -149,8 +150,8 @@ export class CommissionRulesService {
   }
 
   async listSellerOverrides(query: any) {
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(100, parseInt(query.limit) || 20);
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, clampInt(query.limit, 20, 1, 100));
     const skip = (page - 1) * limit;
 
     const filter = { scope: 'seller' as const, isActive: true };

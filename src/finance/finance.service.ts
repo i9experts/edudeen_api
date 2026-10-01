@@ -1,7 +1,5 @@
 /* eslint-disable prettier/prettier */
-import {
-  Injectable, NotFoundException, ForbiddenException,
-  BadRequestException, ConflictException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection, ClientSession } from 'mongoose';
 import { DatabaseService } from 'src/database/databaseservice';
@@ -16,6 +14,7 @@ import { AdminConfigService } from 'src/admin-config/admin-config.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 
+import { clampInt } from 'src/common/query-safety.util';
 // ── Platform fee constants ───────────────────────────────────────────────────
 export const PLATFORM_FEE_RATE       = 0.08;   // 8% per sale — last-resort fallback, see CommissionRulesService
 export const PAYMENT_PROCESSING_RATE = 0.029;  // 2.9%
@@ -337,8 +336,8 @@ export class FinanceService {
 
   /** Shared paginated transaction query — used by both the seller and admin transaction-list endpoints. */
   private async queryTransactions(filter: Record<string, any>, query: any, maxLimit = 100) {
-    const page  = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(maxLimit, parseInt(query.limit) || 20);
+    const page  = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(maxLimit, clampInt(query.limit, 20, 1, 100));
     const skip  = (page - 1) * limit;
 
     const [transactions, total] = await Promise.all([
@@ -544,8 +543,8 @@ export class FinanceService {
   async getPayouts(sellerId: string, storeId: string, query: any) {
     await this.verifyStoreOwnership(sellerId, storeId);
 
-    const page  = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(50, parseInt(query.limit) || 20);
+    const page  = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(50, clampInt(query.limit, 20, 1, 100));
     const skip  = (page - 1) * limit;
 
     const filter: any = { storeId };
@@ -947,8 +946,8 @@ export class FinanceService {
   }
 
   async adminGetPayoutQueue(query: any) {
-    const page  = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(100, parseInt(query.limit) || 20);
+    const page  = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, clampInt(query.limit, 20, 1, 100));
     const skip  = (page - 1) * limit;
 
     const filter: Record<string, any> = {};

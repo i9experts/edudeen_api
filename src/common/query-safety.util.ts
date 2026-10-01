@@ -20,6 +20,21 @@ export function escapeRegex(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** Coerces an untrusted query value to a bounded integer (query strings can arrive as arrays/objects). */
+export function clampInt(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const n =
+    typeof value === 'string' || typeof value === 'number'
+      ? Math.trunc(Number(value))
+      : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
 /** A user-supplied search term: a bounded string, or undefined. Objects/arrays (?q[$ne]=x) are dropped. */
 export function searchTerm(
   value: unknown,

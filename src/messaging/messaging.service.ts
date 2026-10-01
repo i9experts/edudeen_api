@@ -19,6 +19,7 @@ import { MessagingGateway } from './messaging.gateway';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 
+import { clampInt } from 'src/common/query-safety.util';
 @Injectable()
 export class MessagingService {
   constructor(
@@ -125,8 +126,8 @@ export class MessagingService {
   }
 
   async getConversations(userId: string, role: string, query: any) {
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(50, parseInt(query.limit) || 20);
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(50, clampInt(query.limit, 20, 1, 100));
     const skip = (page - 1) * limit;
 
     let filter: any = {};
@@ -399,7 +400,7 @@ export class MessagingService {
     const conv = await this.getConversationOrThrow(conversationId);
     this.assertConversationAccess(conv, userId, role);
 
-    const limit = Math.min(50, parseInt(query.limit) || 30);
+    const limit = Math.min(50, clampInt(query.limit, 30, 1, 100));
     const filter: any = {
       conversationId,
       deletedByUsers: { $ne: userId }, // exclude messages deleted by this user
@@ -638,8 +639,8 @@ export class MessagingService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   async adminGetConversations(query: any) {
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(100, parseInt(query.limit) || 30);
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, clampInt(query.limit, 30, 1, 100));
     const skip = (page - 1) * limit;
 
     const filter: any = {};
@@ -667,8 +668,8 @@ export class MessagingService {
   }
 
   async adminGetReports(query: any) {
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(100, parseInt(query.limit) || 30);
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(100, clampInt(query.limit, 30, 1, 100));
     const skip = (page - 1) * limit;
     const filter: any = {};
     if (query.status) filter.status = query.status;
