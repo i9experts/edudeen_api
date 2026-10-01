@@ -150,18 +150,16 @@ function world(seeds: Seed[], opts: { userId?: string } = {}) {
     },
   };
   const fx = new ExchangeRateService({} as any, {} as any, {} as any);
-  jest
-    .spyOn(fx, 'buildSnapshots')
-    .mockImplementation(
-      async (cs: string[]) =>
-        [...new Set(cs)].map((currency) => ({
-          currency,
-          ratePerUSD: currency === 'USD' ? 1 : 280,
-          effectiveFrom: new Date(),
-          source: 'admin',
-          exchangeRateId: null,
-        })) as any,
-    );
+  jest.spyOn(fx, 'buildSnapshots').mockImplementation(
+    async (cs: string[]) =>
+      [...new Set(cs)].map((currency) => ({
+        currency,
+        ratePerUSD: currency === 'USD' ? 1 : 280,
+        effectiveFrom: new Date(),
+        source: 'admin',
+        exchangeRateId: null,
+      })) as any,
+  );
   const svc = new CheckoutService(
     { repositories: repos } as any,
     {
@@ -361,5 +359,49 @@ describe('createCheckout — Cash on Delivery only for single-store physical car
       { storeId: 'C', productId: 'p3', type: 'digital' },
     ]);
     expect(m).toContain('split');
+  });
+});
+
+describe('createCheckout — free checkout is offered only when the total is exactly 0', () => {
+  const methods = async (seeds: Seed[]) =>
+    (await create(world(seeds))).data.allowedPaymentMethods as string[];
+  it('a cart of free items offers only the free confirmation', async () => {
+    expect(
+      await methods([
+        { storeId: 'A', productId: 'p1', price: 0 },
+        { storeId: 'B', productId: 'p2', price: 0 },
+      ]),
+    ).toEqual(['free']);
+  });
+  it('a paid cart never offers it', async () => {
+    expect(
+      await methods([
+        { storeId: 'A', productId: 'p1', price: 0 },
+        { storeId: 'B', productId: 'p2', price: 10 },
+      ]),
+    ).not.toContain('free');
+  });
+});
+
+describe('createCheckout — concurrency', () => {
+  it('two simultaneous calls make two independent checkouts and place no order; the carts are untouched', async () => {
+    const w = world([
+      { storeId: 'A', productId: 'pa' },
+      { storeId: 'B', productId: 'pb' },
+    ]);
+    const [first, second] = await Promise.all([create(w), create(w)]);
+    expect(first.data.checkout._id).not.toBe(second.data.checkout._id);
+    expect(w.created).toHaveLength(2);
+    expect(w.carts.every((c) => c.items.length === 1)).toBe(true);
+    for (const fn of ['updateOne', 'findOneAndUpdate', 'updateMany'])
+      expect(w.repos.cartModel[fn]).not.toHaveBeenCalled();
+  });
+
+  it('a cart edited after the checkout was created does not change that checkout (it is a priced snapshot)', async () => {
+    const w = world([{ storeId: 'A', productId: 'pa', price: 10, qty: 1 }]);
+    const { data } = await create(w);
+    w.carts[0].items[0].quantity = 9; // the buyer keeps editing the cart
+    expect(data.checkout.items[0].quantity).toBe(1);
+    expect(data.checkout.subtotal).toBe(2800); // USD 10 at 280, frozen
   });
 });
