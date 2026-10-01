@@ -125,10 +125,115 @@ describe.each([
   },
 );
 
-describe('reset-password for an unknown email stays indistinguishable from a first wrong attempt', () => {
-  it('401 "Invalid OTP", OTP_INVALID, attemptsLeft 4 — same as a real account\'s first miss', async () => {
-    const unknown = await body(reset(setup(null), '000000'));
-    const real = await body(reset(setup(makeAccount()), '000000'));
-    expect(unknown).toEqual(real);
+describe('reset-password for an unknown email follows the same sequence as a real account', () => {
+  /** In-memory stand-in for the Redis methods used. */
+  function fakeRedis() {
+    const kv = new Map<string, string>();
+    return {
+      isConnected: true,
+      set: jest.fn(async (k: string, v: string) => {
+        kv.set(k, v);
+      }),
+      get: jest.fn(async (k: string) => kv.get(k) ?? null),
+      del: jest.fn(async (k: string) => {
+        kv.delete(k);
+      }),
+      incrWithTtl: jest.fn(async (k: string) => {
+        const n = Number(kv.get(k) ?? 0) + 1;
+        kv.set(k, String(n));
+        return n;
+      }),
+    };
+  }
+  function svcWith(acc: any | null, redis: any) {
+    const model: any = {
+      findOne: jest.fn(async () => acc),
+      findById: jest.fn(),
+    };
+    const db: any = {
+      repositories: { userModel: model, sellerModel: model, adminModel: model },
+    };
+    return new AuthService(
+      db,
+      { sendOtp: jest.fn() } as any,
+      redis,
+      { log: jest.fn() } as any,
+      new JwtService({ secret: 'test-secret' }),
+    );
+  }
+  const attempts = async (svc: AuthService, n: number) => {
+    const out: any[] = [];
+    for (let i = 0; i < n; i++)
+      out.push(
+        await body(
+          svc.resetPassword('a@school.edu', 'user', '000000', 'newpassword1'),
+        ),
+      );
+    return out;
+  };
+
+  it('after forgot-password: wrong tries count down 4,3,2,1, the 5th is OTP_LOCKED, then OTP_EXPIRED — identical bodies', async () => {
+    const realAcc = makeAccount({ otp: null, otpExpiresAt: null });
+    const real = svcWith(realAcc, fakeRedis());
+    await real.forgotPassword('a@school.edu', 'user');
+    realAcc.otp = hashOtp('123456'); // a known code (the real one is random and unknowable)
+    const unknown = svcWith(null, fakeRedis());
+    await unknown.forgotPassword('a@school.edu', 'user');
+
+    const realSeq = await attempts(real, 7);
+    const unknownSeq = await attempts(unknown, 7);
+    expect(realSeq.map((b) => [b.code, b.attemptsLeft])).toEqual([
+      ['OTP_INVALID', 4],
+      ['OTP_INVALID', 3],
+      ['OTP_INVALID', 2],
+      ['OTP_INVALID', 1],
+      ['OTP_LOCKED', undefined],
+      ['OTP_EXPIRED', undefined],
+      ['OTP_EXPIRED', undefined],
+    ]);
+    expect(unknownSeq).toEqual(realSeq);
+  });
+
+  it('without a pending code (forgot-password never asked) a real account and an unknown email both answer OTP_EXPIRED', async () => {
+    const real = svcWith(
+      makeAccount({ otp: null, otpExpiresAt: null }),
+      fakeRedis(),
+    );
+    const unknown = svcWith(null, fakeRedis());
+    expect(
+      await body(
+        unknown.resetPassword('a@school.edu', 'user', '000000', 'newpassword1'),
+      ),
+    ).toEqual(
+      await body(
+        real.resetPassword('a@school.edu', 'user', '000000', 'newpassword1'),
+      ),
+    );
+  });
+
+  it('the counters are per role + email: another email is unaffected', async () => {
+    const redis = fakeRedis();
+    const svc = svcWith(null, redis);
+    await svc.forgotPassword('a@school.edu', 'user');
+    await svc.forgotPassword('b@school.edu', 'user');
+    await attempts(svc, 3);
+    const other = await body(
+      svc.resetPassword('b@school.edu', 'user', '000000', 'newpassword1'),
+    );
+    expect(other).toMatchObject({ code: 'OTP_INVALID', attemptsLeft: 4 });
+  });
+
+  it('without Redis it degrades to the constant first-attempt answer (no crash)', async () => {
+    const redis = { ...fakeRedis(), isConnected: false };
+    expect(
+      await body(
+        svcWith(null, redis).resetPassword(
+          'a@school.edu',
+          'user',
+          '000000',
+          'newpassword1',
+        ),
+      ),
+    ).toMatchObject({ code: 'OTP_INVALID', attemptsLeft: 4 });
   });
 });
