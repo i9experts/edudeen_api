@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { ForgotPasswordBodyDto, ResendOtpDto, ResetPasswordBodyDto, VerifyOtpBodyDto } from './dto/otp-flows.dto';
 import { Body, Controller, Post, Req, Get, Patch } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
@@ -8,7 +9,6 @@ import { RegisterDto } from './dto/register.dto';
 import { SocialLoginDto } from './dto/social-login.dto';
 import { AuthUpdateProfileDto } from './dto/update-profile.dto';
 import { CreateAdminDto } from './dto/create-admin.dto';
-import { AuthGuard } from '@nestjs/passport';
 import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles } from '../auth/decorators/roles.decorator'
@@ -57,41 +57,31 @@ export class AuthController {
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('resend-otp')
-  async resendOtp(@Body() body: { email: string; role: string }) {
-    const { email, role } = body;
-    return this.authService.resendOtp(email, role);
+  async resendOtp(@Body() body: ResendOtpDto) {
+    return this.authService.resendOtp(body.email, body.role);
   }
 
   // A 6-digit OTP is only 1,000,000 combinations — without a tight per-IP
   // limit here, that's brute-forceable well within the OTP's expiry window.
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('verifyOtp')
-  async verifyOtp(@Body() body: { email: string; role: string, otp: string }) {
-    const { email, role, otp } = body;
-    return this.authService.verifyOtp(email, role, otp);
+  async verifyOtp(@Body() body: VerifyOtpBodyDto) {
+    return this.authService.verifyOtp(body.email, body.role, body.otp);
   }
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('forgot-password')
-  async forgotPassword(
-    @Body('email') email: string,
-    @Body('role') role: string,
-  ) {
-    return this.authService.forgotPassword(email, role);
+  async forgotPassword(@Body() body: ForgotPasswordBodyDto) {
+    return this.authService.forgotPassword(body.email, body.role);
   }
 
   // Same OTP-brute-force reasoning as verifyOtp above — reset-password also
   // takes a raw `otp` guess.
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('reset-password')
-  async resetPassword(
-  @Body('email') email: string,
-  @Body('role') role: string,
-  @Body('otp') otp: string,
-  @Body('newPassword') newPassword: string,
-) {
-  return this.authService.resetPassword(email, role, otp, newPassword);
-}
+  async resetPassword(@Body() body: ResetPasswordBodyDto) {
+    return this.authService.resetPassword(body.email, body.role, body.otp, body.newPassword);
+  }
 
   @UseGuards(JwtAuthGuard)
   @Post('logout')

@@ -6,8 +6,6 @@ import {
   UnauthorizedException,
   BadRequestException,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { RegisterDto } from './dto/register.dto';
@@ -21,7 +19,6 @@ import { OAuth2Client } from 'google-auth-library';
 import { createHmac, randomInt, timingSafeEqual } from 'crypto';
 import * as appleSignin from 'apple-signin-auth';
 // import axios from 'axios';
-import { stat } from 'fs';
 import { RedisService } from '../redis/redis.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 

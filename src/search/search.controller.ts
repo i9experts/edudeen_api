@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { clampInt, queryString } from '../products/product-public-view.util';
 import { Body, Controller, Delete, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
@@ -51,13 +52,13 @@ export class SearchController {
   @UseGuards(JwtAuthGuard)
   @Get('recently-viewed')
   getRecentlyViewed(@Req() req: any, @Query() query: any) {
-    const limit = Math.max(1, parseInt(query.limit) || 10);
+    const limit = Math.max(1, clampInt(query.limit, 10, 1, 100));
     return this.searchService.getRecentlyViewed(req.user.userId, limit);
   }
 
   @UseGuards(JwtAuthGuard)
   @Post('recently-viewed')
-  recordProductView(@Req() req: any, @Body('productId') productId: string) {
+  recordProductView(@Req() req: any, @Body('productId', ParseObjectIdPipe) productId: string) {
     return this.searchService.recordProductView(req.user.userId, productId);
   }
 

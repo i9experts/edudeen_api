@@ -1,3 +1,4 @@
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import {
   Body,
   Controller,
@@ -10,7 +11,6 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CartService } from './cart.service';
 import { AddToCartDto } from './dto/add-to-cart.dto';
-import { AuthGuard } from '@nestjs/passport';
 
 @Controller('api/cart')
 export class CartController {
@@ -59,7 +59,7 @@ export class CartController {
 
   @UseGuards(JwtAuthGuard)
   @Post('clear-cart')
-  async clearCart(@Req() req: any, @Body('storeId') storeId: string) {
+  async clearCart(@Req() req: any, @Body('storeId', ParseObjectIdPipe) storeId: string) {
     const { userId } = req.user;
 
     return this.cartService.clearCart(userId, storeId);
@@ -92,8 +92,8 @@ export class CartController {
   @Post('remove-from-wishlist')
   async removeFromWishlist(
     @Req() req: any,
-    @Body('wishlistId') wishlistId: string,
-    @Body('storeId') storeId: string,
+    @Body('wishlistId', ParseObjectIdPipe) wishlistId: string,
+    @Body('storeId', ParseObjectIdPipe) storeId: string,
   ) {
     const { userId } = req.user;
     return await this.cartService.removeFromWishlist(userId, storeId, wishlistId);
@@ -101,7 +101,7 @@ export class CartController {
 
   @UseGuards(JwtAuthGuard)
   @Post('clear-wishlist')
-  async clearWishlist(@Req() req: any, @Body('storeId') storeId: string) {
+  async clearWishlist(@Req() req: any, @Body('storeId', ParseObjectIdPipe) storeId: string) {
     const { userId } = req.user;
     return this.cartService.clearWishlist(userId, storeId);
   }
