@@ -6,6 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { Readable } from 'stream';
+import { isValidObjectId } from 'mongoose';
 import { DatabaseService } from 'src/database/databaseservice';
 import { UploadService } from 'src/upload/upload.service';
 import { JwtService } from '@nestjs/jwt';
@@ -178,6 +179,76 @@ export class OrdersService {
     };
   }
 
+  /**
+   * "My Library": every digital resource the buyer owns, one row per product
+   * (newest purchase wins), with the subject and grade so it can be searched
+   * and grouped. Downloads still go through the per-order download flow.
+   */
+  async getMyLibrary(userId: string) {
+    const { orderModel, productModel, categoryModel, storeModel } = this.databaseService.repositories;
+    const orders: any[] = await orderModel
+      .find({ userId, isDelete: false, 'sellerOrders.items.type': 'digital' })
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .select('orderNumber isPaid paymentStatus orderStatus createdAt sellerOrders')
+      .lean();
+
+    const seen = new Map<string, any>();
+    for (const o of orders) {
+      for (const so of o.sellerOrders ?? []) {
+        for (const it of so.items ?? []) {
+          if (it.type !== 'digital' || !it.productId) continue;
+          if (['cancelled', 'refunded'].includes(it.status) || so.status === 'cancelled' || so.status === 'refunded') continue;
+          if (seen.has(it.productId)) continue;
+          seen.set(it.productId, {
+            orderId: String(o._id), orderNumber: o.orderNumber, itemId: String(it._id), productId: it.productId,
+            name: it.name, image: it.image ?? null, licenseType: it.licenseType ?? null, storeId: so.storeId,
+            isPaid: !!o.isPaid, purchasedAt: o.createdAt, downloadCount: it.downloadCount ?? 0,
+            reviewable: !!o.isPaid && (['delivered', 'completed'].includes(it.status) || ['delivered', 'completed'].includes(so.status) || o.orderStatus === 'completed'),
+          });
+        }
+      }
+    }
+    const rows = [...seen.values()];
+    const productIds = rows.map(r => r.productId).filter((id) => isValidObjectId(id));
+    const products: any[] = productIds.length
+      ? await productModel.find({ _id: { $in: productIds } }).select('slug categoryId subCategoryId educationLevel customLevel curricula ageMin ageMax digital.files removedByAdmin deliveryFormat liveSession.startsAt liveSession.durationMinutes').lean()
+      : [];
+    const productById = new Map(products.map(p => [String(p._id), p]));
+    const catIds = [...new Set(products.flatMap(p => [p.categoryId, p.subCategoryId]).filter(Boolean))];
+    const storeIds = [...new Set(rows.map(r => r.storeId).filter(Boolean))];
+    const [cats, stores] = await Promise.all([
+      catIds.length ? categoryModel.find({ _id: { $in: catIds } }).select('name').lean() : [],
+      storeIds.length ? storeModel.find({ _id: { $in: storeIds } }).select('name slug').lean() : [],
+    ]);
+    const catName = new Map((cats as any[]).map(c => [String(c._id), c.name]));
+    const storeById = new Map((stores as any[]).map(s => [String(s._id), s]));
+
+    const items = rows
+      .map(r => {
+        const p = productById.get(r.productId);
+        // An admin takedown also ends access (see ProductsService / downloads).
+        if (p?.removedByAdmin) return null;
+        const store: any = storeById.get(String(r.storeId));
+        return {
+          ...r,
+          slug: p?.slug ?? null,
+          category: p?.categoryId ? catName.get(String(p.categoryId)) ?? null : null,
+          subCategory: p?.subCategoryId ? catName.get(String(p.subCategoryId)) ?? null : null,
+          educationLevel: p?.educationLevel ?? null,
+          customLevel: p?.customLevel ?? null,
+          curricula: p?.curricula ?? [],
+          fileCount: p?.digital?.files?.length ?? 0,
+          deliveryFormat: p?.deliveryFormat ?? 'download',
+          liveStartsAt: p?.liveSession?.startsAt ?? null,
+          storeName: store?.name ?? null,
+          storeSlug: store?.slug ?? null,
+        };
+      })
+      .filter(Boolean);
+    return { success: true, data: { items } };
+  }
+
   async getOrderById(userId: string, orderId: string) {
     const { orderModel, sellerModel } = this.databaseService.repositories;
 
@@ -199,15 +270,26 @@ export class OrdersService {
           .lean()
       : [];
     const sellerMap = new Map(sellers.map((s: any) => [s._id.toString(), s]));
+    // Store names and contact details for the order page and the invoice.
+    const storeIds = [...new Set(orderSellerOrders.map((so: any) => so.storeId))].filter(Boolean);
+    const stores = storeIds.length
+      ? await this.databaseService.repositories.storeModel.find({ _id: { $in: storeIds } }).select('name slug contactEmail contactPhone').lean()
+      : [];
+    const storeMap = new Map(stores.map((s: any) => [s._id.toString(), s]));
 
     const enrichedOrder = {
       ...order,
       sellerOrders: orderSellerOrders.map((so: any) => {
         const seller = sellerMap.get(so.sellerId?.toString());
+        const store: any = storeMap.get(String(so.storeId));
         return {
           ...so,
           sellerName: seller ? seller.name : null,
           sellerVerified: seller ? !!seller.isVerified : false,
+          storeName: store?.name ?? null,
+          storeSlug: store?.slug ?? null,
+          storeContactEmail: store?.contactEmail ?? null,
+          storeContactPhone: store?.contactPhone ?? null,
         };
       }),
     };

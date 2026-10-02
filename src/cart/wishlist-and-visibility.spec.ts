@@ -119,6 +119,8 @@ describe('wishlist', () => {
     expect(res.data.product.digital).toEqual({
       fileCount: 1,
       previewAvailable: false,
+      sampleAvailable: false,
+      sampleName: null,
     });
     expect(JSON.stringify(res)).not.toMatch(
       /KEY-123|private\/digital-products/,

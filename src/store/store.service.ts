@@ -958,6 +958,33 @@ export class StoreService {
     if (sellerType !== undefined) updateData.sellerType = sellerType;
     if (codEnabled !== undefined) updateData.codEnabled = !!codEnabled;
 
+    // Teacher profile shown on the store page and product pages.
+    if (body.educatorProfile !== undefined) {
+      const p = body.educatorProfile;
+      if (p === null) updateData.educatorProfile = null;
+      else {
+        if (typeof p !== 'object' || Array.isArray(p)) throw new BadRequestException('educatorProfile must be an object');
+        const list = (v: unknown, field: string, maxItems: number) => {
+          if (v === undefined || v === null) return [];
+          if (!Array.isArray(v) || v.length > maxItems) throw new BadRequestException(`${field} can have at most ${maxItems} items`);
+          return v.map((s) => { text(s, field, 120, { required: true }); return (s as string).trim(); });
+        };
+        if (p.headline !== undefined && p.headline !== null) text(p.headline, 'headline', 160);
+        const years = p.experienceYears;
+        if (years !== undefined && years !== null && (typeof years !== 'number' || !Number.isInteger(years) || years < 0 || years > 70)) {
+          throw new BadRequestException('experienceYears must be a whole number from 0 to 70');
+        }
+        updateData.educatorProfile = {
+          headline: p.headline?.trim() || null,
+          qualifications: list(p.qualifications, 'qualifications', 10),
+          experienceYears: years ?? null,
+          subjects: list(p.subjects, 'subjects', 15),
+          institutions: list(p.institutions, 'institutions', 10),
+          teachingLevels: list(p.teachingLevels, 'teachingLevels', 10),
+        };
+      }
+    }
+
     // productTypes change ho to enabledTools bhi refresh
     if (productTypes !== undefined) {
       updateData.productTypes = productTypes;
@@ -1122,6 +1149,7 @@ export class StoreService {
         baseCurrency: store.baseCurrency ?? 'PKR',
         sellerType: store.sellerType ?? null,
         badges: store.badges ?? [],
+        educatorProfile: store.educatorProfile ?? null,
         createdAt: store.createdAt,
         announcementBar: announcementActive ? { message: bar.message, type: bar.type, ctaLabel: bar.ctaLabel, ctaLink: bar.ctaLink } : null,
         activeCampaign: primaryCampaign ? {

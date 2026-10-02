@@ -1,9 +1,12 @@
+import { bundleSavings } from '../classroom/bundle.util';
+import { paidSeatFilter } from '../classroom/course.util';
 import {
   Injectable,
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
 import { isValidObjectId } from 'mongoose';
+import { licenseFromVariant } from 'src/products/product-input.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-benefits.service';
 import { MarketingService } from 'src/marketing/marketing.service';
@@ -21,6 +24,7 @@ import { DiscountsService } from 'src/discounts/discounts.service';
 // currency by design, this constant documents that assumption at its one
 // point of use (addShippingInCheckout) instead.
 const SHIPPING_ZONE_CURRENCY = 'PKR';
+
 
 @Injectable()
 export class CheckoutService {
@@ -309,6 +313,17 @@ export class CheckoutService {
 
       const seller = sellerMap.get(product.sellerId?.toString());
 
+      // A live class can't be bought once it has ended, or when its seats are full.
+      if (product.deliveryFormat === 'live_class' && product.liveSession) {
+        const live = product.liveSession;
+        const endsAt = new Date(live.startsAt).getTime() + (live.durationMinutes ?? 0) * 60000;
+        if (endsAt < Date.now()) throw new BadRequestException(`"${product.name}" has already taken place`);
+        if (live.capacity) {
+          const taken = await this.databaseService.repositories.orderModel.countDocuments(paidSeatFilter(product._id.toString()));
+          if (taken + cartItem.quantity > live.capacity) throw new BadRequestException(`"${product.name}" is full — no seats left`);
+        }
+      }
+
       checkoutItems.push({
         productId: product._id.toString(),
         variantId: variant._id.toString(),
@@ -322,7 +337,8 @@ export class CheckoutService {
         image: product.images?.[0] ?? null,
         sku: variant.sku ?? null,
         options: variant.options ?? [],
-        licenseType: product.digital?.licenseType ?? null,
+        // The license the buyer picked (a "License" variant), else the product's own.
+        licenseType: licenseFromVariant(variant) ?? product.digital?.licenseType ?? null,
         quantity: cartItem.quantity,
         // Native currency this line's price/totalPrice are denominated in —
         // the SELLING store's own currency, independent of checkoutCurrency.
@@ -415,6 +431,13 @@ export class CheckoutService {
       let best: { discount: any; items: any[]; amount: number } | null = null;
       for (const discount of candidates) {
         if (discount.minOrderAmount != null && wholeStoreSubtotal < discount.minOrderAmount) continue;
+
+        if (discount.target === 'bundle') {
+          const items = nonSaleItems.filter((i: any) => discount.productIds.includes(i.productId));
+          const amount = bundleSavings(discount, items);
+          if (amount > 0 && (!best || amount > best.amount)) best = { discount, items, amount };
+          continue;
+        }
 
         const eligible = discount.target === 'store'
           ? nonSaleItems

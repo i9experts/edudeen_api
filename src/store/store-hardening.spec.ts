@@ -319,6 +319,8 @@ describe('public product view helpers', () => {
       downloadLimit: '3',
       fileCount: 2,
       previewAvailable: true,
+      sampleAvailable: false,
+      sampleName: null,
     });
   });
 

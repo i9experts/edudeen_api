@@ -7,6 +7,7 @@ import {
   parseScheduledAt,
   cleanDigitalSettings,
   assertStringArray,
+  resolveSellerPublishStatus,
 } from './product-input.util';
 
 describe('product-input.util', () => {
@@ -24,6 +25,23 @@ describe('product-input.util', () => {
     expect(parseScheduledAt('2026-10-15T00:00:00Z', now).toISOString()).toBe(
       '2026-10-15T00:00:00.000Z',
     );
+  });
+
+  it('resolveSellerPublishStatus: a never-approved listing goes to review; live or approved ones publish directly', () => {
+    const prev = process.env.LISTING_APPROVAL_REQUIRED;
+    delete process.env.LISTING_APPROVAL_REQUIRED;
+    try {
+      expect(resolveSellerPublishStatus('active', null)).toBe('pending_review');
+      expect(resolveSellerPublishStatus('scheduled', { status: 'draft' })).toBe('pending_review');
+      expect(resolveSellerPublishStatus('active', { status: 'rejected' })).toBe('pending_review');
+      expect(resolveSellerPublishStatus('draft', null)).toBe('draft');
+      expect(resolveSellerPublishStatus('active', { status: 'active' })).toBe('active'); // existing live products
+      expect(resolveSellerPublishStatus('active', { status: 'inactive', approvedAt: new Date() })).toBe('active');
+      process.env.LISTING_APPROVAL_REQUIRED = 'false';
+      expect(resolveSellerPublishStatus('active', null)).toBe('active');
+    } finally {
+      if (prev === undefined) delete process.env.LISTING_APPROVAL_REQUIRED; else process.env.LISTING_APPROVAL_REQUIRED = prev;
+    }
   });
 
   it('assertSellerStatus only allows the schema statuses', () => {

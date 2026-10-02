@@ -37,6 +37,14 @@ export const NOTIFICATION_TYPES = {
   STORE_REJECTED: 'store_rejected',
   VERIFICATION_UNDER_REVIEW: 'verification_under_review',
   PLATFORM_CAMPAIGN_LIVE: 'platform_campaign_live',
+  LISTING_APPROVED: 'listing_approved',
+  LISTING_REJECTED: 'listing_rejected',
+  PRODUCT_QUESTION: 'product_question',
+  QUESTION_ANSWERED: 'question_answered',
+  QUOTE_REQUESTED: 'quote_requested',
+  QUOTE_SENT: 'quote_sent',
+  QUOTE_ACCEPTED: 'quote_accepted',
+  QUOTE_DECLINED: 'quote_declined',
 } as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[keyof typeof NOTIFICATION_TYPES];
@@ -78,4 +86,12 @@ export const NOTIFICATION_CATEGORY: Record<string, 'orders' | 'messages' | 'prom
   [NOTIFICATION_TYPES.STORE_REJECTED]: 'promotions',
   [NOTIFICATION_TYPES.VERIFICATION_UNDER_REVIEW]: 'promotions',
   [NOTIFICATION_TYPES.PLATFORM_CAMPAIGN_LIVE]: 'promotions',
+  [NOTIFICATION_TYPES.LISTING_APPROVED]: 'promotions',
+  [NOTIFICATION_TYPES.LISTING_REJECTED]: 'promotions',
+  [NOTIFICATION_TYPES.PRODUCT_QUESTION]: 'messages',
+  [NOTIFICATION_TYPES.QUESTION_ANSWERED]: 'messages',
+  [NOTIFICATION_TYPES.QUOTE_REQUESTED]: 'orders',
+  [NOTIFICATION_TYPES.QUOTE_SENT]: 'orders',
+  [NOTIFICATION_TYPES.QUOTE_ACCEPTED]: 'orders',
+  [NOTIFICATION_TYPES.QUOTE_DECLINED]: 'orders',
 };

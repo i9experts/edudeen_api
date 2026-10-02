@@ -14,18 +14,32 @@ interface DigitalShape {
 export function sanitizeDigitalForPublicView<T extends { digital?: unknown }>(
   product: T,
 ): T {
+  product = hideLiveLink(product);
   if (!product?.digital) return product;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { files, preview, buyerDeliveryMessage, ...safeDigital } =
+  const { files, preview, buyerDeliveryMessage, sampleFile, ...safeDigital } =
     product.digital as DigitalShape;
+  const sample = sampleFile as { name?: string } | null | undefined;
   return {
     ...product,
     digital: {
       ...safeDigital,
       fileCount: Array.isArray(files) ? files.length : 0,
       previewAvailable: !!preview?.enabled,
+      // The sample itself is fetched through GET /api/products/:id/sample.
+      sampleAvailable: !!sample,
+      sampleName: sample?.name ?? null,
     },
   } as T;
+}
+
+/** A live class's meeting link goes only to buyers (GET /api/courses/live/:productId), never into public views. */
+function hideLiveLink<T>(product: T): T {
+  const live = (product as { liveSession?: { meetingUrl?: unknown } | null } | null)?.liveSession;
+  if (!live) return product;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { meetingUrl, ...rest } = live as Record<string, unknown>;
+  return { ...product, liveSession: rest } as T;
 }
 
 export { clampInt } from '../common/query-safety.util';

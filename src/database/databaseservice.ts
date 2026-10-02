@@ -293,6 +293,10 @@ export class DatabaseService {
 
     @InjectModel(schema.ProductAttributeValue.name)
     private productAttributeValueModel: Model<schema.ProductAttributeValueDocument>,
+    @InjectModel(schema.Bundle.name)
+    private bundleModel: Model<schema.BundleDocument>,
+    @InjectModel(schema.Course.name)
+    private courseModel: Model<schema.CourseDocument>,
 
   ) { }
 
@@ -397,6 +401,8 @@ export class DatabaseService {
       reconciliationRunModel: this.reconciliationRunModel,
       attributeDefinitionModel: this.attributeDefinitionModel,
       productAttributeValueModel: this.productAttributeValueModel,
+      bundleModel: this.bundleModel,
+      courseModel: this.courseModel,
     };
   }
 }

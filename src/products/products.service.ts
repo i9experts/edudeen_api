@@ -16,12 +16,12 @@ import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-bene
 import { EntitlementsService } from 'src/platform-plans/entitlements.service';
 import { MarketingService } from 'src/marketing/marketing.service';
 import { pickPrimaryCampaignForBadge } from 'src/marketing/campaign-pricing.util';
-import { EducationLevel } from './schemas/product.schema';
+import { EducationLevel, LICENSE_OPTION_LABEL, LICENSE_OPTION_NAME } from './schemas/product.schema';
 import { EducationLevelService } from './education-level.service';
 import { UploadService } from 'src/upload/upload.service';
 import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
 import { sanitizeDigitalForPublicView } from './product-public-view.util';
-import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings } from './product-input.util';
+import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, cleanLearningMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
 import { generateUniqueSlug } from 'src/common/slug.util';
 import { RedisService } from 'src/redis/redis.service';
 import { aggregateProductSales } from 'src/analytics/utils/order-aggregation.util';
@@ -200,9 +200,68 @@ export class ProductsService {
       });
     }
 
+    // Free sample: same ownership rule as the paid files.
+    let sampleFile: { url: string; name: string; size: number | null; mimeType: string | null } | null = existing?.sampleFile ?? null;
+    if (input.sampleFile !== undefined) {
+      if (input.sampleFile === null) sampleFile = null;
+      else {
+        const s = input.sampleFile as Record<string, unknown>;
+        if (!s || typeof s !== 'object') throw new BadRequestException('sampleFile must be an object');
+        const known = existing?.sampleFile?.url === s.url ? existing.sampleFile : null;
+        const trusted = await this.uploadedAssets.assertOwned(sellerId, s.url, 'digital_product', { alreadyReferenced: !!known });
+        const name = s.name === undefined && known ? known.name : assertText(s.name, 'sample file name', 255);
+        sampleFile = { url: s.url as string, name, size: trusted?.fileSize ?? known?.size ?? null, mimeType: trusted?.mimeType ?? known?.mimeType ?? null };
+      }
+    }
+
     const settings = cleanDigitalSettings(input, existing);
     const { preview, ...rest } = settings;
-    return this.prepareDigitalPreview(existing?.preview ?? null, { files, ...rest, preview });
+    return this.prepareDigitalPreview(existing?.preview ?? null, { files, ...rest, preview, sampleFile });
+  }
+
+  /** Creates, updates or removes the extra "License" variants of a digital
+   *  product so each license (one classroom, whole school) has its own price.
+   *  The default variant is the product's base license. */
+  private async syncLicenseVariants(product: any, baseLicense: string, tiers: { license: string; price: number; compareAtPrice: number | null }[], currency: string) {
+    const { productVariantModel } = this.databaseService.repositories;
+    const productId = String(product._id);
+    const variants = await productVariantModel.find({ productId, isDelete: false });
+    const def = variants.find((v: any) => v.isDefault) ?? variants[0];
+    const extra = tiers.filter(t => t.license !== baseLicense);
+    const option = (license: string) => [{ name: LICENSE_OPTION_NAME, value: LICENSE_OPTION_LABEL[license] ?? license }];
+
+    if (def) {
+      def.options = extra.length ? option(baseLicense) : [];
+      await def.save();
+    }
+    const wanted = new Set(extra.map(t => LICENSE_OPTION_LABEL[t.license] ?? t.license));
+    for (const v of variants) {
+      if (v === def) continue;
+      const label = v.options?.find((o: any) => o.name === LICENSE_OPTION_NAME)?.value;
+      if (!label || !wanted.has(label)) { v.isDelete = true; await v.save(); }
+    }
+    for (const t of extra) {
+      const label = LICENSE_OPTION_LABEL[t.license] ?? t.license;
+      const existing = variants.find((v: any) => v !== def && !v.isDelete && v.options?.some((o: any) => o.name === LICENSE_OPTION_NAME && o.value === label));
+      if (existing) {
+        existing.price = t.price;
+        existing.compareAtPrice = t.compareAtPrice;
+        await existing.save();
+      } else {
+        await productVariantModel.create({
+          productId,
+          sku: `SKU-${productId.slice(-6).toUpperCase()}-${t.license.slice(0, 3).toUpperCase()}`,
+          price: t.price,
+          currency,
+          compareAtPrice: t.compareAtPrice,
+          options: option(t.license),
+          stock: 0,
+          shippingWeight: null,
+          images: [],
+          isDefault: false,
+        });
+      }
+    }
   }
 
   /**
@@ -289,6 +348,34 @@ export class ProductsService {
         previewSourcePublicId,
         previewSourceResourceType,
       },
+    };
+  }
+
+  /** A course listing can't go live (or to review) until the course builder has at least one lesson. */
+  private async assertCourseReady(productId: string | null, format: string | null | undefined, nextStatus: string | null | undefined) {
+    if (format !== 'course' || !nextStatus || nextStatus === 'draft' || nextStatus === 'archived') return;
+    const course: any = productId ? await this.databaseService.repositories.courseModel.findOne({ productId }).select('sections').lean() : null;
+    const lessons = (course?.sections ?? []).reduce((n: number, s: any) => n + (s.lessons?.length ?? 0), 0);
+    if (!lessons) throw new BadRequestException('Add at least one lesson in the course builder before publishing — save this course as a draft first');
+  }
+
+  /** The seller's free sample (a separate file from what buyers get), as a   *  short-lived link. Rate-limited the same way as previews. */
+  async getProductSample(idOrSlug: string, clientIp: string) {
+    const count = await this.redisService.incrWithTtl(`sample:rl:${clientIp}:${idOrSlug}`, PREVIEW_RATE_LIMIT_WINDOW_SECONDS);
+    if (count !== null && count > PREVIEW_RATE_LIMIT_MAX) {
+      throw new HttpException({ success: false, message: 'Too many requests — please try again later' }, HttpStatus.TOO_MANY_REQUESTS);
+    }
+    const { productModel } = this.databaseService.repositories;
+    let product: any = await productModel.findOne({ slug: idOrSlug, status: 'active', isDelete: false }).lean();
+    if (!product && isValidObjectId(idOrSlug)) product = await productModel.findOne({ _id: idOrSlug, status: 'active', isDelete: false }).lean();
+    if (!product || !(await this.isStoreLive(product.storeId))) throw new NotFoundException('Product not found');
+    const sample = product.digital?.sampleFile;
+    if (!sample?.url) throw new NotFoundException('This product has no free sample');
+    const mimeType = this.uploadService.resolveMimeType(sample.name ?? '', sample.mimeType ?? 'application/octet-stream');
+    const resourceType = mimeType.startsWith('video/') ? 'video' : mimeType.startsWith('image/') ? 'image' : 'raw';
+    return {
+      success: true,
+      data: { name: sample.name, mimeType, url: this.uploadService.generateSignedUrl(sample.url, resourceType, 600, sample.name, true) },
     };
   }
 
@@ -424,6 +511,8 @@ export class ProductsService {
     minRating?: number,
     sortBy?: 'newest' | 'price_asc' | 'price_desc' | 'rating' | 'popularity',
     attributesFilter?: Record<string, string[]>,
+    search?: string,
+    learning?: { curriculum?: string; age?: number },
   ): Promise<any> {
     const productModel = this.databaseService.repositories.productModel;
     const productVariantModel =
@@ -434,6 +523,23 @@ export class ProductsService {
       status: 'active',
       isDelete: false,
     };
+
+    // Keyword search together with every filter below, so a search results
+    // page can page and filter on the server (the plain search endpoint can't).
+    // Exam board, and "suitable for age N" (an open end counts as a match).
+    if (learning?.curriculum) query.curricula = learning.curriculum;
+    if (learning?.age !== undefined) {
+      query.$and = [
+        { $or: [{ ageMin: null }, { ageMin: { $lte: learning.age } }] },
+        { $or: [{ ageMax: null }, { ageMax: { $gte: learning.age } }] },
+      ];
+    }
+
+    const term = typeof search === 'string' ? search.trim().slice(0, 100) : '';
+    if (term) {
+      const rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      query.$or = [{ name: rx }, { tags: rx }, { description: rx }];
+    }
 
     // 0️⃣ Optional productType/educationLevel filters — used by verticals like the
     // Education marketplace to show only `productType: 'educational'` listings
@@ -814,6 +920,47 @@ export class ProductsService {
 
   /** Active products for an explicit id list, preserving the given order —
    *  ids whose product is gone/inactive are silently dropped. */
+  /**
+   * "Teachers who bought this also bought": products that appear in the same
+   * paid orders as this one, most often first. Topped up with the best sellers
+   * for the same grade (or category) when there isn't enough order history.
+   */
+  async getAlsoBought(idOrSlug: string, limit = 8, customerId?: string | null) {
+    const { productModel, orderModel } = this.databaseService.repositories;
+    let product: any = await productModel.findOne({ slug: idOrSlug, status: 'active', isDelete: false }).select('_id categoryId educationLevel').lean();
+    if (!product && isValidObjectId(idOrSlug)) product = await productModel.findOne({ _id: idOrSlug, status: 'active', isDelete: false }).select('_id categoryId educationLevel').lean();
+    if (!product) throw new NotFoundException('Product not found');
+    const pid = String(product._id);
+    const max = Math.min(Math.max(limit, 1), 20);
+
+    const rows: { _id: string; n: number }[] = await orderModel.aggregate([
+      { $match: { isDelete: false, isPaid: true, 'sellerOrders.items.productId': pid } },
+      { $sort: { createdAt: -1 } },
+      { $limit: 300 },
+      { $unwind: '$sellerOrders' },
+      { $unwind: '$sellerOrders.items' },
+      { $match: { 'sellerOrders.items.productId': { $ne: pid } } },
+      { $group: { _id: '$sellerOrders.items.productId', n: { $sum: 1 } } },
+      { $sort: { n: -1 } },
+      { $limit: 40 },
+    ]);
+    const coIds = rows.map(r => r._id).filter(id => isValidObjectId(id));
+    let picked: any[] = (await this.getShapedProductsByIds(coIds, customerId)).slice(0, max);
+    let basis: 'bought_together' | 'similar' = picked.length ? 'bought_together' : 'similar';
+
+    if (picked.length < max) {
+      const have = new Set([pid, ...picked.map(p => String(p._id))]);
+      const filter: any = { status: 'active', isDelete: false, _id: { $nin: [...have] } };
+      if (product.educationLevel) filter.educationLevel = product.educationLevel;
+      else filter.categoryId = product.categoryId;
+      await this.restrictToActiveStores(filter);
+      const extra = await productModel.find(filter).sort({ purchaseCount: -1, averageRating: -1 }).limit(max - picked.length).lean();
+      picked = [...picked, ...(await this.attachVariantsAndPricing(extra, customerId))];
+      if (!rows.length) basis = 'similar';
+    }
+    return { success: true, data: { basis, products: picked.map(p => this.sanitizeDigitalForPublicView(p)) } };
+  }
+
   async getShapedProductsByIds(
     productIds: string[],
     customerId?: string | null,
@@ -1193,7 +1340,9 @@ export class ProductsService {
       tags: cleanTags,
       digital: null,
       isListedOnEdudeen: isListedOnEdudeen ?? false,
-      status: status ?? 'draft',
+      ...cleanLearningMeta(body),
+      // A first publish goes to admin review (see resolveSellerPublishStatus).
+      status: status ? resolveSellerPublishStatus(status, null) : 'draft',
       scheduledAt: scheduledDate,
     });
 
@@ -1347,6 +1496,8 @@ export class ProductsService {
 
     const validSubCategoryId = await this.resolveSubCategoryId(categoryId, subCategoryId);
     const digitalConfig = digital ? await this.buildDigitalConfig(sellerId, digital, null) : null;
+    const delivery = cleanDeliveryFormat(body, null);
+    await this.assertCourseReady(null, delivery.deliveryFormat, status ? resolveSellerPublishStatus(status, null) : 'draft');
 
     const slug = await generateUniqueSlug(productModel, name);
 
@@ -1367,7 +1518,10 @@ export class ProductsService {
       tags: cleanTags,
       digital: digitalConfig,
       isListedOnEdudeen: isListedOnEdudeen ?? false,
-      status: status ?? 'draft',
+      ...cleanLearningMeta(body),
+      ...delivery,
+      // A first publish goes to admin review (see resolveSellerPublishStatus).
+      status: status ? resolveSellerPublishStatus(status, null) : 'draft',
       scheduledAt: scheduledDate,
     });
 
@@ -1387,6 +1541,12 @@ export class ProductsService {
       images: [],
       isDefault: true,
     });
+
+    // Classroom / school licenses at their own prices.
+    if (body.licenseTiers !== undefined) {
+      const tiers = cleanLicenseTiers(body.licenseTiers);
+      if (tiers.length) await this.syncLicenseVariants(product, digitalConfig?.licenseType ?? 'personal', tiers, store.baseCurrency ?? 'PKR');
+    }
 
     return {
       success: true,
@@ -1541,11 +1701,21 @@ export class ProductsService {
       productUpdate.isListedOnEdudeen = isListedOnEdudeen;
     if (status !== undefined) {
       assertSellerStatus(status);
-      productUpdate.status = status;
+      productUpdate.status = resolveSellerPublishStatus(status, product);
       productUpdate.scheduledAt = status === 'scheduled' ? parseScheduledAt(scheduledAt) : null;
     }
     if (digital !== undefined && product.type === 'digital') {
       productUpdate.digital = await this.buildDigitalConfig(sellerId, digital, product.digital ?? null);
+    }
+    Object.assign(productUpdate, cleanLearningMeta(body));
+    if (product.type === 'digital') {
+      Object.assign(productUpdate, cleanDeliveryFormat(body, product as any));
+      await this.assertCourseReady(productId, productUpdate.deliveryFormat ?? (product as any).deliveryFormat, productUpdate.status ?? (productUpdate.deliveryFormat ? product.status : null));
+    }
+    {
+      const nextMin = productUpdate.ageMin !== undefined ? productUpdate.ageMin : product.ageMin;
+      const nextMax = productUpdate.ageMax !== undefined ? productUpdate.ageMax : product.ageMax;
+      if (nextMin != null && nextMax != null && nextMin > nextMax) throw new BadRequestException('ageMin cannot be more than ageMax');
     }
 
     if (educationLevel !== undefined && product.productType === 'educational') {
@@ -1609,6 +1779,14 @@ export class ProductsService {
         variantUpdate,
         { returnDocument: 'after' },
       );
+    }
+
+    // Classroom / school licenses (digital only). `null` or [] removes them.
+    if (body.licenseTiers !== undefined && product.type === 'digital') {
+      const tiers = cleanLicenseTiers(body.licenseTiers);
+      const store = await this.databaseService.repositories.storeModel.findById(product.storeId).select('baseCurrency').lean();
+      const baseLicense = (updatedProduct as any)?.digital?.licenseType ?? product.digital?.licenseType ?? 'personal';
+      await this.syncLicenseVariants(updatedProduct ?? product, baseLicense, tiers, (store as any)?.baseCurrency ?? 'PKR');
     }
 
     return {

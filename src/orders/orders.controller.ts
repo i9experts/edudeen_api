@@ -37,6 +37,14 @@ export class OrdersController {
     return this.ordersService.getOrdersByUserId(userId, query);
   }
 
+  // Every digital resource the buyer owns (My Library).
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('user')
+  @Get('my-library')
+  async getMyLibrary(@Req() req: any) {
+    return this.ordersService.getMyLibrary(req.user.userId);
+  }
+
   // signed URLs (non-stamped) + stamped stream URLs list
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('user')

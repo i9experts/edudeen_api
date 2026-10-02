@@ -190,6 +190,8 @@ import { DatabaseService } from './databaseservice';
       { name: schema.ReconciliationRun.name, schema: schema.ReconciliationRunSchema },
       { name: schema.AttributeDefinition.name, schema: schema.AttributeDefinitionSchema },
       { name: schema.ProductAttributeValue.name, schema: schema.ProductAttributeValueSchema },
+      { name: schema.Bundle.name, schema: schema.BundleSchema },
+      { name: schema.Course.name, schema: schema.CourseSchema },
     ]),
   ],
   exports: [MongooseModule, DatabaseService],

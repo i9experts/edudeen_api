@@ -482,6 +482,30 @@ export class Store {
   @Prop({ type: [String], default: [] })
   badges: string[];
 
+  // The teacher behind the store, shown to buyers: qualifications, years
+  // teaching, subjects and where they've taught. Seller-written; the admin's
+  // 'verified_educator' badge is what vouches for it.
+  @Prop({
+    type: {
+      headline: { type: String, default: null },
+      qualifications: { type: [String], default: [] },
+      experienceYears: { type: Number, default: null },
+      subjects: { type: [String], default: [] },
+      institutions: { type: [String], default: [] },
+      teachingLevels: { type: [String], default: [] },
+    },
+    default: null,
+    _id: false,
+  })
+  educatorProfile: {
+    headline: string | null;
+    qualifications: string[];
+    experienceYears: number | null;
+    subjects: string[];
+    institutions: string[];
+    teachingLevels: string[];
+  } | null;
+
   @Prop({ default: false })
   isDelete: boolean;
 

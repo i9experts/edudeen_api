@@ -11,6 +11,7 @@ import { SetFeaturedDto } from './dto/set-featured.dto';
 import { SetStoreBadgeDto } from './dto/set-store-badge.dto';
 import { LeadsQueryDto } from './dto/leads-query.dto';
 import { RejectLeadDto } from './dto/reject-lead.dto';
+import { ApproveListingDto, RejectListingDto } from './dto/review-listing.dto';
 
 @ApiTags('Admin Marketplace')
 @ApiBearerAuth()
@@ -43,6 +44,27 @@ export class AdminMarketplaceController {
   @Patch('listings/:id/remove')
   remove(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
     return this.adminMarketplaceService.remove(id, this.meta(req));
+  }
+
+  // ── Listing review (new listings wait here before going live) ──
+  @Get('listings/review/count')
+  getReviewCount() {
+    return this.adminMarketplaceService.getReviewCount();
+  }
+
+  @Get('listings/:id/review')
+  getListingForReview(@Param('id', ParseObjectIdPipe) id: string) {
+    return this.adminMarketplaceService.getListingForReview(id);
+  }
+
+  @Patch('listings/:id/approve')
+  approveListing(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: ApproveListingDto) {
+    return this.adminMarketplaceService.approveListing(id, dto.note, this.meta(req));
+  }
+
+  @Patch('listings/:id/reject')
+  rejectListing(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: RejectListingDto) {
+    return this.adminMarketplaceService.rejectListing(id, dto.reason, this.meta(req));
   }
 
   @Patch('stores/:id/badge')

@@ -118,3 +118,5 @@ export { PromotionDailyStats, PromotionDailyStatsDocument, PromotionDailyStatsSc
 export { PromotionClickEvent, PromotionClickEventDocument, PromotionClickEventSchema } from '../promotions/schemas/promotion-click-event.schema';
 export { AttributeDefinition, AttributeDefinitionDocument, AttributeDefinitionSchema } from '../attributes/schemas/attribute-definition.schema';
 export { ProductAttributeValue, ProductAttributeValueDocument, ProductAttributeValueSchema } from '../attributes/schemas/product-attribute-value.schema';
+export { Bundle, BundleDocument, BundleSchema } from '../classroom/schemas/bundle.schema';
+export { Course, CourseDocument, CourseSchema } from '../classroom/schemas/course.schema';

@@ -129,6 +129,8 @@ export class AdminMarketplaceService {
       purchaseCount: p.purchaseCount,
       status: flaggedIdSet.has(String(p._id)) ? 'flagged' : p.status,
       isFeatured: p.isFeatured,
+      reviewNote: (p as any).reviewNote ?? null,
+      createdAt: (p as any).createdAt,
     }));
 
     return { success: true, data: { items, total, page, limit } };
@@ -163,6 +165,114 @@ export class AdminMarketplaceService {
     await this.r.productModel.findByIdAndUpdate(id, { $set: { isDelete: true, status: 'inactive', isFeatured: false, removedByAdmin: true } });
     this.log('listing_removed', `Listing "${product.name}" removed by admin`, meta, id);
     return { success: true, message: 'Listing removed' };
+  }
+
+  // ── Listing review ────────────────────────────────────────────────────────
+  // A seller's first publish waits as 'pending_review' (see
+  // resolveSellerPublishStatus) until an admin approves or rejects it here.
+
+  async getReviewCount() {
+    const pending = await this.r.productModel.countDocuments({ isDelete: false, status: 'pending_review' });
+    return { success: true, data: { pending } };
+  }
+
+  /** Everything a reviewer needs on one screen, including short-lived links to the actual files. */
+  async getListingForReview(id: string) {
+    const product: any = await this.r.productModel.findOne({ _id: id, isDelete: false }).lean();
+    if (!product) throw new NotFoundException('Listing not found');
+    const [variants, seller, store, category, subCategory] = await Promise.all([
+      this.r.productVariantModel.find({ productId: String(product._id), isDelete: false }).lean(),
+      this.r.sellerModel.findById(product.sellerId).select('name email').lean(),
+      product.storeId ? this.r.storeModel.findById(product.storeId).select('name slug status badges').lean() : null,
+      product.categoryId ? this.r.categoryModel.findById(product.categoryId).select('name').lean() : null,
+      product.subCategoryId ? this.r.categoryModel.findById(product.subCategoryId).select('name').lean() : null,
+    ]);
+    const files = (product.digital?.files ?? []).map((f: any) => {
+      const mime = this.uploadService.resolveMimeType(f.name ?? '', f.mimeType ?? 'application/octet-stream');
+      const resourceType = mime.startsWith('video/') ? 'video' : mime.startsWith('image/') ? 'image' : 'raw';
+      return { name: f.name, size: f.size, mimeType: mime, viewUrl: this.uploadService.generateSignedUrl(f.url, resourceType, 600, f.name, true) };
+    });
+    return {
+      success: true,
+      data: {
+        id: product._id,
+        name: product.name,
+        slug: product.slug,
+        description: product.description,
+        images: product.images ?? [],
+        tags: product.tags ?? [],
+        type: product.type,
+        productType: product.productType,
+        educationLevel: product.educationLevel,
+        customLevel: product.customLevel,
+        status: product.status,
+        scheduledAt: product.scheduledAt,
+        reviewNote: product.reviewNote ?? null,
+        createdAt: product.createdAt,
+        updatedAt: product.updatedAt,
+        category: (category as any)?.name ?? null,
+        subCategory: (subCategory as any)?.name ?? null,
+        seller: seller ? { id: String((seller as any)._id), name: (seller as any).name, email: (seller as any).email } : null,
+        store: store ? { id: String((store as any)._id), name: (store as any).name, slug: (store as any).slug, status: (store as any).status, badges: (store as any).badges ?? [] } : null,
+        variants: variants.map((v: any) => ({ id: String(v._id), price: v.price, compareAtPrice: v.compareAtPrice ?? null, currency: v.currency ?? 'PKR', options: v.options ?? [], stock: v.stock, isDefault: !!v.isDefault })),
+        digital: product.digital ? {
+          licenseType: product.digital.licenseType, downloadLimit: product.digital.downloadLimit,
+          pdfStampingEnabled: !!product.digital.pdfStampingEnabled, files,
+        } : null,
+      },
+    };
+  }
+
+  private notifySeller(product: any, type: string, title: string, body: string) {
+    if (!product?.sellerId) return;
+    void this.notificationsService.notify({
+      recipientId: String(product.sellerId),
+      recipientRole: 'seller',
+      type,
+      title,
+      body,
+      data: { productId: String(product._id), storeId: product.storeId, link: product.storeId ? `/store/${product.storeId}/products` : undefined },
+    });
+  }
+
+  async approveListing(id: string, note: string | undefined, meta: AuditMeta) {
+    const now = new Date();
+    const current = await this.findProductOrThrow(id);
+    if (current.status !== 'pending_review' && current.status !== 'rejected') {
+      throw new ConflictException('This listing is not waiting for review');
+    }
+    // A listing the seller scheduled for later keeps that date.
+    const nextStatus = current.scheduledAt && new Date(current.scheduledAt) > now ? 'scheduled' : 'active';
+    // Claimed atomically, so two reviewers can't both act on it.
+    const product = await this.r.productModel.findOneAndUpdate(
+      { _id: id, isDelete: false, status: current.status },
+      { $set: { status: nextStatus, approvedAt: now, reviewedAt: now, reviewNote: note?.trim() || null } },
+      { returnDocument: 'after' },
+    );
+    if (!product) throw new ConflictException('Someone else just reviewed this listing — refresh the queue');
+    this.log('listing_approved', `Listing "${product.name}" approved`, meta, id);
+    this.notifySeller(product, NOTIFICATION_TYPES.LISTING_APPROVED,
+      `"${product.name}" is approved`,
+      nextStatus === 'scheduled' ? 'It will go live on the date you scheduled.' : 'It is now live on Edudeen.');
+    return { success: true, message: nextStatus === 'scheduled' ? 'Approved — goes live on its scheduled date' : 'Approved — now live', data: { status: nextStatus } };
+  }
+
+  async rejectListing(id: string, reason: string, meta: AuditMeta) {
+    const now = new Date();
+    const product = await this.r.productModel.findOneAndUpdate(
+      { _id: id, isDelete: false, status: 'pending_review' },
+      { $set: { status: 'rejected', reviewedAt: now, reviewNote: reason.trim(), isFeatured: false } },
+      { returnDocument: 'after' },
+    );
+    if (!product) {
+      await this.findProductOrThrow(id);
+      throw new ConflictException('This listing is not waiting for review');
+    }
+    this.log('listing_rejected', `Listing "${product.name}" sent back: ${reason.trim()}`, meta, id);
+    this.notifySeller(product, NOTIFICATION_TYPES.LISTING_REJECTED,
+      `"${product.name}" needs changes`,
+      `${reason.trim()} Edit the listing and publish it again to resubmit.`);
+    return { success: true, message: 'Sent back to the seller', data: { status: 'rejected' } };
   }
 
   /** Grants/revokes a trust badge (e.g. 'verified_educator') on a store — reuses

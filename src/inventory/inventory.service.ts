@@ -121,6 +121,8 @@ export class InventoryService {
         stockStatus,
         status: product.status,
         scheduledAt: product.scheduledAt ?? null,
+        // Why an admin sent the listing back (status 'rejected').
+        reviewNote: (product as any).reviewNote ?? null,
         price,
         compareAtPrice: defaultVariant?.compareAtPrice ?? null,
         allTimeSales: product.purchaseCount || 0,

@@ -1,3 +1,4 @@
+import { CURRICULA } from './schemas/product.schema';
 import { clampInt, queryString } from './product-public-view.util';
 import {
   Controller,
@@ -37,9 +38,13 @@ export class productController {
     @Query('minRating') minRatingQuery?: string,
     @Query('sortBy') sortByQuery?: string,
     @Query('attributes') attributesQuery?: string,
+    @Query('q') searchQuery?: string,
+    @Query('curriculum') curriculumQuery?: string,
+    @Query('age') ageQuery?: string,
   ) {
     // Express/qs hands back arrays and objects for ?x[]=1 / ?x[$ne]=1 even though these are typed as strings.
     id = queryString(id);
+    searchQuery = queryString(searchQuery);
     productType = queryString(productType);
     educationLevel = queryString(educationLevel);
     normalizedCustomLevel = queryString(normalizedCustomLevel);
@@ -98,6 +103,11 @@ export class productController {
       parseNum(minRatingQuery),
       sortBy,
       attributesFilter,
+      searchQuery,
+      {
+        curriculum: CURRICULA.includes(curriculumQuery as any) ? curriculumQuery : undefined,
+        age: ageQuery !== undefined && /^\d{1,2}$/.test(String(ageQuery)) ? Number(ageQuery) : undefined,
+      },
     );
   }
 
@@ -130,6 +140,17 @@ export class productController {
   @Get('preview/:id')
   async getProductPreview(@Req() req: any, @Param('id') id: string) {
     return this.ProductsService.getProductPreview(id, req.ip);
+  }
+
+  @Get('sample/:id')
+  async getProductSample(@Req() req: any, @Param('id') id: string) {
+    return this.ProductsService.getProductSample(id, req.ip);
+  }
+
+  @UseGuards(OptionalJwtAuthGuard)
+  @Get('also-bought/:id')
+  async getAlsoBought(@Req() req: any, @Param('id') id: string, @Query('limit') limit?: string) {
+    return this.ProductsService.getAlsoBought(id, clampInt(limit, 8, 1, 20), req.user?.userId ?? null);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

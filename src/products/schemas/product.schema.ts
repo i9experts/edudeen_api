@@ -101,8 +101,56 @@ export class DigitalConfig {
 
   @Prop({ type: DigitalPreviewSchema, default: () => ({}) })
   preview: DigitalPreview;
+
+  // A free sample anyone can download before buying (a few pages, one
+  // worksheet). Kept separate from `files`, which only buyers ever get.
+  @Prop({ type: DigitalFileSchema, default: null })
+  sampleFile: DigitalFile | null;
 }
 export const DigitalConfigSchema = SchemaFactory.createForClass(DigitalConfig);
+
+/** Exam boards / syllabi a resource follows — the filter general marketplaces don't have. */
+export const CURRICULA = [
+  'federal', 'punjab', 'sindh', 'kpk', 'balochistan', 'ajk_gb',
+  'cambridge_o', 'cambridge_a', 'igcse', 'ib', 'aku_eb', 'madrasa',
+] as const;
+export type Curriculum = (typeof CURRICULA)[number];
+
+/** License a buyer can choose when the seller offers more than one (stored as a variant option). */
+export const LICENSE_OPTION_NAME = 'License';
+export const LICENSE_OPTION_LABEL: Record<string, string> = {
+  personal: 'Personal use',
+  single_classroom: 'One classroom',
+  school: 'Whole school',
+  commercial: 'Commercial',
+};
+
+export const DELIVERY_FORMATS = ['download', 'course', 'live_class'] as const;
+export type DeliveryFormat = (typeof DELIVERY_FORMATS)[number];
+export const LIVE_PLATFORMS = ['zoom', 'google_meet', 'teams', 'other'] as const;
+
+@Schema({ _id: false })
+export class LiveSession {
+  @Prop({ type: Date, required: true })
+  startsAt: Date;
+
+  @Prop({ type: Number, required: true })
+  durationMinutes: number;
+
+  @Prop({ type: String, enum: LIVE_PLATFORMS, default: 'zoom' })
+  platform: string;
+
+  @Prop({ type: String, default: '' })
+  meetingUrl: string;
+
+  // null = no seat limit.
+  @Prop({ type: Number, default: null })
+  capacity: number | null;
+
+  @Prop({ type: String, default: '' })
+  notes: string;
+}
+export const LiveSessionSchema = SchemaFactory.createForClass(LiveSession);
 
 // ---- main product ----
 
@@ -150,6 +198,26 @@ export class Product {
   @Prop({ type: String, default: null })
   normalizedCustomLevel: string | null;
 
+  // Exam boards / syllabi this follows (see CURRICULA) — any product type.
+  @Prop({ type: [String], enum: CURRICULA, default: [] })
+  curricula: string[];
+
+  // Suitable ages, e.g. 6–8. Either end may be open.
+  @Prop({ type: Number, default: null })
+  ageMin: number | null;
+
+  @Prop({ type: Number, default: null })
+  ageMax: number | null;
+
+  // How a digital product reaches the buyer: files to download, an online
+  // course built in the course builder, or a scheduled live class.
+  @Prop({ type: String, enum: DELIVERY_FORMATS, default: 'download' })
+  deliveryFormat: DeliveryFormat;
+
+  // Only for deliveryFormat 'live_class'. meetingUrl is buyers-only (stripped from public views).
+  @Prop({ type: LiveSessionSchema, default: null })
+  liveSession: LiveSession | null;
+
   // product gallery / cover images (dono type ke liye)
   @Prop({ type: [String], default: [] })
   images: string[];
@@ -189,8 +257,22 @@ export class Product {
   @Prop({ type: Date, default: null })
   lastWishlistedAt: Date | null;
 
-  @Prop({ enum: ['active', 'inactive', 'draft', 'scheduled'], default: 'draft' })
+  // pending_review / rejected come from the admin listing review (see
+  // resolveSellerPublishStatus); every public query only shows 'active'.
+  @Prop({ enum: ['active', 'inactive', 'draft', 'scheduled', 'pending_review', 'rejected'], default: 'draft' })
   status: string;
+
+  // When an admin approved the listing; once set, the seller can publish and
+  // unpublish freely without another review.
+  @Prop({ type: Date, default: null })
+  approvedAt: Date | null;
+
+  // The reviewer's note to the seller (why it was rejected, what to fix).
+  @Prop({ type: String, default: null })
+  reviewNote: string | null;
+
+  @Prop({ type: Date, default: null })
+  reviewedAt: Date | null;
 
   @Prop({ type: Date, default: null })
   scheduledAt: Date | null;
@@ -225,6 +307,7 @@ export class Product {
 
 export const ProductSchema = SchemaFactory.createForClass(Product);
 
+ProductSchema.index({ curricula: 1 });
 ProductSchema.index({ sellerId: 1 });
 ProductSchema.index({ storeId: 1 });
 ProductSchema.index({ name: 1 });

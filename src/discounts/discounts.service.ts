@@ -141,7 +141,17 @@ export class DiscountsService {
       })
       .lean();
 
-    for (const d of discounts) {
+    // A seller's bundles compete in the same one-best-per-store pass, as a
+    // percentage discount that only applies once every bundle item is in the cart.
+    const bundles = await this.r.bundleModel
+      .find({ storeId: { $in: uniqueIds }, isActive: true, isDelete: false })
+      .lean();
+    const bundleCandidates = bundles.map((b: any) => ({
+      _id: b._id, storeId: b.storeId, name: b.name, target: 'bundle', discountType: 'percentage',
+      discountValue: b.discountPercent, productIds: b.productIds, categoryIds: [], minOrderAmount: null,
+    }));
+
+    for (const d of [...discounts, ...bundleCandidates]) {
       const existing = map.get(d.storeId);
       if (existing) existing.push(d);
       else map.set(d.storeId, [d]);

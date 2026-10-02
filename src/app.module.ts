@@ -52,6 +52,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { AdminConfigModule } from './admin-config/admin-config.module';
 import { AdminAnnouncementsModule } from './admin-announcements/admin-announcements.module';
 import { AdminMarketplaceModule } from './admin-marketplace/admin-marketplace.module';
+import { AdminOrdersModule } from './admin-orders/admin-orders.module';
 import { AdminModerationModule } from './admin-moderation/admin-moderation.module';
 import { AdminUsersModule } from './admin-users/admin-users.module';
 import { AdminMarketingModule } from './admin-marketing/admin-marketing.module';
@@ -60,6 +61,7 @@ import { StoreBannerModule } from './store-banner/store-banner.module';
 import { StoreThemeModule } from './store-theme/store-theme.module';
 import { StorePagesModule } from './store-pages/store-pages.module';
 import { StoreBlogModule } from './store-blog/store-blog.module';
+import { ClassroomModule } from './classroom/classroom.module';
 import { PromotionsModule } from './promotions/promotions.module';
 import { CommissionRulesModule } from './commission-rules/commission-rules.module';
 import { ManualPaymentsModule } from './manual-payments/manual-payments.module';
@@ -129,6 +131,7 @@ import { AttributesModule } from './attributes/attributes.module';
     AdminConfigModule,
     AdminAnnouncementsModule,
     AdminMarketplaceModule,
+    AdminOrdersModule,
     AdminModerationModule,
     AdminUsersModule,
     AdminMarketingModule,
@@ -137,6 +140,7 @@ import { AttributesModule } from './attributes/attributes.module';
     StoreThemeModule,
     StorePagesModule,
     StoreBlogModule,
+    ClassroomModule,
     PromotionsModule,
     ExchangeRateModule,
   ],
