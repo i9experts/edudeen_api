@@ -101,6 +101,19 @@ export class OrdersController {
     return this.ordersService.getSellerOrders(userId, storeId, query);
   }
 
+  // Seller's view of a single order (only their store's part of it).
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller', 'admin')
+  @Get('seller-orders/:storeId/:orderId')
+  async getSellerOrderDetail(
+    @Req() req: any,
+    @Param('storeId') storeId: string,
+    @Param('orderId') orderId: string,
+  ) {
+    const { userId } = req.user;
+    return this.ordersService.getSellerOrderDetail(userId, storeId, orderId);
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('user')
   @Post('cancel/:orderId')

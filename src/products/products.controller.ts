@@ -41,6 +41,7 @@ export class productController {
     @Query('q') searchQuery?: string,
     @Query('curriculum') curriculumQuery?: string,
     @Query('age') ageQuery?: string,
+    @Query('featured') featuredQuery?: string,
   ) {
     // Express/qs hands back arrays and objects for ?x[]=1 / ?x[$ne]=1 even though these are typed as strings.
     id = queryString(id);
@@ -107,6 +108,7 @@ export class productController {
       {
         curriculum: CURRICULA.includes(curriculumQuery as any) ? curriculumQuery : undefined,
         age: ageQuery !== undefined && /^\d{1,2}$/.test(String(ageQuery)) ? Number(ageQuery) : undefined,
+        featured: featuredQuery === '1' || featuredQuery === 'true',
       },
     );
   }

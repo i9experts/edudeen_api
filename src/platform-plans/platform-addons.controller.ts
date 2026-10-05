@@ -15,6 +15,13 @@ export class PlatformAddonsController {
 
   // Static "admin/addons" registered before the parameterized ":storeId/addons"
   // routes below — otherwise "admin" would be matched as a :storeId value.
+  // Public add-on catalog for the pricing page — static segment, so it is
+  // registered before ":storeId/addons" (else "public" would be a storeId).
+  @Get('public/addons')
+  publicAddonCatalog() {
+    return this.addonsService.getPublicCatalog();
+  }
+
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')

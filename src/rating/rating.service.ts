@@ -11,6 +11,7 @@ import { SellerReplyDto } from './dto/seller-reply.dto';
 import { LoyaltyService } from 'src/loyalty/loyalty.service';
 
 import { clampInt } from 'src/common/query-safety.util';
+import { recalcProductRating, recalcStoreRating } from './rating-aggregate.util';
 const DELIVERED_ITEM_STATUSES = ['delivered', 'completed'];
 
 @Injectable()
@@ -53,23 +54,9 @@ export class RatingService {
 
   // Recomputes from scratch instead of incrementing — avoids drift after
   // edits/deletes and keeps Product.averageRating/ratingSum always correct.
+  // (Shared with AdminModerationService via rating-aggregate.util.)
   private async recalcProductRating(productId: string) {
-    const { productModel, ratingModel } = this.r;
-
-    const agg = await ratingModel.aggregate([
-      { $match: { productId, isDelete: false, rating: { $ne: null } } },
-      { $group: { _id: null, sum: { $sum: '$rating' }, count: { $sum: 1 } } },
-    ]);
-
-    const sum = agg[0]?.sum ?? 0;
-    const count = agg[0]?.count ?? 0;
-    const average = count > 0 ? parseFloat((sum / count).toFixed(2)) : 0;
-
-    await productModel.findByIdAndUpdate(productId, {
-      ratingSum: sum,
-      averageRating: average,
-      totalRatings: count,
-    });
+    await recalcProductRating(this.r, productId);
   }
 
   // Same recompute-from-scratch approach as recalcProductRating, but scoped
@@ -77,22 +64,7 @@ export class RatingService {
   // time) so Store.averageRating/reviewCount stay correct across stores that
   // sell many products.
   private async recalcStoreRating(storeId: string | null | undefined) {
-    if (!storeId) return;
-    const { storeModel, ratingModel } = this.r;
-
-    const agg = await ratingModel.aggregate([
-      { $match: { storeId, isDelete: false, rating: { $ne: null } } },
-      { $group: { _id: null, sum: { $sum: '$rating' }, count: { $sum: 1 } } },
-    ]);
-
-    const sum = agg[0]?.sum ?? 0;
-    const count = agg[0]?.count ?? 0;
-    const average = count > 0 ? parseFloat((sum / count).toFixed(2)) : 0;
-
-    await storeModel.findByIdAndUpdate(storeId, {
-      averageRating: average,
-      reviewCount: count,
-    });
+    await recalcStoreRating(this.r, storeId);
   }
 
   // A review is a "Verified Purchase" if the reviewer has a non-deleted order
@@ -456,6 +428,60 @@ export class RatingService {
     };
   }
 
+  /**
+   * Public, privacy-safe read of a store's best recent reviews — used as the
+   * storefront Testimonials fallback when the seller hasn't written any
+   * quotes. Only rated reviews (>= minRating) that carry a written comment,
+   * never flagged ones; reviewer shown by first name (or "Anonymous").
+   */
+  async getPublicStoreReviews(storeId: string, query: any) {
+    const { ratingModel, userModel, storeModel } = this.r;
+    if (!storeId) throw new BadRequestException('storeId is required');
+    const store = await storeModel
+      .findOne({ _id: storeId, isDelete: false })
+      .select('_id')
+      .lean()
+      .catch(() => null);
+    if (!store) throw new NotFoundException('Store not found');
+
+    const limit = clampInt(query.limit, 6, 1, 12);
+    const minRating = clampInt(query.minRating, 4, 1, 5);
+
+    const reviews = await ratingModel
+      .find({
+        storeId,
+        isDelete: false,
+        isFlagged: { $ne: true },
+        rating: { $gte: minRating },
+        'comments.0.text': { $exists: true, $ne: '' },
+      })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+
+    const list = await Promise.all(
+      reviews.map(async (r: any) => {
+        const user = r.isAnonymous
+          ? null
+          : await userModel.findById(r.userId).select('name profileImage').lean();
+        const fullName = ((user as any)?.name || '').trim();
+        return {
+          reviewId: r._id,
+          customerName: r.isAnonymous
+            ? 'Anonymous'
+            : fullName.split(/\s+/)[0] || 'Customer',
+          avatarUrl: r.isAnonymous ? null : (user as any)?.profileImage || null,
+          rating: r.rating,
+          comment: r.comments?.[0]?.text ?? '',
+          isVerifiedPurchase: !!r.isVerifiedPurchase,
+          createdAt: r.createdAt,
+        };
+      }),
+    );
+
+    return { success: true, data: { reviews: list } };
+  }
+
   /** Toggle the caller's "helpful" vote on a review — idempotent, no self-vote block (own-review voting is harmless). */
   async toggleHelpful(userId: string, reviewId: string) {
     const { ratingModel } = this.r;
@@ -505,6 +531,10 @@ export class RatingService {
       filter.rating = parseInt(query.rating);
     if (query.productId && query.productId !== 'all')
       filter.productId = query.productId;
+    // ?status=replied|unreplied|flagged — the dashboard's reply/flag tabs.
+    if (query.status === 'replied') filter.sellerReply = { $ne: null };
+    else if (query.status === 'unreplied') filter.sellerReply = null;
+    else if (query.status === 'flagged') filter.isFlagged = true;
 
     const totalReviews = await ratingModel.countDocuments(filter);
     const totalPages = Math.ceil(totalReviews / limit);

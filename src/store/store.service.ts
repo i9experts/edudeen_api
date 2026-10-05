@@ -1,7 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { isValidObjectId } from 'mongoose';
 import { sanitizeDigitalForPublicView, clampInt, queryString } from 'src/products/product-public-view.util';
-import { assertSafePublicJson } from 'src/common/query-safety.util';
+import { assertSafePublicJson, escapeRegex, searchTerm } from 'src/common/query-safety.util';
 import {
   Injectable,
   BadRequestException,
@@ -1647,18 +1647,34 @@ export class StoreService {
     const skip = (page - 1) * limit;
 
     const customerIds = await orderModel.distinct('userId', { 'sellerOrders.storeId': storeId, isDelete: false });
-    const total = customerIds.length;
 
-    const matchStage = { $match: { userId: { $in: customerIds }, isDelete: false, 'sellerOrders.storeId': storeId } };
-    const unwindStages = [
-      matchStage,
+    // ?q= — case-insensitive name/email search (regex-escaped). Narrows the
+    // list only; the summary below stays store-wide.
+    let listIds: string[] = customerIds;
+    const q = searchTerm(query.q);
+    if (q) {
+      const rx = new RegExp(escapeRegex(q), 'i');
+      const matched = await userModel
+        .find({
+          _id: { $in: customerIds.filter((id: string) => isValidObjectId(id)) },
+          $or: [{ name: rx }, { email: rx }],
+        })
+        .select('_id')
+        .lean();
+      listIds = matched.map((u: any) => String(u._id));
+    }
+    const total = listIds.length;
+
+    const unwindFor = (ids: string[]) => [
+      { $match: { userId: { $in: ids }, isDelete: false, 'sellerOrders.storeId': storeId } },
       { $unwind: '$sellerOrders' },
       { $match: { 'sellerOrders.storeId': storeId } },
     ];
+    const unwindStages = unwindFor(customerIds);
 
     const [stats, [totals]] = await Promise.all([
       orderModel.aggregate([
-        ...unwindStages,
+        ...unwindFor(listIds),
         {
           $group: {
             _id: '$userId',

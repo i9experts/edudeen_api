@@ -20,6 +20,10 @@ import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 
 import { clampInt } from 'src/common/query-safety.util';
+import { AdminUpdateMessagingReportDto } from './dto/admin-update-report.dto';
+
+const MESSAGING_REPORT_TYPES = ['user', 'message', 'conversation'];
+
 @Injectable()
 export class MessagingService {
   constructor(
@@ -638,21 +642,63 @@ export class MessagingService {
   // ADMIN
   // ═══════════════════════════════════════════════════════════════════════════
 
+  /** Query-string id filters must be plain ObjectId strings — `?storeId[$ne]=x` would otherwise reach Mongo as an operator. */
+  private adminIdFilter(value: unknown, field: string): string | undefined {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value !== 'string' || !Types.ObjectId.isValid(value.trim())) throw new BadRequestException(`Invalid ${field}`);
+    return value.trim();
+  }
+
+  /** Batch-resolves display names for account ids that may belong to a buyer (users) or a seller (sellers) —
+   *  one account can be a buyer in one conversation and a seller elsewhere. */
+  private async adminNameMap(ids: string[]): Promise<Map<string, { name: string | null; email: string | null }>> {
+    const unique = [...new Set(ids.filter((id) => id && Types.ObjectId.isValid(id)))];
+    const map = new Map<string, { name: string | null; email: string | null }>();
+    if (!unique.length) return map;
+    const { userModel, sellerModel } = this.db.repositories;
+    const [users, sellers] = await Promise.all([
+      userModel.find({ _id: { $in: unique } }).select('name email').lean(),
+      sellerModel.find({ _id: { $in: unique } }).select('name email').lean(),
+    ]);
+    for (const p of [...(sellers as any[]), ...(users as any[])]) {
+      map.set(String(p._id), { name: p.name ?? null, email: p.email ?? null });
+    }
+    return map;
+  }
+
   async adminGetConversations(query: any) {
     const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
     const limit = Math.min(100, clampInt(query.limit, 30, 1, 100));
     const skip = (page - 1) * limit;
 
     const filter: any = {};
-    if (query.storeId) filter.storeId = query.storeId;
-    if (query.buyerId) filter.buyerId = query.buyerId;
-    if (query.sellerId) filter.sellerId = query.sellerId;
+    const storeId = this.adminIdFilter(query.storeId, 'storeId');
+    const buyerId = this.adminIdFilter(query.buyerId, 'buyerId');
+    const sellerId = this.adminIdFilter(query.sellerId, 'sellerId');
+    if (storeId) filter.storeId = storeId;
+    if (buyerId) filter.buyerId = buyerId;
+    if (sellerId) filter.sellerId = sellerId;
     if (query.isArchived !== undefined) filter.isArchived = query.isArchived === 'true';
 
-    const [conversations, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       this.convModel.find(filter).sort({ updatedAt: -1 }).skip(skip).limit(limit).lean(),
       this.convModel.countDocuments(filter),
     ]);
+
+    // Attach names so the admin table doesn't show raw id fragments.
+    const storeIds = [...new Set((rows as any[]).map((c) => String(c.storeId)).filter((id) => Types.ObjectId.isValid(id)))];
+    const [stores, people] = await Promise.all([
+      storeIds.length ? this.db.repositories.storeModel.find({ _id: { $in: storeIds } }).select('name slug').lean() : Promise.resolve([] as any[]),
+      this.adminNameMap((rows as any[]).flatMap((c) => [String(c.buyerId), String(c.sellerId)])),
+    ]);
+    const storeById = new Map((stores as any[]).map((s) => [String(s._id), s]));
+    const conversations = (rows as any[]).map((c) => ({
+      ...c,
+      storeName: storeById.get(String(c.storeId))?.name ?? null,
+      buyerName: people.get(String(c.buyerId))?.name ?? null,
+      buyerEmail: people.get(String(c.buyerId))?.email ?? null,
+      sellerName: people.get(String(c.sellerId))?.name ?? null,
+    }));
 
     return { conversations, total, page, limit, pages: Math.ceil(total / limit) };
   }
@@ -672,13 +718,43 @@ export class MessagingService {
     const limit = Math.min(100, clampInt(query.limit, 30, 1, 100));
     const skip = (page - 1) * limit;
     const filter: any = {};
-    if (query.status) filter.status = query.status;
-    if (query.targetType) filter.targetType = query.targetType;
+    if (query.status) filter.status = String(query.status);
+    if (query.targetType) filter.targetType = String(query.targetType);
 
-    const [reports, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       this.rptModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       this.rptModel.countDocuments(filter),
     ]);
+
+    // Reporter + reported-user names, so the table isn't raw ids.
+    const people = await this.adminNameMap((rows as any[]).flatMap((r) => [
+      String(r.reporterId), r.targetType === 'user' ? String(r.targetId) : '',
+    ]));
+    const reports = (rows as any[]).map((r) => ({
+      ...r,
+      reporterName: people.get(String(r.reporterId))?.name ?? null,
+      targetName: r.targetType === 'user' ? people.get(String(r.targetId))?.name ?? null : null,
+    }));
     return { reports, total, page, limit, pages: Math.ceil(total / limit) };
+  }
+
+  /** Admin triage of a messaging-abuse report: mark it reviewed, or resolve it (optionally with notes).
+   *  Only messaging target types — marketplace reports (listing/seller/review) go through Content Moderation. */
+  async adminUpdateReport(reportId: string, dto: AdminUpdateMessagingReportDto, adminId: string) {
+    if (!Types.ObjectId.isValid(reportId)) throw new BadRequestException('Invalid report ID');
+    const set: Record<string, unknown> = { status: dto.status, reviewedBy: adminId };
+    if (dto.adminNotes !== undefined) set.adminNotes = dto.adminNotes.trim() || null;
+    if (dto.status === 'resolved') set.resolvedAt = new Date();
+
+    const updated = await this.rptModel.findOneAndUpdate(
+      { _id: reportId, targetType: { $in: MESSAGING_REPORT_TYPES }, status: { $ne: 'resolved' } },
+      { $set: set },
+      { returnDocument: 'after' },
+    ).lean();
+    if (updated) return updated;
+
+    const exists = await this.rptModel.exists({ _id: reportId, targetType: { $in: MESSAGING_REPORT_TYPES } });
+    if (!exists) throw new NotFoundException('Report not found');
+    throw new ConflictException('This report has already been resolved');
   }
 }

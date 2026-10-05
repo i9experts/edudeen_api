@@ -512,7 +512,7 @@ export class ProductsService {
     sortBy?: 'newest' | 'price_asc' | 'price_desc' | 'rating' | 'popularity',
     attributesFilter?: Record<string, string[]>,
     search?: string,
-    learning?: { curriculum?: string; age?: number },
+    learning?: { curriculum?: string; age?: number; featured?: boolean },
   ): Promise<any> {
     const productModel = this.databaseService.repositories.productModel;
     const productVariantModel =
@@ -528,6 +528,8 @@ export class ProductsService {
     // page can page and filter on the server (the plain search endpoint can't).
     // Exam board, and "suitable for age N" (an open end counts as a match).
     if (learning?.curriculum) query.curricula = learning.curriculum;
+    // Listings an admin has featured (Admin → Listings).
+    if (learning?.featured) query.isFeatured = true;
     if (learning?.age !== undefined) {
       query.$and = [
         { $or: [{ ageMin: null }, { ageMin: { $lte: learning.age } }] },
@@ -694,7 +696,10 @@ export class ProductsService {
               ? { averageRating: -1, _id: -1 }
               : sortBy === 'popularity'
                 ? { purchaseCount: -1, _id: -1 }
-                : { createdAt: -1, _id: -1 };
+                : sortBy === 'newest'
+                  ? { createdAt: -1, _id: -1 }
+                  // Default order: Edudeen-featured listings first, then newest.
+                  : { isFeatured: -1, createdAt: -1, _id: -1 };
 
       pipeline.push({
         $facet: {
@@ -717,7 +722,10 @@ export class ProductsService {
           ? { averageRating: -1, _id: -1 }
           : sortBy === 'popularity'
             ? { purchaseCount: -1, _id: -1 }
-            : { createdAt: -1, _id: -1 };
+            : sortBy === 'newest'
+              ? { createdAt: -1, _id: -1 }
+              // Default order: Edudeen-featured listings first, then newest.
+              : { isFeatured: -1, createdAt: -1, _id: -1 };
 
       total = await productModel.countDocuments(query);
       products = await productModel

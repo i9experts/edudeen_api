@@ -812,11 +812,18 @@ export class AuthService {
         throw new UnauthorizedException('User not found');
       }
 
+      // Whether a password is set at all — a social-only (e.g. Google) account
+      // has none. Never exposes the hash itself, only the boolean.
+      const hasPassword = !!(await userModel.exists({
+        _id: userId,
+        password: { $exists: true, $nin: [null, ''] },
+      }));
+
       // 3️⃣ Return data
       return {
         message: 'Profile fetched successfully',
         success: true,
-        data: user,
+        data: { ...user.toJSON(), hasPassword },
       };
     } catch (error) {
       throw this.mapError(error, 'Failed to fetch profile');

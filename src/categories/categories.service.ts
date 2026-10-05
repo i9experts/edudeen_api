@@ -139,6 +139,28 @@ export class CategoriesService {
     return { success: true, message: 'Category deleted successfully', data: { reassigned } };
   }
 
+  /** Admin view of the whole taxonomy: every non-deleted category, active or
+   *  inactive (so a deactivated one can be found and re-enabled), nested two
+   *  levels and ordered by sortOrder — the same order the public tree uses. */
+  async getAdminCategoryTree() {
+    const categoryModel = this.databaseService.repositories.categoryModel;
+    const [all, countMap] = await Promise.all([
+      categoryModel.find({ isDelete: false }).sort({ sortOrder: 1, _id: 1 }).lean(),
+      this.getActiveProductCountsByCategory(),
+    ]);
+    const nodes = new Map<string, any>();
+    for (const c of all as any[]) nodes.set(String(c._id), { ...c, children: [] });
+    const roots: any[] = [];
+    for (const node of nodes.values()) {
+      const parent = node.parentId ? nodes.get(String(node.parentId)) : null;
+      if (parent) parent.children.push(node);
+      else if (!node.parentId) roots.push(node);
+      // A child whose parent was deleted is orphaned — not shown, matching the public tree.
+    }
+    this.attachProductCounts(roots, countMap);
+    return { success: true, message: 'Admin category tree fetched successfully', data: roots };
+  }
+
   async addCategory(
     userId: string,
     role: string,
@@ -344,6 +366,7 @@ export class CategoriesService {
         status: 'active',
         isDelete: false,
       })
+      .sort({ sortOrder: 1, _id: 1 })
       .lean();
 
     const result: any[] = [];
@@ -400,7 +423,7 @@ export class CategoriesService {
       parentId,
       status: 'active',
       isDelete: false,
-    });
+    }).sort({ sortOrder: 1, _id: 1 });
 
     const result: any[] = [];
 

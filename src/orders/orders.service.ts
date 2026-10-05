@@ -21,7 +21,11 @@ import { round } from 'src/common/number.util';
 import { PaymentService } from 'src/payment/payment.service';
 import { orderStatusEmail } from 'src/notifications/templates/notification-email.template';
 
-import { clampInt } from 'src/common/query-safety.util';
+import {
+  clampInt,
+  escapeRegex,
+  searchTerm,
+} from 'src/common/query-safety.util';
 /** A sellerOrder's true payout basis for FinanceService.recordSale, in the
  *  SELLER'S OWN currency (so.settlementCurrency) — independent of what
  *  currency the buyer actually paid in (order.currency). Computed once at
@@ -355,6 +359,36 @@ export class OrdersService {
       }
     }
 
+    // ?q= — order number, buyer name/email, or one of THIS store's item names
+    // (case-insensitive, regex-escaped). Buyer lookup is limited to people
+    // who actually ordered from the scoped store(s).
+    const q = searchTerm(query.q);
+    if (q) {
+      const rx = new RegExp(escapeRegex(q), 'i');
+      const buyerIds = await orderModel.distinct('userId', {
+        'sellerOrders.storeId': { $in: storeIds },
+        isDelete: false,
+      });
+      const matchedBuyers = buyerIds.length
+        ? await userModel
+            .find({
+              _id: { $in: buyerIds.filter((id: any) => isValidObjectId(id)) },
+              $or: [{ name: rx }, { email: rx }],
+            })
+            .select('_id')
+            .lean()
+        : [];
+      matchFilter.$or = [
+        { orderNumber: rx },
+        {
+          sellerOrders: {
+            $elemMatch: { storeId: { $in: storeIds }, 'items.name': rx },
+          },
+        },
+        { userId: { $in: matchedBuyers.map((u: any) => u._id.toString()) } },
+      ];
+    }
+
     const totalOrders = await orderModel.countDocuments(matchFilter);
     const totalPages = Math.ceil(totalOrders / limit);
 
@@ -442,6 +476,73 @@ export class OrdersService {
           totalOrders,
         },
         orders: rows.filter(Boolean),
+      },
+    };
+  }
+
+  /** One order as the selling store sees it: only that store's sellerOrder
+   *  (items, tracking, totals), plus the buyer's contact and shipping address.
+   *  403 when the store isn't the seller's, 404 when the order has no part for it. */
+  async getSellerOrderDetail(sellerId: string, storeId: string, orderId: string) {
+    const { orderModel, storeModel, userModel } =
+      this.databaseService.repositories;
+
+    if (!isValidObjectId(storeId) || !isValidObjectId(orderId))
+      throw new NotFoundException('Order not found');
+
+    const store = await storeModel
+      .findOne({ _id: storeId, sellerId, isDelete: false })
+      .select('_id')
+      .lean();
+    if (!store) throw new ForbiddenException('Store not found or unauthorized');
+
+    const order: any = await orderModel
+      .findOne({ _id: orderId, isDelete: false, 'sellerOrders.storeId': storeId })
+      .lean();
+    const so = order?.sellerOrders?.find((s: any) => s.storeId === storeId);
+    if (!order || !so) throw new NotFoundException('Order not found');
+
+    const user: any = await userModel
+      .findOne({ _id: order.userId })
+      .select('name email phone')
+      .lean();
+
+    return {
+      success: true,
+      data: {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        date: order.createdAt,
+        currency: order.currency ?? 'USD',
+        isPaid: order.isPaid,
+        paymentType: order.paymentType,
+        customer: {
+          name: user?.name || 'Unknown',
+          email: user?.email || '',
+          phone: user?.phone || null,
+        },
+        shippingAddress: order.shippingAddress ?? null,
+        status: so.status,
+        type: so.fulfillmentType,
+        subtotal: so.subtotal,
+        tracking: so.tracking ?? null,
+        shippedAt: so.shippedAt ?? null,
+        deliveredAt: so.deliveredAt ?? null,
+        items: (so.items ?? []).map((it: any) => ({
+          productId: it.productId,
+          variantId: it.variantId ?? null,
+          name: it.name,
+          image: it.image ?? null,
+          sku: it.sku ?? null,
+          type: it.type,
+          productType: it.productType ?? null,
+          options: it.options ?? [],
+          licenseType: it.licenseType ?? null,
+          quantity: it.quantity,
+          price: it.price,
+          totalPrice: it.totalPrice,
+          status: it.status ?? null,
+        })),
       },
     };
   }
@@ -1019,10 +1120,36 @@ export class OrdersService {
       )
       .reduce((sum, { item }) => sum + (item.refundedAmount || 0), 0);
 
+    // ?q= — narrows the list (not the stats) by order number, item name, or
+    // buyer name/email; case-insensitive, regex-escaped.
+    let listItems = returnItems;
+    const q = searchTerm(query.q);
+    if (q) {
+      const rx = new RegExp(escapeRegex(q), 'i');
+      const buyerIds = [
+        ...new Set(returnItems.map(({ order }) => String(order.userId))),
+      ].filter((id) => isValidObjectId(id));
+      const matchedBuyers = buyerIds.length
+        ? await userModel
+            .find({ _id: { $in: buyerIds }, $or: [{ name: rx }, { email: rx }] })
+            .select('_id')
+            .lean()
+        : [];
+      const buyerSet = new Set(
+        (matchedBuyers as any[]).map((u) => u._id.toString()),
+      );
+      listItems = returnItems.filter(
+        ({ order, item }) =>
+          rx.test(order.orderNumber ?? '') ||
+          rx.test(item.name ?? '') ||
+          buyerSet.has(String(order.userId)),
+      );
+    }
+
     // paginate
-    const total = returnItems.length;
+    const total = listItems.length;
     const totalPages = Math.ceil(total / limit);
-    const paginated = returnItems.slice(skip, skip + limit);
+    const paginated = listItems.slice(skip, skip + limit);
 
     const list = await Promise.all(
       paginated.map(async ({ order, so, item }) => {

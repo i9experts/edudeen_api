@@ -55,6 +55,26 @@ describe('CategoriesService — admin management', () => {
     });
   });
 
+  describe('getAdminCategoryTree', () => {
+    it('nests every non-deleted category (inactive included) in sortOrder and drops orphans', async () => {
+      const rows = [
+        { _id: 'r1', name: 'B', parentId: null, status: 'active', sortOrder: 0 },
+        { _id: 'r2', name: 'A', parentId: null, status: 'inactive', sortOrder: 1 },
+        { _id: 's1', name: 'Sub', parentId: 'r1', status: 'inactive', sortOrder: 0 },
+        { _id: 'o1', name: 'Orphan', parentId: 'gone', status: 'active', sortOrder: 0 },
+      ];
+      const sort = jest.fn(() => ({ lean: jest.fn().mockResolvedValue(rows) }));
+      categoryModel.find = jest.fn(() => ({ sort }));
+      productModel.aggregate = jest.fn().mockResolvedValue([{ _id: 'r1', count: 2 }]);
+      const res: any = await service.getAdminCategoryTree();
+      expect(categoryModel.find).toHaveBeenCalledWith({ isDelete: false });
+      expect(sort).toHaveBeenCalledWith({ sortOrder: 1, _id: 1 });
+      expect(res.data.map((n: any) => n._id)).toEqual(['r1', 'r2']);
+      expect(res.data[0].children.map((n: any) => n._id)).toEqual(['s1']);
+      expect(res.data[0].productCount).toBe(2);
+    });
+  });
+
   describe('deleteCategory', () => {
     it('soft-deletes an unreferenced category and audits it', async () => {
       categoryModel.findOne.mockResolvedValue(cat());

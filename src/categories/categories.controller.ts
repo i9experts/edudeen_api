@@ -45,6 +45,13 @@ export class CategoriesController {
   // ── Admin taxonomy management (declared reorder before :id routes) ──
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
+  @Get('admin/tree')
+  async adminTree() {
+    return this.categoriesService.getAdminCategoryTree();
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   @Patch('reorder')
   async reorder(@Req() req: AdminRequest, @Body() dto: ReorderCategoriesDto) {
     return this.categoriesService.reorderCategories(dto, auditMeta(req));

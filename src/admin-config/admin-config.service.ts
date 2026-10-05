@@ -11,6 +11,8 @@ import { PlacementLimitKey } from '../common/promotion-placements.const';
 import { UpdatePayoutConfigDto } from './dto/update-payout-config.dto';
 import { UpdateManualPaymentConfigDto } from './dto/update-manual-payment-config.dto';
 import { UpdateFxConfigDto } from './dto/update-fx-config.dto';
+import { UpdateSocialLinksDto } from './dto/update-social-links.dto';
+import { SOCIAL_LINK_KEYS } from './schemas/platform-config.schema';
 
 export type FeatureFlagKey =
   | 'aiStudio' | 'marketplace' | 'digitalUploads' | 'affiliateProgram'
@@ -237,6 +239,44 @@ export class AdminConfigService {
     this.invalidateCache();
     await this.logChange('fx_config_updated', `FX config updated: ${JSON.stringify(dto)}`, meta);
     return { success: true, message: 'FX config updated', data: config };
+  }
+
+  async updateSocialLinks(dto: UpdateSocialLinksDto, meta: AuditMeta) {
+    const set: Record<string, unknown> = {};
+    for (const key of SOCIAL_LINK_KEYS) {
+      const value = dto[key];
+      if (value === undefined) continue;
+      const trimmed = typeof value === 'string' ? value.trim() : '';
+      set[`socialLinks.${key}`] = trimmed ? trimmed : null;
+    }
+    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
+    this.invalidateCache();
+    await this.logChange('social_links_updated', `Social links updated: ${Object.keys(set).map(k => k.replace('socialLinks.', '')).join(', ') || 'none'}`, meta);
+    return { success: true, message: 'Social links updated', data: config };
+  }
+
+  /**
+   * Public, read-only slice of the platform config — ONLY fields that are safe
+   * for anyone to see (no bank details, no email/AI/fx internals). Used by the
+   * public site (footer social icons, seller marketing copy).
+   */
+  async getPublicConfig() {
+    const config = await this.getRawConfig();
+    const links = (config.socialLinks ?? {}) as Record<string, string | null | undefined>;
+    const socialLinks: Record<string, string> = {};
+    for (const key of SOCIAL_LINK_KEYS) {
+      const v = links[key];
+      if (typeof v === 'string' && /^https?:\/\//i.test(v.trim())) socialLinks[key] = v.trim();
+    }
+    return {
+      success: true,
+      data: {
+        socialLinks,
+        payout: {
+          frequency: config.payoutConfig?.payoutFrequency ?? 'monthly',
+        },
+      },
+    };
   }
 
   async setMaintenanceMode(maintenanceMode: boolean, meta: AuditMeta) {

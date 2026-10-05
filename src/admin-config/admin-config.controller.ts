@@ -14,6 +14,7 @@ import { UpdatePromotionPricingDto } from './dto/update-promotion-pricing.dto';
 import { UpdatePayoutConfigDto } from './dto/update-payout-config.dto';
 import { UpdateManualPaymentConfigDto } from './dto/update-manual-payment-config.dto';
 import { UpdateFxConfigDto } from './dto/update-fx-config.dto';
+import { UpdateSocialLinksDto } from './dto/update-social-links.dto';
 
 @ApiTags('Admin Platform Config')
 @ApiBearerAuth()
@@ -95,6 +96,15 @@ export class AdminConfigController {
   @Put('fx')
   updateFxConfig(@Req() req: any, @Body() dto: UpdateFxConfigDto) {
     return this.adminConfigService.updateFxConfig(dto, {
+      adminId: req.user.userId,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+  }
+
+  @Put('social-links')
+  updateSocialLinks(@Req() req: any, @Body() dto: UpdateSocialLinksDto) {
+    return this.adminConfigService.updateSocialLinks(dto, {
       adminId: req.user.userId,
       ip: req.ip,
       userAgent: req.headers['user-agent'],

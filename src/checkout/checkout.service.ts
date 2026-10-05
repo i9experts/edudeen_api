@@ -592,6 +592,12 @@ export class CheckoutService {
       ? body.attributionSource
       : 'other';
 
+    // Once an admin has set up delivery zones, a physical order must name one —
+    // otherwise leaving the field out would skip the shipping charge entirely.
+    if (hasPhysical && !body.shippingZoneId) {
+      const zonesConfigured = await this.databaseService.repositories.shippingZoneModel.exists({ isDelete: false, status: { $ne: 'inactive' } });
+      if (zonesConfigured) throw new BadRequestException('Choose a delivery option for your address');
+    }
     const checkout = await checkoutModel.create({
       userId,
       addressId: defaultAddressId,

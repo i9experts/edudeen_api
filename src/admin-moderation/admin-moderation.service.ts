@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { recalcProductRating, recalcStoreRating } from '../rating/rating-aggregate.util';
 import { isValidObjectId } from 'mongoose';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogService } from '../activity-log/activity-log.service';
@@ -17,6 +18,8 @@ const MARKETPLACE_TARGET_TYPES = ['listing', 'seller', 'review'];
 
 @Injectable()
 export class AdminModerationService {
+  private readonly logger = new Logger(AdminModerationService.name);
+
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly activityLogService: ActivityLogService,
@@ -76,11 +79,16 @@ export class AdminModerationService {
   private async enrich(reports: any[]) {
     const listingIds = reports.filter((r) => r.targetType === 'listing' && isValidObjectId(r.targetId)).map((r) => r.targetId);
     const sellerReportTargetIds = reports.filter((r) => r.targetType === 'seller' && isValidObjectId(r.targetId)).map((r) => r.targetId);
+    const reviewIds = reports.filter((r) => r.targetType === 'review' && isValidObjectId(r.targetId)).map((r) => r.targetId);
 
-    const [products, directSellers] = await Promise.all([
+    const [products, directSellers, reviews] = await Promise.all([
       this.r.productModel.find({ _id: { $in: listingIds } }, { name: 1, sellerId: 1 }),
       this.r.sellerModel.find({ _id: { $in: sellerReportTargetIds } }, { name: 1 }),
+      reviewIds.length
+        ? this.r.ratingModel.find({ _id: { $in: reviewIds } }, { rating: 1, comments: { $slice: 1 }, isDelete: 1 }).lean<any[]>()
+        : Promise.resolve([] as any[]),
     ]);
+    const reviewById = new Map(reviews.map((rv) => [String(rv._id), rv]));
 
     const productById = new Map(products.map((p) => [String(p._id), p]));
     const productSellerIds = products.map((p) => p.sellerId).filter((id) => isValidObjectId(id));
@@ -99,7 +107,12 @@ export class AdminModerationService {
       if (r.targetType === 'seller') {
         return { ...r, itemLabel: sellerNameById.get(r.targetId) ?? 'Unknown seller', sellerName: sellerNameById.get(r.targetId) ?? 'Unknown' };
       }
-      return { ...r, itemLabel: `Review ${r.targetId}`, sellerName: null };
+      const review = reviewById.get(String(r.targetId));
+      if (!review) return { ...r, itemLabel: `Review ${r.targetId}`, sellerName: null };
+      const text: string = review.comments?.[0]?.text ?? '';
+      const stars = review.rating ? `${review.rating}★ ` : '';
+      const snippet = text ? `"${text.length > 80 ? `${text.slice(0, 80)}…` : text}"` : '(no comment)';
+      return { ...r, itemLabel: `${stars}review ${snippet}${review.isDelete ? ' — already removed' : ''}`, sellerName: null };
     });
   }
 
@@ -140,6 +153,22 @@ export class AdminModerationService {
     throw new ConflictException('This report has already been resolved');
   }
 
+  /** After a reported review is hidden, refresh the product/store aggregates with the same helpers the
+   *  buyer/seller delete paths use. Best-effort: the review is already hidden, so a failed recompute must not
+   *  roll the report back — it only leaves the cached average stale until the next review change. */
+  private async recalcAfterReviewRemoval(reviewId: string) {
+    try {
+      const review = await this.r.ratingModel
+        .findById(reviewId, { productId: 1, storeId: 1, rating: 1 })
+        .lean<{ productId?: string; storeId?: string | null; rating?: number | null }>();
+      if (!review || review.rating == null) return;
+      if (review.productId) await recalcProductRating(this.r, review.productId);
+      await recalcStoreRating(this.r, review.storeId);
+    } catch (err) {
+      this.logger.warn(`Rating recompute after removing review ${reviewId} failed: ${(err as Error)?.message}`);
+    }
+  }
+
   async markReviewed(id: string, meta: AuditMeta) {
     const report = await this.claimReport(id, { status: 'reviewed', reviewedBy: meta.adminId }, ['pending', 'reviewed']);
     this.log('report_reviewed', `Report ${id} (${report.targetType}) marked reviewed`, meta, id);
@@ -176,6 +205,7 @@ export class AdminModerationService {
       } else if (report.targetType === 'review') {
         // "Remove" on a review report used to resolve the report without touching the review.
         await this.r.ratingModel.updateOne({ _id: report.targetId }, { $set: { isDelete: true } });
+        await this.recalcAfterReviewRemoval(report.targetId);
       }
     } catch (err) {
       // The action did not happen — put the report back so it can be retried instead of being lost as "removed".

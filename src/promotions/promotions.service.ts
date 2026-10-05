@@ -488,6 +488,29 @@ export class PromotionsService {
       { $inc: set },
       { upsert: true },
     );
+    // An approved paid promotion runs as a platform banner, and buyers' pages
+    // report views/clicks against that banner — count them for the seller's
+    // promotion too, so their promotion analytics show real numbers.
+    if (entityType === 'banner') {
+      const promotionId = await this.promotionForBanner(entityId);
+      if (promotionId) {
+        await this.statsModel.updateOne(
+          { entityType: 'promotion_request', entityId: promotionId, date: this.todayKey() },
+          { $inc: set },
+          { upsert: true },
+        );
+      }
+    }
+  }
+
+  private bannerPromotionCache = new Map<string, { id: string | null; at: number }>();
+  private async promotionForBanner(bannerId: string): Promise<string | null> {
+    const hit = this.bannerPromotionCache.get(bannerId);
+    if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.id;
+    const promo: any = await this.databaseService.repositories.promotionRequestModel.findOne({ resultingBannerId: bannerId }).select('_id').lean();
+    const id = promo ? String(promo._id) : null;
+    this.bannerPromotionCache.set(bannerId, { id, at: Date.now() });
+    return id;
   }
 
   async trackImpression(entityType: PromotionEntityType, entityId: string, device?: 'desktop' | 'mobile' | 'tablet') {

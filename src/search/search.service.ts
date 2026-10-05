@@ -27,8 +27,9 @@ export class SearchService {
 
   /** Runs the search and, for logged-in callers, records the term (fire-and-
    *  forget — a history write must never fail the search itself). */
-  async searchProducts(q: string, page: number, limit: number, userId: string | null) {
-    const result = await this.productsService.searchProducts(q, page, limit, userId);
+  async searchProducts(q: string, page: number, limit: number, userId: string | null, viewerId: string | null = userId) {
+    // viewerId (for member pricing) can be set without recording history (userId null).
+    const result = await this.productsService.searchProducts(q, page, limit, viewerId);
 
     if (userId && (q || '').trim()) {
       this.recordSearch(userId, q).catch(() => undefined);
@@ -45,6 +46,28 @@ export class SearchService {
   }
 
   // ── Recent searches ────────────────────────────────────────────────────────
+
+  private trendingCache: { at: number; data: { query: string; searches: number }[] } | null = null;
+
+  /** What buyers are searching for lately, across everyone: terms searched by
+   *  at least two different people in the last 14 days, most-searched first.
+   *  (One person's search never shows up here on its own.) Cached ~10 minutes. */
+  async getTrendingSearches(limit = 8) {
+    if (this.trendingCache && Date.now() - this.trendingCache.at < 10 * 60 * 1000) {
+      return { success: true, data: this.trendingCache.data.slice(0, limit) };
+    }
+    const since = new Date(Date.now() - 14 * 24 * 3600 * 1000);
+    const rows: { _id: string; display: string; users: number; searches: number }[] = await this.r.recentSearchModel.aggregate([
+      { $match: { updatedAt: { $gte: since } } },
+      { $group: { _id: '$query', display: { $last: '$displayQuery' }, users: { $sum: 1 }, searches: { $sum: '$count' } } },
+      { $match: { users: { $gte: 2 } } },
+      { $sort: { users: -1, searches: -1 } },
+      { $limit: 20 },
+    ]);
+    const data = rows.map(r => ({ query: r.display || r._id, searches: r.searches }));
+    this.trendingCache = { at: Date.now(), data };
+    return { success: true, data: data.slice(0, limit) };
+  }
 
   async recordSearch(userId: string, rawQuery: string) {
     const displayQuery = (rawQuery || '').trim().slice(0, MAX_QUERY_LENGTH);

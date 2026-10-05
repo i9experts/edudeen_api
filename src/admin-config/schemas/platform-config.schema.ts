@@ -127,6 +127,20 @@ export class EmailConfig {
 }
 export const EmailConfigSchema = SchemaFactory.createForClass(EmailConfig);
 
+// Platform's own social profiles — shown in the public site footer. Every
+// link is optional; the footer renders only the ones an admin has set.
+@Schema({ _id: false })
+export class SocialLinks {
+  @Prop({ type: String, default: null }) facebook: string | null;
+  @Prop({ type: String, default: null }) instagram: string | null;
+  @Prop({ type: String, default: null }) linkedin: string | null;
+  @Prop({ type: String, default: null }) youtube: string | null;
+  @Prop({ type: String, default: null }) tiktok: string | null;
+  @Prop({ type: String, default: null }) x: string | null;
+}
+export const SocialLinksSchema = SchemaFactory.createForClass(SocialLinks);
+export const SOCIAL_LINK_KEYS = ['facebook', 'instagram', 'linkedin', 'youtube', 'tiktok', 'x'] as const;
+
 // Singleton collection — exactly one document ever exists, fetched/updated via
 // upsert with an empty filter (see AdminConfigService), same convention used
 // for other platform-wide single-doc settings in this codebase.
@@ -161,6 +175,9 @@ export class PlatformConfig {
 
   @Prop({ type: FxConfigSchema, default: () => ({}) })
   fxConfig: FxConfig;
+
+  @Prop({ type: SocialLinksSchema, default: () => ({}) })
+  socialLinks: SocialLinks;
 }
 
 export const PlatformConfigSchema = SchemaFactory.createForClass(PlatformConfig);

@@ -20,7 +20,15 @@ export class SearchController {
     // Query values can arrive as arrays/objects (?q[]=a, ?q[$ne]=1): coerce, bound, never .trim() a non-string.
     const page = clampInt(query.page, 1, 1, 1000);
     const limit = clampInt(query.limit, 20, 1, 50);
-    return this.searchService.searchProducts(queryString(query.q, 100) ?? '', page, limit, req.user?.userId ?? null);
+    // suggest=1 = search-as-you-type preview: don't save half-typed terms to the buyer's history.
+    const userId = query.suggest === '1' ? null : req.user?.userId ?? null;
+    return this.searchService.searchProducts(queryString(query.q, 100) ?? '', page, limit, userId, req.user?.userId ?? null);
+  }
+
+  /** Public: popular search terms across all buyers (for the search box). */
+  @Get('trending')
+  getTrending(@Query() query: any) {
+    return this.searchService.getTrendingSearches(clampInt(query.limit, 8, 1, 20));
   }
 
   @Get('stores')

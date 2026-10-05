@@ -91,6 +91,15 @@ export class RatingController {
     return this.ratingService.getProductReviews(productId, query, viewerId);
   }
 
+  /** Public: a store's best recent written reviews (storefront testimonials fallback). */
+  @Get('store/:storeId/public')
+  async getPublicStoreReviews(
+    @Param('storeId') storeId: string,
+    @Query() query: any,
+  ) {
+    return this.ratingService.getPublicStoreReviews(storeId, query);
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // SELLER / ADMIN — manage reviews on their store
   // ═══════════════════════════════════════════════════════════════════════════

@@ -28,6 +28,16 @@ const ADDON_PRICING: Record<string, { priceUSD: number; recurring: boolean; unit
 
 const RETIRED_ADDON_TYPES = new Set(['extra_staff_seat']);
 
+// Display names for the public catalog (pricing page) — prices/units always
+// come from ADDON_PRICING above, the single source of truth for what a
+// purchase actually charges.
+const ADDON_DISPLAY_NAMES: Record<string, string> = {
+  extra_ai_credits: 'Extra AI Credits',
+  priority_marketplace_placement: 'Priority Marketplace Placement',
+  advanced_tax_compliance: 'Advanced Tax Compliance',
+  sms_notifications: 'SMS Notifications',
+};
+
 @Injectable()
 export class PlatformAddonsService {
   private readonly logger = new Logger(PlatformAddonsService.name);
@@ -82,6 +92,20 @@ export class PlatformAddonsService {
     } catch (err: any) {
       this.logger.warn(`Priority-placement badge sync failed for store ${storeId}: ${err?.message}`);
     }
+  }
+
+  /** Public, read-only add-on catalog (no auth) — exactly what purchaseAddon charges. */
+  getPublicCatalog() {
+    const addons = Object.entries(ADDON_PRICING)
+      .filter(([type]) => !RETIRED_ADDON_TYPES.has(type))
+      .map(([addonType, p]) => ({
+        addonType,
+        name: ADDON_DISPLAY_NAMES[addonType] ?? addonType.replace(/_/g, ' '),
+        priceUSD: p.priceUSD,
+        recurring: p.recurring,
+        unitLabel: p.unitLabel,
+      }));
+    return { success: true, data: addons };
   }
 
   async purchaseAddon(sellerId: string, storeId: string, dto: PurchaseAddonDto, idempotencyKey?: string) {

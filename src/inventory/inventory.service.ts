@@ -5,7 +5,11 @@ import {
 } from '@nestjs/common';
 import { DatabaseService } from 'src/database/databaseservice';
 
-import { clampInt } from 'src/common/query-safety.util';
+import {
+  clampInt,
+  escapeRegex,
+  searchTerm,
+} from 'src/common/query-safety.util';
 const LOW_STOCK_THRESHOLD = 10;
 
 @Injectable()
@@ -31,8 +35,27 @@ export class InventoryService {
     if (query.type && query.type !== 'all') filter.type = query.type;
     if (query.status && query.status !== 'all') filter.status = query.status;
 
+    // ?q= — case-insensitive name or SKU match (SKU lives on the variants, so
+    // resolve matching variants within this store's products first).
+    const q = searchTerm(query.q);
+    if (q) {
+      const rx = new RegExp(escapeRegex(q), 'i');
+      const storeProductIds = (
+        await productModel.distinct('_id', filter)
+      ).map((id: any) => id.toString());
+      const skuMatches = storeProductIds.length
+        ? await productVariantModel.distinct('productId', {
+            productId: { $in: storeProductIds },
+            isDelete: false,
+            sku: rx,
+          })
+        : [];
+      filter.$or = [{ name: rx }, { _id: { $in: skuMatches } }];
+    }
+
     const page = clampInt(query.page, 1, 1, 100000);
-    const limit = 10;
+    // Honour ?limit= (pickers ask for bigger pages), bounded.
+    const limit = clampInt(query.limit, 10, 1, 100);
     const skip = (page - 1) * limit;
 
     const totalProducts = await productModel.countDocuments(filter);

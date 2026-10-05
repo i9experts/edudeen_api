@@ -8,7 +8,7 @@ const ZONE_ID = '64b000000000000000000z01'.replace('z', 'f');
 const chain = (value: any) => ({ select: () => ({ lean: () => Promise.resolve(value) }), sort: () => ({ lean: () => Promise.resolve(value) }), lean: () => Promise.resolve(value) });
 
 // A physical cart from one store, with every collaborator stubbed out.
-function makeService(opts: { pickedAddress?: any } = {}) {
+function makeService(opts: { pickedAddress?: any; zonesConfigured?: boolean } = {}) {
   const checkoutDoc = { _id: { toString: () => 'chk1' }, items: [] };
   const addressModel = {
     findOne: jest.fn((filter: any) => {
@@ -32,6 +32,7 @@ function makeService(opts: { pickedAddress?: any } = {}) {
     subscriptionPlanModel: { findOne: jest.fn(() => chain(null)) },
     addressModel,
     checkoutModel,
+    shippingZoneModel: { exists: jest.fn().mockResolvedValue(opts.zonesConfigured ? { _id: ZONE_ID } : null) },
   };
   const svc: any = new CheckoutService(
     { repositories } as any,
@@ -70,6 +71,12 @@ describe('createCheckout uses what the buyer picked', () => {
     const res = await svc.createCheckout('u1', { storeId: 's1', addressId: ADDR_ID });
     expect(addShipping).not.toHaveBeenCalled();
     expect(res.data.summary.shippingFee).toBe(0);
+  });
+
+  it('once delivery zones exist, a physical order must pick one (no skipping the shipping charge)', async () => {
+    const { svc, checkoutModel } = makeService({ zonesConfigured: true });
+    await expect(svc.createCheckout('u1', { storeId: 's1', addressId: ADDR_ID })).rejects.toThrow('Choose a delivery option');
+    expect(checkoutModel.create).not.toHaveBeenCalled();
   });
 });
 
