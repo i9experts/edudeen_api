@@ -332,7 +332,10 @@ export class SellerPlatformSubscriptionsService {
   async getStorePlan(sellerId: string, storeId: string) {
     await this.verifyStoreOwnership(storeId, sellerId);
     const sub = await this.subModel.findOne({ storeId, isDelete: false }).lean();
-    if (!sub) throw new NotFoundException('This store has no platform-plan record yet');
+    // A store with no plan record yet (e.g. activated without a subscription) is not an error:
+    // it simply runs on the default plan. Returning 200/null keeps the seller dashboard and
+    // Plan & Billing working instead of failing on a 404.
+    if (!sub) return { success: true, data: null };
     const plan = await this.planModel.findById((sub as any).platformPlanId).lean();
     return { success: true, data: { ...sub, plan } };
   }
