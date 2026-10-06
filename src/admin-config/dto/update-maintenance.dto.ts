@@ -1,5 +1,5 @@
-﻿import { ApiProperty } from '@nestjs/swagger';
-import { IsArray, IsBoolean, IsDateString, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+import { IsArray, IsBoolean, IsDateString, IsIn, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
 import { MAINTENANCE_SCOPES, MAINTENANCE_TYPES } from '../maintenance.util';
 
 export class UpdateMaintenanceDto {
@@ -21,4 +21,7 @@ export class UpdateMaintenanceDto {
   @IsOptional() @IsDateString() startsAt?: string | null;
   @IsOptional() @IsDateString() endsAt?: string | null;
   @IsOptional() @IsString() @MaxLength(300) statusNote?: string;
+
+  /** Own wording per selected scope, e.g. { "feature:search": { title, message } }. */
+  @IsOptional() @IsObject() scopeMessages?: Record<string, { title?: string; message?: string }>;
 }

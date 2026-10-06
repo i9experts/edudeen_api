@@ -84,7 +84,7 @@ export class AdminConfigService {
   async getPublicMaintenance() {
     const m = await this.getMaintenance();
     const state = maintenanceState(m);
-    return { success: true, data: { state, ...(state === 'off' ? {} : { scopes: m.scopes, type: m.type, title: m.title, message: m.message, startsAt: m.startsAt, endsAt: m.endsAt, statusNote: m.statusNote, updatedAt: m.updatedAt }) } };
+    return { success: true, data: { state, ...(state === 'off' ? {} : { scopes: m.scopes, type: m.type, title: m.title, message: m.message, scopeMessages: m.scopeMessages, startsAt: m.startsAt, endsAt: m.endsAt, statusNote: m.statusNote, updatedAt: m.updatedAt }) } };
   }
 
   private verifier = new JwtService({ secret: process.env.JWT_SECRET });
@@ -98,7 +98,7 @@ export class AdminConfigService {
     if (token) {
       try { if ((this.verifier.verify(token) as any)?.role === 'admin') return null; } catch { /* not a valid token — treated as a visitor */ }
     }
-    return { statusCode: 503, maintenanceMode: true, scope, scopes: m.scopes, type: m.type, title: m.title, message: m.message, endsAt: m.endsAt, statusNote: m.statusNote };
+    return { statusCode: 503, maintenanceMode: true, scope, scopes: m.scopes, type: m.type, title: m.scopeMessages[scope]?.title || m.title, message: m.scopeMessages[scope]?.message || m.message, endsAt: m.endsAt, statusNote: m.statusNote };
   }
 
   /** How many banners may be simultaneously visible for a given placement — read-side cap only, never a create-time limit. */
@@ -320,6 +320,7 @@ export class AdminConfigService {
       message: dto.message ?? prev.message,
       startsAt, endsAt,
       statusNote: dto.statusNote ?? prev.statusNote,
+      scopeMessages: dto.scopeMessages ?? prev.scopeMessages,
       updatedAt: new Date(),
     });
     if (next.enabled && next.scopes.includes('all') && next.scopes.length > 1) next.scopes = ['all'];

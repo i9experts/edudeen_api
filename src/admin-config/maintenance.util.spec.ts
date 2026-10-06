@@ -48,4 +48,9 @@ describe('maintenance mode', () => {
 
   it('ignores scopes it does not know', () => {
     expect(normalizeMaintenance({ enabled: true, scopes: ['feature:nope', 'bogus'] }).scopes).toEqual(['all']);
-  });});
+  });
+  it('keeps a custom message only for known scopes', () => {
+    const m = normalizeMaintenance({ enabled: true, scopes: ['feature:search'], scopeMessages: { 'feature:search': { title: ' Search ', message: 'Back soon' }, nope: { title: 'x' } } });
+    expect(m.scopeMessages).toEqual({ 'feature:search': { title: 'Search', message: 'Back soon' } });
+  });
+});

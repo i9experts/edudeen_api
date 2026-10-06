@@ -34,6 +34,8 @@ export class ManualPaymentProof {
   @Prop({ type: String, default: null }) proofPublicId: string | null;
   @Prop({ type: String, default: null }) proofResourceType: string | null;
   @Prop({ type: String, default: null }) transactionReference: string | null;
+  // Advisory AI read of the receipt screenshot (amount vs the order) — never blocks anything.
+  @Prop({ type: Object, default: null }) receiptCheck: Record<string, any> | null;
   @Prop({ type: String, default: null }) senderName: string | null;
 
   @Prop({

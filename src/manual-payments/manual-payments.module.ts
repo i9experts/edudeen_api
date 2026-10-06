@@ -10,11 +10,12 @@ import { ManualPaymentsController } from './manual-payments.controller';
 import { AdminManualPaymentsController } from './admin-manual-payments.controller';
 import { SellerManualPaymentsController } from './seller-manual-payments.controller';
 import { ManualPaymentsService } from './manual-payments.service';
+import { ReceiptCheckService } from './receipt-check.service';
 
 @Module({
   imports: [AuthModule, RedisModule, UploadModule, PaymentModule, FinanceModule, AdminConfigModule],
   controllers: [ManualPaymentsController, AdminManualPaymentsController, SellerManualPaymentsController],
-  providers: [ManualPaymentsService],
+  providers: [ManualPaymentsService, ReceiptCheckService],
   exports: [ManualPaymentsService],
 })
 export class ManualPaymentsModule {}

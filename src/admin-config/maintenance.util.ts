@@ -43,13 +43,28 @@ export interface MaintenanceSettings {
   endsAt: Date | null;
   /** Live progress line, e.g. "Database migration 60% done". */
   statusNote: string;
+  /** Optional own headline/message for a selected scope (keyed by scope, e.g. "feature:search"); falls back to title/message. */
+  scopeMessages: Record<string, { title: string; message: string }>;
   updatedAt: Date | null;
 }
 
 export const DEFAULT_MAINTENANCE: MaintenanceSettings = {
   enabled: false, scopes: ['all'], type: 'scheduled_upgrade', title: '', message: '',
-  startsAt: null, endsAt: null, statusNote: '', updatedAt: null,
+  startsAt: null, endsAt: null, statusNote: '', scopeMessages: {}, updatedAt: null,
 };
+
+/** Keeps only known scopes and trims text, so a bad client payload can't store junk. */
+export function cleanScopeMessages(raw: any): Record<string, { title: string; message: string }> {
+  const out: Record<string, { title: string; message: string }> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [k, v] of Object.entries(raw as Record<string, any>)) {
+    if (!MAINTENANCE_SCOPES.includes(k as MaintenanceScope) || !v || typeof v !== 'object') continue;
+    const title = typeof v.title === 'string' ? v.title.trim().slice(0, 120) : '';
+    const message = typeof v.message === 'string' ? v.message.trim().slice(0, 1000) : '';
+    if (title || message) out[k] = { title, message };
+  }
+  return out;
+}
 
 export function normalizeMaintenance(raw: any, legacyFlag?: boolean): MaintenanceSettings {
   const m = raw && typeof raw === 'object' ? raw : {};
@@ -63,6 +78,7 @@ export function normalizeMaintenance(raw: any, legacyFlag?: boolean): Maintenanc
     startsAt: m.startsAt ? new Date(m.startsAt) : null,
     endsAt: m.endsAt ? new Date(m.endsAt) : null,
     statusNote: typeof m.statusNote === 'string' ? m.statusNote : '',
+    scopeMessages: cleanScopeMessages(m.scopeMessages),
     updatedAt: m.updatedAt ? new Date(m.updatedAt) : null,
   };
 }
