@@ -1,6 +1,32 @@
-﻿/** Maintenance mode: WHAT is down and WHY, so the platform can block only the affected area and tell users plainly. */
-export const MAINTENANCE_SCOPES = ['all', 'buyer', 'seller', 'checkout', 'uploads'] as const;
-export type MaintenanceScope = (typeof MAINTENANCE_SCOPES)[number];
+/** Maintenance mode: WHAT is down and WHY, so the platform can block only the affected area and tell users plainly. */
+export const BASE_MAINTENANCE_SCOPES = ['all', 'buyer', 'seller', 'checkout', 'uploads'] as const;
+
+/**
+ * Single features / pages an admin can take down on their own (e.g. just the
+ * flash sale). `apiPatterns` is what the server blocks; the web app shows the
+ * admin's message in place of that page or section.
+ */
+export const MAINTENANCE_FEATURES = {
+  flash_sale:   { apiPatterns: [/^\/api\/public\/marketing\//, /^\/api\/marketing\/[^/]+\/campaigns/] },
+  search:       { apiPatterns: [/^\/api\/search\/(products|trending)/] },
+  categories:   { apiPatterns: [/^\/api\/categories(\/|$)/, /^\/api\/products\/products-by-category/] },
+  product_page: { apiPatterns: [/^\/api\/products\/(getProductById|getVariantById|preview|sample|also-bought)/] },
+  cart:         { apiPatterns: [/^\/api\/cart(\/|$)/] },
+  reviews:      { apiPatterns: [/^\/api\/rating(\/|$)/] },
+  messaging:    { apiPatterns: [/^\/api\/messaging(\/|$)/] },
+  stores:       { apiPatterns: [/^\/api\/search\/stores/, /^\/api\/store\/(getStoreById|public)/] },
+  learn:        { apiPatterns: [/^\/api\/products\/education(\/|$)/] },
+  orders:       { apiPatterns: [/^\/api\/orders(\/|$)/] },
+} as const;
+export type MaintenanceFeature = keyof typeof MAINTENANCE_FEATURES;
+const FEATURE_KEYS = Object.keys(MAINTENANCE_FEATURES) as MaintenanceFeature[];
+
+export type FeatureScope = `feature:${MaintenanceFeature}`;
+export type MaintenanceScope = (typeof BASE_MAINTENANCE_SCOPES)[number] | FeatureScope;
+export const MAINTENANCE_SCOPES: readonly MaintenanceScope[] = [
+  ...BASE_MAINTENANCE_SCOPES,
+  ...FEATURE_KEYS.map((k) => `feature:${k}` as FeatureScope),
+];
 
 export const MAINTENANCE_TYPES = ['scheduled_upgrade', 'database', 'payments', 'security', 'performance', 'emergency', 'other'] as const;
 export type MaintenanceType = (typeof MAINTENANCE_TYPES)[number];
@@ -64,9 +90,22 @@ export function areaOfRequest(method: string, path: string): RequestArea | null 
   return 'buyer';
 }
 
-export function blockedByMaintenance(m: MaintenanceSettings, method: string, path: string, now = new Date()): boolean {
-  if (maintenanceState(m, now) !== 'active') return false;
+/** Features whose API this request belongs to (a request can match several). */
+export function featuresOfRequest(path: string): MaintenanceFeature[] {
+  return FEATURE_KEYS.filter((k) => MAINTENANCE_FEATURES[k].apiPatterns.some((r) => r.test(path)));
+}
+
+/** What blocks this request — 'all', an area, or "feature:x" — or null if it passes. */
+export function blockingScope(m: MaintenanceSettings, method: string, path: string, now = new Date()): string | null {
+  if (maintenanceState(m, now) !== 'active') return null;
   const area = areaOfRequest(method, path);
-  if (!area) return false;
-  return m.scopes.includes('all') || m.scopes.includes(area);
+  if (!area) return null;
+  if (m.scopes.includes('all')) return 'all';
+  if (m.scopes.includes(area)) return area;
+  const hit = featuresOfRequest(path).find((f) => m.scopes.includes(`feature:${f}`));
+  return hit ? `feature:${hit}` : null;
+}
+
+export function blockedByMaintenance(m: MaintenanceSettings, method: string, path: string, now = new Date()): boolean {
+  return blockingScope(m, method, path, now) !== null;
 }

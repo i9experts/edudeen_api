@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { JwtService } from '@nestjs/jwt';
-import { areaOfRequest, blockedByMaintenance, maintenanceState, normalizeMaintenance, type MaintenanceSettings } from './maintenance.util';
+import { blockingScope, maintenanceState, normalizeMaintenance, type MaintenanceSettings } from './maintenance.util';
 import { UpdateMaintenanceDto } from './dto/update-maintenance.dto';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
@@ -92,13 +92,13 @@ export class AdminConfigService {
   /** The 503 body for a request that maintenance blocks, or null. Admins (valid admin token) browse normally. */
   async maintenanceBlockFor(method: string, path: string, authorization?: string) {
     const m = await this.getMaintenance();
-    if (!blockedByMaintenance(m, method, path)) return null;
+    const scope = blockingScope(m, method, path);
+    if (!scope) return null;
     const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : null;
     if (token) {
       try { if ((this.verifier.verify(token) as any)?.role === 'admin') return null; } catch { /* not a valid token — treated as a visitor */ }
     }
-    const area = areaOfRequest(method, path);
-    return { statusCode: 503, maintenanceMode: true, scope: m.scopes.includes('all') ? 'all' : area, scopes: m.scopes, type: m.type, title: m.title, message: m.message, endsAt: m.endsAt, statusNote: m.statusNote };
+    return { statusCode: 503, maintenanceMode: true, scope, scopes: m.scopes, type: m.type, title: m.title, message: m.message, endsAt: m.endsAt, statusNote: m.statusNote };
   }
 
   /** How many banners may be simultaneously visible for a given placement — read-side cap only, never a create-time limit. */
