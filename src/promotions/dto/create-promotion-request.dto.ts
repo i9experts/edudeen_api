@@ -1,12 +1,12 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
 import { IsBoolean, IsDateString, IsIn, IsOptional, IsString } from 'class-validator';
-import { PROMOTION_PLACEMENTS, PromotionPlacement } from '../../common/promotion-placements.const';
+import { SELLER_PROMOTION_PLACEMENTS, PromotionPlacement } from '../../common/promotion-placements.const';
 import { PROMOTION_LINK_TYPES, PromotionLinkType } from '../schemas/promotion-request.schema';
 
 export class CreatePromotionRequestDto {
-  @ApiProperty({ enum: PROMOTION_PLACEMENTS })
-  @IsIn(PROMOTION_PLACEMENTS)
+  @ApiProperty({ enum: SELLER_PROMOTION_PLACEMENTS as unknown as string[] })
+  @IsIn(SELLER_PROMOTION_PLACEMENTS as unknown as string[])
   placement: PromotionPlacement;
 
   @ApiProperty({ required: false })

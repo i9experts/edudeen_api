@@ -18,9 +18,14 @@ export const PROMOTION_PLACEMENTS = [
   'marketplaceHero',
   'educationHero',
   'categoryHero',
+  // Banner shown on every product page — admin-authored only (not sold to sellers).
+  'productPage',
 ] as const;
 
 export type PromotionPlacement = (typeof PROMOTION_PLACEMENTS)[number];
+
+/** Placements a seller may buy a promotion for; productPage is the platform's own slot. */
+export const SELLER_PROMOTION_PLACEMENTS = PROMOTION_PLACEMENTS.filter((p) => p !== 'productPage') as unknown as readonly PromotionPlacement[];
 
 /** Placements an admin can set a visible-count limit for, incl. the store hero. */
 export const PLACEMENT_LIMIT_KEYS = [...PROMOTION_PLACEMENTS, 'storeHero', 'storeFeaturedProducts'] as const;

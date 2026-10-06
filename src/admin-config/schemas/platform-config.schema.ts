@@ -30,6 +30,7 @@ export class PlacementLimits {
   @Prop({ type: Number, default: 4 }) marketplaceHero: number;
   @Prop({ type: Number, default: 4 }) educationHero: number;
   @Prop({ type: Number, default: 4 }) categoryHero: number;
+  @Prop({ type: Number, default: 4 }) productPage: number;
   @Prop({ type: Number, default: 4 }) storeHero: number;
   @Prop({ type: Number, default: 8 }) storeFeaturedProducts: number;
 }
