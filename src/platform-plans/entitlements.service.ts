@@ -107,16 +107,11 @@ export class EntitlementsService {
     return limits.transactionFeeRate ?? FALLBACK_LIMITS.transactionFeeRate;
   }
 
-  /** Throws if the store is already at (or over) its product limit. Call BEFORE creating a new product. */
-  async assertCanCreateProduct(storeId: string): Promise<void> {
-    const limits = await this.getLimits(storeId);
-    if (limits.maxProducts === -1) return;
-    const count = await this.db.repositories.productModel.countDocuments({ storeId, isDelete: false });
-    if (count >= limits.maxProducts) {
-      throw new BadRequestException(
-        `Product limit reached (${limits.maxProducts}) for your current plan — upgrade your platform plan to add more products.`,
-      );
-    }
+  /** Sellers can list any number of products on every plan, so this never blocks.
+   *  Kept (and still called before each create) so a cap can be reinstated here
+   *  in one place; `maxProducts` on the plan is now informational only. */
+  async assertCanCreateProduct(_storeId: string): Promise<void> {
+    return;
   }
 
   /** Throws if the store already has its plan's limit of StoreBanner rows. Call BEFORE creating a new one.
@@ -197,8 +192,9 @@ export class EntitlementsService {
       currentPlanName: plan?.name ?? 'Starter (default)',
       currentPlanId: plan?._id?.toString?.() ?? null,
       maxProducts: {
-        limit: limits.maxProducts, used: productCount,
-        allowed: limits.maxProducts === -1 || productCount < limits.maxProducts,
+        // Product count is not capped on any plan (see assertCanCreateProduct).
+        limit: -1, used: productCount,
+        allowed: true,
       },
       maxStaffAccounts: {
         limit: limits.maxStaffAccounts, used: staffCount,
