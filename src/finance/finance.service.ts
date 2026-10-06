@@ -16,6 +16,18 @@ import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 
 import { clampInt } from 'src/common/query-safety.util';
 import { encryptSeoCredential, decryptSeoCredential } from 'src/common/seo-token-encryption.util';
+
+/** Keys the account-number encryption may use, most preferred first. Always has JWT_SECRET to fall back on, so saving a payout method never fails just because a dedicated key was not configured; decryption tries every candidate so adding a dedicated key later does not strand existing data. */
+const accountKeyCandidates = () => [process.env.PAYOUT_ENCRYPTION_KEY, process.env.SEO_TOKEN_ENCRYPTION_KEY, process.env.JWT_SECRET].filter((k, i, a): k is string => !!k && a.indexOf(k) === i);
+const encryptAccountNumber = (plain: string) => {
+  const [key] = accountKeyCandidates();
+  if (!key) throw new BadRequestException('Server encryption key is not configured — contact support.');
+  return encryptSeoCredential(plain, key);
+};
+const decryptAccountNumber = (payload: string) => {
+  for (const key of accountKeyCandidates()) { try { return decryptSeoCredential(payload, key); } catch { /* try the next key */ } }
+  throw new Error('undecryptable');
+};
 // ── Platform fee constants ───────────────────────────────────────────────────
 export const PLATFORM_FEE_RATE       = 0.08;   // 8% per sale — last-resort fallback, see CommissionRulesService
 export const PAYMENT_PROCESSING_RATE = 0.029;  // 2.9%
@@ -623,7 +635,7 @@ export class FinanceService {
       bankName: dto.bankName || null,
       accountHolder: dto.accountHolder || null,
       accountLast4: dto.accountNumber ? dto.accountNumber.slice(-4) : null,
-      accountNumberEnc: dto.accountNumber ? encryptSeoCredential(dto.accountNumber.trim()) : null,
+      accountNumberEnc: dto.accountNumber ? encryptAccountNumber(dto.accountNumber.trim()) : null,
       routingNumber: dto.routingNumber || null,
       externalAccountId: dto.externalAccountId || null,
       isDefault: dto.setAsDefault || isFirstForCurrency,
@@ -658,7 +670,7 @@ export class FinanceService {
       : null;
     let accountNumber: string | null = null;
     if (method?.accountNumberEnc) {
-      try { accountNumber = decryptSeoCredential(method.accountNumberEnc); } catch { throw new BadRequestException('Could not decrypt this account number — ask the seller to re-enter it.'); }
+      try { accountNumber = decryptAccountNumber(method.accountNumberEnc); } catch { throw new BadRequestException('Could not decrypt this account number — ask the seller to re-enter it.'); }
     }
     this.activityLogService.log({
       storeId: payout.storeId, category: 'finance', action: 'payout_destination_viewed',
@@ -727,7 +739,7 @@ export class FinanceService {
     if (dto.accountHolder !== undefined) method.accountHolder = dto.accountHolder;
     if (dto.accountNumber) {
       method.accountLast4 = dto.accountNumber.slice(-4);
-      method.accountNumberEnc = encryptSeoCredential(dto.accountNumber.trim());
+      method.accountNumberEnc = encryptAccountNumber(dto.accountNumber.trim());
     }
     if (dto.routingNumber !== undefined) method.routingNumber = dto.routingNumber;
     if (dto.externalAccountId !== undefined) method.externalAccountId = dto.externalAccountId;
