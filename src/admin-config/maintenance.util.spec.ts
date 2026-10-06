@@ -1,4 +1,4 @@
-﻿import { blockedByMaintenance, areaOfRequest, maintenanceState, normalizeMaintenance } from './maintenance.util';
+import { blockedByMaintenance, areaOfRequest, maintenanceState, normalizeMaintenance } from './maintenance.util';
 
 const on = (over: any = {}) => normalizeMaintenance({ enabled: true, scopes: ['all'], ...over });
 
@@ -37,4 +37,15 @@ describe('maintenance mode', () => {
     expect(blockedByMaintenance(m, 'GET', '/api/store/getStoreById/1')).toBe(false);
     expect(blockedByMaintenance(m, 'POST', '/api/products/add-digital-product')).toBe(true);
   });
-});
+
+  it('a single feature (flash sale) blocks only its own API and nothing else', () => {
+    const m = on({ scopes: ['feature:flash_sale'] });
+    expect(blockedByMaintenance(m, 'GET', '/api/public/marketing/campaigns')).toBe(true);
+    expect(blockedByMaintenance(m, 'GET', '/api/products/products-by-category')).toBe(false);
+    expect(blockedByMaintenance(m, 'POST', '/api/checkout/create-checkout')).toBe(false);
+    expect(blockedByMaintenance(on({ scopes: ['feature:search'] }), 'GET', '/api/search/products')).toBe(true);
+  });
+
+  it('ignores scopes it does not know', () => {
+    expect(normalizeMaintenance({ enabled: true, scopes: ['feature:nope', 'bogus'] }).scopes).toEqual(['all']);
+  });});
