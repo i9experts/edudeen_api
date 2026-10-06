@@ -66,7 +66,7 @@ export class ExchangeRateService {
     if (currency === 'USD') {
       return { currency: 'USD', ratePerUSD: 1, effectiveFrom: new Date(), source: 'admin' as const, _id: null };
     }
-    const rate = await this.getCurrentRate(currency);
+    const rate = (await this.getCurrentRate(currency)) ?? (await this.bootstrapRate(currency));
     if (!rate) {
       throw new BadRequestException(
         `No exchange rate available for ${currency} — cannot convert or checkout in this currency yet`,
@@ -168,7 +168,7 @@ export class ExchangeRateService {
     if (currency === 'USD') {
       return { currency: 'USD', ratePerUSD: 1, effectiveFrom: new Date(), source: 'admin' as const, _id: null };
     }
-    const rate = await this.getCurrentRate(currency);
+    const rate = (await this.getCurrentRate(currency)) ?? (await this.bootstrapRate(currency));
     if (!rate) {
       throw new BadRequestException(
         `No exchange rate available for ${currency} — cannot convert or checkout in this currency yet`,
@@ -311,6 +311,30 @@ export class ExchangeRateService {
     return { items, total, page, limit };
   }
 
+  private async fetchProviderRate(currency: string): Promise<number> {
+    const res = await fetch(`https://api.frankfurter.app/latest?from=USD&to=${currency}`, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) throw new Error(`Provider returned HTTP ${res.status}`);
+    const data = (await res.json()) as { rates?: Record<string, number> };
+    const rate = data?.rates?.[currency];
+    if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) {
+      throw new Error(`Provider returned an invalid rate: ${JSON.stringify(data)}`);
+    }
+    return rate;
+  }
+
+  /** A currency with no rate at all (fresh database, before the daily cron has
+   *  ever run) would block every checkout in it. Fetch the first rate on demand
+   *  through the normal sanity-checked ingest; null if the provider is down, in
+   *  which case the caller reports the missing rate as before. */
+  private async bootstrapRate(currency: string) {
+    try {
+      await this.ingestRate(currency, await this.fetchProviderRate(currency), 'provider');
+    } catch (err: any) {
+      this.logger.warn(`On-demand FX fetch for ${currency} failed: ${err?.message}`);
+      return null;
+    }
+    return this.getCurrentRate(currency);
+  }
   /**
    * Called by SchedulerService's daily cron. Fetches each non-USD supported
    * currency's rate from a free, keyless FX API (Frankfurter — ECB-sourced)
@@ -327,14 +351,7 @@ export class ExchangeRateService {
     for (const currency of SUPPORTED_CURRENCIES) {
       if (currency === 'USD') continue;
       try {
-        const res = await fetch(`https://api.frankfurter.app/latest?from=USD&to=${currency}`, { signal: AbortSignal.timeout(10_000) });
-        if (!res.ok) throw new Error(`Provider returned HTTP ${res.status}`);
-        const data = (await res.json()) as { rates?: Record<string, number> };
-        const rate = data?.rates?.[currency];
-        if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) {
-          throw new Error(`Provider returned an invalid rate: ${JSON.stringify(data)}`);
-        }
-        await this.ingestRate(currency, rate, 'provider');
+        await this.ingestRate(currency, await this.fetchProviderRate(currency), 'provider');
       } catch (err: any) {
         this.logger.warn(`FX provider refresh failed for ${currency}: ${err?.message} — keeping last-known-good rate`);
         await this.activityLogService.log({
