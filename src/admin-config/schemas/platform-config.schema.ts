@@ -149,6 +149,11 @@ export class PlatformConfig {
   @Prop({ type: Boolean, default: false })
   maintenanceMode: boolean;
 
+  // What is under maintenance, why, and until when (see maintenance.util.ts).
+  // maintenanceMode above mirrors maintenance.enabled for older readers.
+  @Prop({ type: Object, default: null })
+  maintenance: Record<string, any> | null;
+
   @Prop({ type: FeatureFlagsSchema, default: () => ({}) })
   featureFlags: FeatureFlags;
 

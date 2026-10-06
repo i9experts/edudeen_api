@@ -113,7 +113,7 @@ export class AdminConfigController {
 
   @Patch('maintenance')
   setMaintenanceMode(@Req() req: any, @Body() dto: UpdateMaintenanceDto) {
-    return this.adminConfigService.setMaintenanceMode(dto.maintenanceMode, {
+    return this.adminConfigService.setMaintenanceMode(dto, {
       adminId: req.user.userId,
       ip: req.ip,
       userAgent: req.headers['user-agent'],

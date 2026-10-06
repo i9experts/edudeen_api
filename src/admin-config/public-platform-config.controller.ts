@@ -10,6 +10,12 @@ import { AdminConfigService } from './admin-config.service';
 export class PublicPlatformConfigController {
   constructor(private readonly adminConfigService: AdminConfigService) {}
 
+  /** What (if anything) is under maintenance — read by the maintenance page and the site-wide notice. */
+  @Get('maintenance')
+  getMaintenance() {
+    return this.adminConfigService.getPublicMaintenance();
+  }
+
   @Get('public')
   getPublicConfig() {
     return this.adminConfigService.getPublicConfig();

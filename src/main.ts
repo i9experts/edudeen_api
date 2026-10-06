@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { AdminConfigService } from './admin-config/admin-config.service';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import cookieParser from 'cookie-parser';
@@ -33,6 +34,19 @@ async function bootstrap() {
   }
 
   app.use(cookieParser());
+
+  // Maintenance mode: block only the area an admin marked as down (see admin-config/maintenance.util.ts).
+  const adminConfig = app.get(AdminConfigService);
+  app.use(async (req: any, res: any, next: any) => {
+    try {
+      const block = await adminConfig.maintenanceBlockFor(req.method, req.path, req.headers.authorization);
+      if (block) {
+        if (block.endsAt) res.setHeader('Retry-After', String(Math.max(60, Math.ceil((new Date(block.endsAt).getTime() - Date.now()) / 1000))));
+        return res.status(503).json(block);
+      }
+    } catch { /* a config read failure must never take the site down */ }
+    next();
+  });
 
   // Global DTO validation. `transform: true` matches the local pipes already used across the app, so query DTOs
   // relying on @Type(() => Number) behave identically. `whitelist: true` strips any property a DTO does not declare:

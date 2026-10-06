@@ -1,4 +1,7 @@
 /* eslint-disable prettier/prettier */
+import { JwtService } from '@nestjs/jwt';
+import { areaOfRequest, blockedByMaintenance, maintenanceState, normalizeMaintenance, type MaintenanceSettings } from './maintenance.util';
+import { UpdateMaintenanceDto } from './dto/update-maintenance.dto';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogService } from '../activity-log/activity-log.service';
@@ -67,10 +70,35 @@ export class AdminConfigService {
     return config.featureFlags?.[flag] !== false;
   }
 
-  /** Used by the maintenance-mode middleware in main.ts. */
+  /** True while maintenance is actually blocking something (armed and past its start time). */
   async isMaintenanceMode(): Promise<boolean> {
+    return maintenanceState(await this.getMaintenance()) === 'active';
+  }
+
+  async getMaintenance(): Promise<MaintenanceSettings> {
     const config = await this.getRawConfig();
-    return config.maintenanceMode === true;
+    return normalizeMaintenance(config.maintenance, config.maintenanceMode);
+  }
+
+  /** Public, safe-to-show view for the maintenance page and the site-wide notice banner. */
+  async getPublicMaintenance() {
+    const m = await this.getMaintenance();
+    const state = maintenanceState(m);
+    return { success: true, data: { state, ...(state === 'off' ? {} : { scopes: m.scopes, type: m.type, title: m.title, message: m.message, startsAt: m.startsAt, endsAt: m.endsAt, statusNote: m.statusNote, updatedAt: m.updatedAt }) } };
+  }
+
+  private verifier = new JwtService({ secret: process.env.JWT_SECRET });
+
+  /** The 503 body for a request that maintenance blocks, or null. Admins (valid admin token) browse normally. */
+  async maintenanceBlockFor(method: string, path: string, authorization?: string) {
+    const m = await this.getMaintenance();
+    if (!blockedByMaintenance(m, method, path)) return null;
+    const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : null;
+    if (token) {
+      try { if ((this.verifier.verify(token) as any)?.role === 'admin') return null; } catch { /* not a valid token — treated as a visitor */ }
+    }
+    const area = areaOfRequest(method, path);
+    return { statusCode: 503, maintenanceMode: true, scope: m.scopes.includes('all') ? 'all' : area, scopes: m.scopes, type: m.type, title: m.title, message: m.message, endsAt: m.endsAt, statusNote: m.statusNote };
   }
 
   /** How many banners may be simultaneously visible for a given placement — read-side cap only, never a create-time limit. */
@@ -279,16 +307,30 @@ export class AdminConfigService {
     };
   }
 
-  async setMaintenanceMode(maintenanceMode: boolean, meta: AuditMeta) {
+  async setMaintenanceMode(dto: UpdateMaintenanceDto, meta: AuditMeta) {
+    const prev = await this.getMaintenance();
+    const startsAt = dto.startsAt === undefined ? prev.startsAt : dto.startsAt ? new Date(dto.startsAt) : null;
+    const endsAt = dto.endsAt === undefined ? prev.endsAt : dto.endsAt ? new Date(dto.endsAt) : null;
+    if (startsAt && endsAt && endsAt <= startsAt) throw new BadRequestException('The expected end time must be after the start time');
+    const next: MaintenanceSettings = normalizeMaintenance({
+      enabled: dto.maintenanceMode,
+      scopes: dto.scopes ?? prev.scopes,
+      type: dto.type ?? prev.type,
+      title: dto.title ?? prev.title,
+      message: dto.message ?? prev.message,
+      startsAt, endsAt,
+      statusNote: dto.statusNote ?? prev.statusNote,
+      updatedAt: new Date(),
+    });
+    if (next.enabled && next.scopes.includes('all') && next.scopes.length > 1) next.scopes = ['all'];
     const config = await this.model.findOneAndUpdate(
       {},
-      { $set: { maintenanceMode } },
+      { $set: { maintenanceMode: next.enabled, maintenance: next } },
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     );
     this.invalidateCache();
-    await this.logChange('maintenance_mode_toggled', `Maintenance mode set to ${maintenanceMode}`, {
-      ...meta,
-    });
+    const state = maintenanceState(next);
+    await this.logChange('maintenance_mode_toggled', `Maintenance ${state === 'off' ? 'turned off' : state} — ${next.type}, affecting ${next.scopes.join(', ')}`, { ...meta });
     return { success: true, message: 'Maintenance mode updated', data: config };
   }
 }
