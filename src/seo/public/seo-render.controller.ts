@@ -74,10 +74,15 @@ ${meta.ogImage ? `<meta property="og:image" content="${escapeHtml(meta.ogImage)}
 <meta name="twitter:description" content="${escapeHtml(meta.ogDescription)}">
 ${meta.ogImage ? `<meta name="twitter:image" content="${escapeHtml(meta.ogImage)}">` : ''}
 ${jsonLdScripts}
-<meta http-equiv="refresh" content="0; url=${escapeHtml(meta.url)}">
 </head>
 <body>
-<p>Redirecting to <a href="${escapeHtml(meta.url)}">${escapeHtml(meta.title)}</a>…</p>
+<!-- Served to crawlers only (see vercel.json); people get the app. No meta-refresh: it would point a bot at the URL it just fetched. -->
+<main>
+<h1>${escapeHtml(meta.ogTitle || meta.title)}</h1>
+${meta.ogImage ? `<img src="${escapeHtml(meta.ogImage)}" alt="${escapeHtml(meta.ogTitle || meta.title)}">` : ''}
+<p>${escapeHtml(meta.description)}</p>
+<p><a href="${escapeHtml(meta.url)}">${escapeHtml(meta.title)}</a></p>
+</main>
 </body>
 </html>`;
 
