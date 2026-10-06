@@ -8,11 +8,12 @@ import { FinanceModule } from '../finance/finance.module';
 import { AdminConfigModule } from '../admin-config/admin-config.module';
 import { ManualPaymentsController } from './manual-payments.controller';
 import { AdminManualPaymentsController } from './admin-manual-payments.controller';
+import { SellerManualPaymentsController } from './seller-manual-payments.controller';
 import { ManualPaymentsService } from './manual-payments.service';
 
 @Module({
   imports: [AuthModule, RedisModule, UploadModule, PaymentModule, FinanceModule, AdminConfigModule],
-  controllers: [ManualPaymentsController, AdminManualPaymentsController],
+  controllers: [ManualPaymentsController, AdminManualPaymentsController, SellerManualPaymentsController],
   providers: [ManualPaymentsService],
   exports: [ManualPaymentsService],
 })

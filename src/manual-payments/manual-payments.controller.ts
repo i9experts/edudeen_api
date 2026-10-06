@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import {
-  Controller, Get, Post, Param, Body, Req, UseGuards, UseInterceptors, UploadedFile, UsePipes, ValidationPipe,
+  Controller, Get, Post, Param, Body, Req, Query, UseGuards, UseInterceptors, UploadedFile, UsePipes, ValidationPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -33,8 +33,8 @@ export class ManualPaymentsController {
   // this same `api/payment/*` prefix (the service layer itself stays
   // envelope-agnostic, same as FinanceService, so it's reusable either way).
   @Get('bank-details')
-  async getBankDetails() {
-    const data = await this.manualPaymentsService.getBankDetails();
+  async getBankDetails(@Req() req: any, @Query('checkoutId') checkoutId: string) {
+    const data = await this.manualPaymentsService.getBankDetails(req.user.userId, String(checkoutId ?? ''));
     return { success: true, data };
   }
 

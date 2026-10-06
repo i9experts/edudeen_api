@@ -332,6 +332,11 @@ export class AdminFinanceService {
     return { success: true, data: { ...data, payouts } };
   }
 
+  async getPayoutDestination(payoutId: string, adminId: string, ip?: string, userAgent?: string) {
+    const data = await this.financeService.adminGetPayoutDestination(payoutId, adminId, ip, userAgent);
+    return { success: true, data };
+  }
+
   async approvePayout(payoutId: string, adminId: string, ip?: string, userAgent?: string) {
     const data = await this.financeService.adminApprovePayout(payoutId, adminId, ip, userAgent);
     return { success: true, data };

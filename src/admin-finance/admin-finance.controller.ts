@@ -97,6 +97,12 @@ export class AdminFinanceController {
     return this.adminFinanceService.getPayoutQueue(query);
   }
 
+  /** Full bank/wallet destination for a payout (decrypted, audit-logged) — what the admin pays the seller to. */
+  @Get('payouts/:payoutId/destination')
+  getPayoutDestination(@Req() req: any, @Param('payoutId') payoutId: string) {
+    return this.adminFinanceService.getPayoutDestination(payoutId, req.user.userId, req.ip, req.headers['user-agent']);
+  }
+
   @Patch('payouts/:payoutId/approve')
   approvePayout(@Req() req: any, @Param('payoutId') payoutId: string) {
     return this.adminFinanceService.approvePayout(payoutId, req.user.userId, req.ip, req.headers['user-agent']);

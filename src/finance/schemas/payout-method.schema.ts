@@ -26,8 +26,12 @@ export class PayoutMethod {
   // Bank transfer / mobile wallet fields
   @Prop({ type: String, default: null }) bankName: string | null;
   @Prop({ type: String, default: null }) accountHolder: string | null;
-  // Only last 4 digits stored — never store full account number
+  // Seller-facing screens only ever show the last 4 digits.
   @Prop({ type: String, default: null }) accountLast4: string | null;
+  // Full account number / IBAN, AES-256-GCM encrypted at rest. Without it an admin
+  // has nothing to pay the seller to. Never selected by default and never sent
+  // to the seller — only the admin payout-destination endpoint decrypts it.
+  @Prop({ type: String, default: null, select: false }) accountNumberEnc: string | null;
   @Prop({ type: String, default: null }) routingNumber: string | null;
 
   // Stripe / PayPal

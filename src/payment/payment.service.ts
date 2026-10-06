@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ConflictException,
 } from '@nestjs/common';
+import { hasDirectPayment, type DirectPaymentDetails } from 'src/common/direct-payment.util';
 import { ConfigService } from '@nestjs/config';
 import { DatabaseService } from 'src/database/databaseservice';
 import { NotificationsService } from 'src/notifications/notifications.service';
@@ -1071,13 +1072,9 @@ export class PaymentService {
   async manualBankTransferPayment(userId: string, checkoutId: string) {
     if (!checkoutId) throw new BadRequestException('checkoutId is required');
 
-    const manualConfig = await this.adminConfigService.getManualPaymentConfig();
-    if (!manualConfig?.enabled) {
-      throw new BadRequestException('Bank transfer payment is not available right now — please use another payment method.');
-    }
-
     const {
       checkoutModel,
+      storeModel,
       paymentTransactionModel,
       orderModel,
       addressModel,
@@ -1100,6 +1097,12 @@ export class PaymentService {
     if (checkout.expiredAt && checkout.expiredAt < new Date()) {
       await checkoutModel.findByIdAndUpdate(checkout._id, { status: 'expired' });
       throw new BadRequestException('Checkout has expired');
+    }
+
+    // The buyer pays the seller's own account — the seller must have set one up.
+    const payStore = await storeModel.findById(checkout.items?.[0]?.storeId).select('directPayment').lean<{ directPayment?: DirectPaymentDetails | null }>();
+    if (!hasDirectPayment(payStore?.directPayment)) {
+      throw new BadRequestException('This seller has not set up bank transfer yet — please use another payment method.');
     }
 
     for (const item of checkout.items) {

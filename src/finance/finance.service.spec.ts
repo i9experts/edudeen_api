@@ -56,6 +56,8 @@ function makeBalance(overrides: Partial<Record<string, any>> = {}) {
   };
 }
 
+process.env.SEO_TOKEN_ENCRYPTION_KEY ??= 'test-only-encryption-key';
+
 describe('FinanceService', () => {
   let service: FinanceService;
   let balanceModel: any;

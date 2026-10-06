@@ -26,6 +26,8 @@ describe('ManualPaymentsService', () => {
   let proofModel: any;
   let orderModel: any;
   let userModel: any;
+  let checkoutModel: any;
+  let storeModel: any;
   let uploadService: UploadService;
   let paymentService: PaymentService;
   let financeService: FinanceService;
@@ -38,7 +40,9 @@ describe('ManualPaymentsService', () => {
     orderModel = { find: jest.fn(), findByIdAndUpdate: jest.fn().mockResolvedValue({}) };
     userModel = { find: jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }) }) };
 
-    const db = { repositories: { manualPaymentProofModel: proofModel, orderModel, userModel } } as unknown as DatabaseService;
+    checkoutModel = { findOne: jest.fn() };
+    storeModel = { findById: jest.fn() };
+    const db = { repositories: { manualPaymentProofModel: proofModel, orderModel, userModel, checkoutModel, storeModel } } as unknown as DatabaseService;
 
     uploadService = {
       uploadFile: jest.fn(),
@@ -55,18 +59,28 @@ describe('ManualPaymentsService', () => {
   });
 
   describe('getBankDetails', () => {
-    it('throws when the platform admin has not enabled manual payment', async () => {
-      adminConfigService.getManualPaymentConfig = jest.fn().mockResolvedValue({ enabled: false });
-      await expect(service.getBankDetails()).rejects.toThrow(BadRequestException);
+    const lean = (v: any) => ({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(v) }) });
+
+    it('throws when the checkout belongs to someone else', async () => {
+      checkoutModel.findOne.mockReturnValue(lean(null));
+      await expect(service.getBankDetails(USER_ID, 'c1')).rejects.toThrow(NotFoundException);
     });
 
-    it('returns bank details without leaking internal-only fields', async () => {
-      const result = await service.getBankDetails();
-      expect(result.bankName).toBe('Meezan');
-      expect(result.usdToPkrRate).toBe(278);
+    it('throws when the seller has not set up bank transfer', async () => {
+      checkoutModel.findOne.mockReturnValue(lean({ items: [{ storeId: 's1' }] }));
+      storeModel.findById.mockReturnValue(lean({ name: 'Shop', directPayment: null }));
+      await expect(service.getBankDetails(USER_ID, 'c1')).rejects.toThrow(BadRequestException);
+    });
+
+    it("returns the SELLER's account, not the platform's", async () => {
+      checkoutModel.findOne.mockReturnValue(lean({ items: [{ storeId: 's1' }] }));
+      storeModel.findById.mockReturnValue(lean({ name: 'Shop', directPayment: { bankName: 'HBL', accountNumber: '123456789' } }));
+      const result = await service.getBankDetails(USER_ID, 'c1');
+      expect(result.bankName).toBe('HBL');
+      expect(result.accountNumber).toBe('123456789');
+      expect(result.payeeName).toBe('Shop');
     });
   });
-
   describe('submitPayment', () => {
     it('rejects a submission with no file attached', async () => {
       await expect(service.submitPayment(USER_ID, { checkoutId: 'c1' } as any, undefined)).rejects.toThrow(BadRequestException);

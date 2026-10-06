@@ -15,6 +15,7 @@ import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 
 import { clampInt } from 'src/common/query-safety.util';
+import { encryptSeoCredential, decryptSeoCredential } from 'src/common/seo-token-encryption.util';
 // ── Platform fee constants ───────────────────────────────────────────────────
 export const PLATFORM_FEE_RATE       = 0.08;   // 8% per sale — last-resort fallback, see CommissionRulesService
 export const PAYMENT_PROCESSING_RATE = 0.029;  // 2.9%
@@ -622,6 +623,7 @@ export class FinanceService {
       bankName: dto.bankName || null,
       accountHolder: dto.accountHolder || null,
       accountLast4: dto.accountNumber ? dto.accountNumber.slice(-4) : null,
+      accountNumberEnc: dto.accountNumber ? encryptSeoCredential(dto.accountNumber.trim()) : null,
       routingNumber: dto.routingNumber || null,
       externalAccountId: dto.externalAccountId || null,
       isDefault: dto.setAsDefault || isFirstForCurrency,
@@ -637,7 +639,39 @@ export class FinanceService {
       );
     }
 
-    return method;
+    return this.withoutSecrets(method);
+  }
+
+  /** Seller-facing copy of a payout method: the encrypted full account number never leaves the server. */
+  private withoutSecrets(method: any) {
+    const { accountNumberEnc: _enc, ...safe } = typeof method.toObject === 'function' ? method.toObject() : method;
+    return safe;
+  }
+
+  /** Admin-only — the full destination for a payout, so the admin can actually send the money.
+   *  Every reveal is written to the activity log. */
+  async adminGetPayoutDestination(payoutId: string, adminId: string, ip?: string, userAgent?: string) {
+    const payout = await this.payoutModel.findById(payoutId).lean<any>();
+    if (!payout) throw new NotFoundException('Payout not found');
+    const method: any = payout.payoutMethodId && payout.payoutMethodId !== 'admin-manual'
+      ? await this.methodModel.findById(payout.payoutMethodId).select('+accountNumberEnc').lean()
+      : null;
+    let accountNumber: string | null = null;
+    if (method?.accountNumberEnc) {
+      try { accountNumber = decryptSeoCredential(method.accountNumberEnc); } catch { throw new BadRequestException('Could not decrypt this account number — ask the seller to re-enter it.'); }
+    }
+    this.activityLogService.log({
+      storeId: payout.storeId, category: 'finance', action: 'payout_destination_viewed',
+      description: 'Admin viewed a payout destination (full account number)', actorId: adminId, actorRole: 'admin',
+      targetId: payoutId, targetType: 'payout', ipAddress: ip, userAgent,
+    } as any);
+    return {
+      payoutId, amount: payout.amount, currency: payout.currency, type: method?.type ?? payout.payoutMethodSnapshot?.type ?? null,
+      bankName: method?.bankName ?? payout.payoutMethodSnapshot?.bankName ?? null, accountHolder: method?.accountHolder ?? null,
+      accountNumber, last4: method?.accountLast4 ?? payout.payoutMethodSnapshot?.accountLast4 ?? null,
+      routingNumber: method?.routingNumber ?? null, externalAccountId: method?.externalAccountId ?? null,
+      needsReentry: !!method && !accountNumber && (method.type === 'bank_transfer' || method.type === 'jazzcash' || method.type === 'easypaisa'),
+    };
   }
 
   /** Admin-only — moves a payout method to 'active' (or back to 'inactive') after reviewing it. No live automated verification exists yet, so every new method starts 'pending_verification' and must pass through here before a seller can withdraw to it. */
@@ -691,7 +725,10 @@ export class FinanceService {
 
     if (dto.bankName !== undefined)    method.bankName    = dto.bankName;
     if (dto.accountHolder !== undefined) method.accountHolder = dto.accountHolder;
-    if (dto.accountNumber)             method.accountLast4 = dto.accountNumber.slice(-4);
+    if (dto.accountNumber) {
+      method.accountLast4 = dto.accountNumber.slice(-4);
+      method.accountNumberEnc = encryptSeoCredential(dto.accountNumber.trim());
+    }
     if (dto.routingNumber !== undefined) method.routingNumber = dto.routingNumber;
     if (dto.externalAccountId !== undefined) method.externalAccountId = dto.externalAccountId;
     if (dto.currency !== undefined)    method.currency = dto.currency;
@@ -709,7 +746,7 @@ export class FinanceService {
     }
 
     await method.save();
-    return method;
+    return this.withoutSecrets(method);
   }
 
   async deletePayoutMethod(sellerId: string, storeId: string, methodId: string) {

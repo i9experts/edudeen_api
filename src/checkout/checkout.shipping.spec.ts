@@ -26,6 +26,7 @@ function makeService(opts: { pickedAddress?: any; zonesConfigured?: boolean } = 
     productVariantModel: { findOne: jest.fn().mockResolvedValue({ _id: { toString: () => 'v1' }, productId: 'p1', price: 900, stock: 5, currency: 'PKR' }) },
     storeModel: {
       findOne: jest.fn(() => chain({ status: 'active' })),
+      findById: jest.fn(() => chain({ directPayment: null })),
       find: jest.fn(() => chain([{ codEnabled: true }])),
     },
     sellerModel: { find: jest.fn(() => chain([])) },

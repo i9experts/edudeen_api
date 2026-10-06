@@ -16,6 +16,8 @@ export class ManualPaymentProof {
   @Prop({ type: String, required: true }) userId: string;
   @Prop({ type: String, required: true }) checkoutId: string;
   @Prop({ type: [String], default: [] }) orderIds: string[];
+  // Store whose seller received this transfer and confirms it (null on legacy, platform-account proofs).
+  @Prop({ type: String, default: null }) storeId: string | null;
 
   // Snapshot of the amount at submission time — the USD figure is the
   // checkout's own total (source of truth for pricing everywhere else in

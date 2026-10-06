@@ -1,4 +1,5 @@
 import { bundleSavings } from '../classroom/bundle.util';
+import { hasDirectPayment, type DirectPaymentDetails } from 'src/common/direct-payment.util';
 import { paidSeatFilter } from '../classroom/course.util';
 import {
   Injectable,
@@ -649,7 +650,10 @@ export class CheckoutService {
     // substitute — it's offered alongside 'stripe' whenever an admin has it
     // enabled, regardless of digital/physical mix. Admin-config-gated so it
     // can be turned off platform-wide without a deploy.
-    const manualTransferEnabled = await this.adminConfigService.isManualPaymentEnabled();
+    // Offered when this store's seller has set up their own bank / wallet details —
+    // the money goes straight to them, the platform is not involved.
+    const payStore = await this.databaseService.repositories.storeModel.findById(storeId).select('directPayment').lean<{ directPayment?: DirectPaymentDetails | null }>();
+    const manualTransferEnabled = hasDirectPayment(payStore?.directPayment);
     const withManualTransfer = (methods: string[]) =>
       manualTransferEnabled ? [...methods, 'manual_bank_transfer'] : methods;
 

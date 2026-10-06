@@ -331,6 +331,11 @@ export class Store {
   @Prop({ type: String, default: null })
   baseCurrency: string | null;
 
+  // Bank / wallet details buyers pay into directly. Sale money goes straight to the
+  // seller — Edudeen never holds it (sellers pay the platform a plan fee instead).
+  @Prop({ type: Object, default: null })
+  directPayment: Record<string, string | null> | null;
+
   @Prop({ type: String, default: null })
   categoryId!: string | null;
 
