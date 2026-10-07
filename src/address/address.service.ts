@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Injectable } from '@nestjs/common';
+import { Injectable, HttpException, NotFoundException } from '@nestjs/common';
 import { BadRequestException } from '@nestjs/common';
 import { isValidObjectId } from 'mongoose';
 import { DatabaseService } from 'src/database/databaseservice';
@@ -46,7 +46,7 @@ export class AddressService {
       // 1️⃣ Check user exist
       const user = await this.databaseService.repositories.userModel.findById(userId);
       if (!user) {
-        throw new Error('User not found');
+        throw new NotFoundException('No buyer account found for this sign-in. Please switch to your buyer account to continue.');
       }
 
       if (body.isDefault) {
@@ -79,9 +79,8 @@ export class AddressService {
         data: address,
       };
     } catch (error) {
-      return {
-        message: error.message,
-      };
+      if (error instanceof HttpException) throw error;
+      throw new BadRequestException(error.message);
     }
   }
   
@@ -99,9 +98,8 @@ export class AddressService {
         data: addresses,
       };
     } catch (error) {
-      return {
-        message: error.message,
-      };
+      if (error instanceof HttpException) throw error;
+      throw new BadRequestException(error.message);
     }
   }
 
@@ -122,7 +120,7 @@ export class AddressService {
       );
 
       if (!updated) {
-        throw new Error('Address not found');
+        throw new NotFoundException('Address not found');
       }
 
       return {
@@ -130,9 +128,8 @@ export class AddressService {
         data: updated,
       };
     } catch (error) {
-      return {
-        message: error.message,
-      };
+      if (error instanceof HttpException) throw error;
+      throw new BadRequestException(error.message);
     }
   }
 
@@ -147,12 +144,9 @@ export class AddressService {
     };
 
   } catch (error) {
-
-    return {
-      message: error.message,
-    };
-
-  }
+      if (error instanceof HttpException) throw error;
+      throw new BadRequestException(error.message);
+    }
 }
   
   // service
@@ -182,13 +176,9 @@ async getDefaultAddress(userId: string) {
     };
 
   } catch (error) {
-
-    return {
-      success: false,
-      message: error.message || 'Something went wrong',
-    };
-
-  }
+      if (error instanceof HttpException) throw error;
+      throw new BadRequestException(error.message || 'Something went wrong');
+    }
 }
 
   async deleteAddress(userId: string, addressId: string) {
@@ -200,10 +190,7 @@ async getDefaultAddress(userId: string) {
       );
 
       if (!deleted) {
-        return {
-          success: false,
-          message: 'Address not found',
-        };
+        throw new NotFoundException('Address not found');
       }
 
       // If the deleted address was the default, promote another one so the
@@ -221,10 +208,8 @@ async getDefaultAddress(userId: string) {
         message: 'Address deleted successfully',
       };
     } catch (error) {
-      return {
-        success: false,
-        message: error.message,
-      };
+      if (error instanceof HttpException) throw error;
+      throw new BadRequestException(error.message || 'Something went wrong');
     }
   }
 
@@ -249,10 +234,8 @@ async getDefaultAddress(userId: string) {
         data: updated,
       };
     } catch (error) {
-      return {
-        success: false,
-        message: error.message,
-      };
+      if (error instanceof HttpException) throw error;
+      throw new BadRequestException(error.message || 'Something went wrong');
     }
   }
 
