@@ -233,6 +233,16 @@ export class PlatformPlansService {
 
   // ── Public ─────────────────────────────────────────────────────────────
 
+  /** Whether this signed-in account can still take the (one-time) free trial. */
+  async freeTrialEligibility(userId: string, role: string) {
+    const { userModel, sellerModel } = this.db.repositories;
+    let email: string | undefined;
+    if (role === 'seller') email = (await sellerModel.findById(userId).select('email').lean() as any)?.email;
+    else if (role === 'user') email = (await userModel.findById(userId).select('email').lean() as any)?.email;
+    const seller = email ? await sellerModel.findOne({ email }).select('freeTrialUsedAt').lean() : null;
+    return { success: true, data: { eligible: !(seller as any)?.freeTrialUsedAt } };
+  }
+
   async browsePlans() {
     // `isPubliclyVisible` defaults to true on new plans, but existing plans created
     // before this field existed have it entirely absent in Mongo (not backfilled) —

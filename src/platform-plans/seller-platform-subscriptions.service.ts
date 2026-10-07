@@ -126,7 +126,7 @@ export class SellerPlatformSubscriptionsService {
     sub.pendingPlanChange = null;
     sub.platformPlanId = (freePlan as any)._id.toString();
     sub.amountUSD = 0;
-    sub.status = 'active';
+    sub.status = ((freePlan as any).trialDays ?? 0) > 0 ? 'expired' : 'active';
     sub.failedPaymentAttempts = 0;
     sub.cancelAtPeriodEnd = false;
     sub.canceledAt = null;
@@ -241,10 +241,15 @@ export class SellerPlatformSubscriptionsService {
     // A free plan with trial days is a time-limited trial: the store runs on it
     // for that many days (see expireTrials) and must pick a paid plan after.
     const trialDays = Number((freePlan as any).trialDays) || 0;
+    // The free trial is one per seller: a seller who already had it starts expired.
+    const trialAlreadyUsed = trialDays > 0 && !!(seller as any)?.freeTrialUsedAt;
+    if (trialDays > 0 && !trialAlreadyUsed) {
+      await this.db.repositories.sellerModel.updateOne({ _id: sellerId }, { $set: { freeTrialUsedAt: now } });
+    }
     return this.subModel.create({
       storeId, sellerId, platformPlanId: (freePlan as any)._id.toString(),
-      billingInterval: 'monthly', amountUSD: 0, status: trialDays > 0 ? 'trialing' : 'active',
-      trialEndsAt: trialDays > 0 ? new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000) : null,
+      billingInterval: 'monthly', amountUSD: 0, status: trialDays > 0 ? (trialAlreadyUsed ? 'expired' : 'trialing') : 'active',
+      trialEndsAt: trialDays > 0 ? (trialAlreadyUsed ? now : new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000)) : null,
       startedAt: now, currentPeriodStart: now, currentPeriodEnd: this.addPeriod(now, 'monthly'),
       nextBillingDate: this.addPeriod(now, 'monthly'),
       stripeCustomerId,
@@ -426,6 +431,9 @@ export class SellerPlatformSubscriptionsService {
     ]);
     if (!newPlan) throw new NotFoundException('Target platform plan not found or inactive');
     if (newPlan.isCustomPricing) throw new BadRequestException('This plan requires contacting sales — it has no self-serve checkout');
+    if (newPlan.isFree && (newPlan.trialDays ?? 0) > 0 && String(sub.platformPlanId) !== String(newPlanId)) {
+      throw new BadRequestException('The free trial can only be used once. Please choose a paid plan.');
+    }
     if (String(sub.platformPlanId) === String(newPlanId) && sub.billingInterval === newInterval) {
       throw new BadRequestException('This is already your current plan');
     }
@@ -822,6 +830,18 @@ export class SellerPlatformSubscriptionsService {
         sub.status = 'expired';
         await sub.save();
         expired++;
+        const billingPath = `/store/${sub.storeId}/plan-billing`;
+        const { sellerName, sellerEmail, storeName } = await this.getSellerAndStoreNames(sub.sellerId, sub.storeId);
+        if (sellerEmail) {
+          await this.notifications.sendTrialEnded(sellerEmail, { sellerName, storeName, billingPath }).catch(() => undefined);
+        }
+        this.notificationsService.notify({
+          recipientId: sub.sellerId, recipientRole: 'seller',
+          type: NOTIFICATION_TYPES.PLATFORM_PLAN_RENEWAL_REMINDER,
+          title: 'Your free trial has ended',
+          body: `Choose a plan to keep ${storeName} selling.`,
+          data: { subscriptionId: String(sub._id), link: billingPath },
+        }).catch(() => {});
         continue;
       } else if (freePlan) {
         sub.platformPlanId = (freePlan as any)._id.toString();
@@ -884,19 +904,20 @@ export class SellerPlatformSubscriptionsService {
       ]);
       const trialEndsAt: Date = sub.trialEndsAt ?? now;
       const daysLeft = Math.max(0, Math.round((trialEndsAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)));
+      const billingPath = `/store/${sub.storeId}/plan-billing`;
       if (sellerEmail) {
         await this.notifications.sendTrialEndingSoon(sellerEmail, {
           sellerName, storeName, planName: (plan as any)?.name ?? 'your plan',
-          amountUSD: sub.amountUSD, daysLeft, trialEndsAt,
+          amountUSD: sub.amountUSD, daysLeft, trialEndsAt, billingPath,
         });
       }
       this.notificationsService.notify({
         recipientId: sub.sellerId,
         recipientRole: 'seller',
         type: NOTIFICATION_TYPES.PLATFORM_PLAN_RENEWAL_REMINDER,
-        title: 'Trial ending soon',
-        body: `Your ${storeName} plan trial ends in ${daysLeft} day(s).`,
-        data: { subscriptionId: String(sub._id) },
+        title: 'Your free trial is ending',
+        body: `Your ${storeName} free trial ends in ${daysLeft} day(s). Choose a plan to keep selling.`,
+        data: { subscriptionId: String(sub._id), link: billingPath },
       }).catch(() => {});
       sub.trialReminderSent = true;
       await sub.save();

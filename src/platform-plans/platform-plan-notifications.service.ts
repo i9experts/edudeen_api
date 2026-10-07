@@ -132,7 +132,28 @@ export class PlatformPlanNotificationsService {
     await this.send(to, `${escapeHtml(data.storeName)} was moved to the free plan after failed payments`, html);
   }
 
-  async sendTrialEndingSoon(to: string, data: { sellerName: string; storeName: string; planName: string; amountUSD: number; daysLeft: number; trialEndsAt: Date }) {
+  /** Free trial ran out — points the seller at paid plans. */
+  async sendTrialEnded(to: string, data: { sellerName: string; storeName: string; billingPath: string }) {
+    const url = `${process.env.WEB_APP_URL || 'https://edudeen.com'}${data.billingPath}`;
+    const html = shell('Your free trial has ended', `
+      <p>Hi ${escapeHtml(data.sellerName)},</p>
+      <p>The free trial for <strong>${escapeHtml(data.storeName)}</strong> has ended. Choose a plan to keep selling on ${APP_NAME}.</p>
+      <p style="text-align:center;margin:28px 0;"><a href="${url}" style="background:#174771;color:#fff;padding:12px 26px;border-radius:8px;text-decoration:none;font-weight:600;">Choose a plan</a></p>
+    `);
+    await this.send(to, `Your ${escapeHtml(data.storeName)} free trial has ended`, html);
+  }
+
+  async sendTrialEndingSoon(to: string, data: { sellerName: string; storeName: string; planName: string; amountUSD: number; daysLeft: number; trialEndsAt: Date; billingPath?: string }) {
+    if (data.amountUSD === 0 && data.billingPath) {
+      const url = `${process.env.WEB_APP_URL || 'https://edudeen.com'}${data.billingPath}`;
+      const body = `
+        <p>Hi ${escapeHtml(data.sellerName)},</p>
+        <p>Your free trial for <strong>${escapeHtml(data.storeName)}</strong> ends in <strong>${data.daysLeft} day${data.daysLeft === 1 ? '' : 's'}</strong> (${data.trialEndsAt.toDateString()}).</p>
+        <p>Choose a paid plan before then to keep selling without interruption.</p>
+        <p style="text-align:center;margin:28px 0;"><a href="${url}" style="background:#174771;color:#fff;padding:12px 26px;border-radius:8px;text-decoration:none;font-weight:600;">Choose a plan</a></p>`;
+      await this.send(to, `Your free trial ends in ${data.daysLeft} day${data.daysLeft === 1 ? '' : 's'}`, shell('Your free trial is ending', body));
+      return;
+    }
     const html = shell('Your trial is ending soon', `
       <p>Hi ${escapeHtml(data.sellerName)},</p>
       <p>Your <strong>${escapeHtml(data.planName)}</strong> trial for <strong>${escapeHtml(data.storeName)}</strong> ends in

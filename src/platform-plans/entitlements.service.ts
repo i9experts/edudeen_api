@@ -110,8 +110,12 @@ export class EntitlementsService {
   /** Sellers can list any number of products on every plan, so this never blocks.
    *  Kept (and still called before each create) so a cap can be reinstated here
    *  in one place; `maxProducts` on the plan is now informational only. */
-  async assertCanCreateProduct(_storeId: string): Promise<void> {
-    return;
+  async assertCanCreateProduct(storeId: string): Promise<void> {
+    // An ended free trial must be replaced by a paid plan before listing anything new.
+    const sub = await this.subModel.findOne({ storeId, isDelete: false }).select('status').lean();
+    if ((sub as any)?.status === 'expired') {
+      throw new ForbiddenException('Your free trial has ended. Choose a plan in Plan & Billing to keep adding products.');
+    }
   }
 
   /** Throws if the store already has its plan's limit of StoreBanner rows. Call BEFORE creating a new one.

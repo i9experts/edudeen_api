@@ -83,6 +83,10 @@ export class Seller {
     @Prop({ type: Boolean, default: false })
     hasPlatformPaymentMethod: boolean;
 
+    // Set when this seller's free trial plan starts — the free trial can be used once only.
+    @Prop({ type: Date, default: null })
+    freeTrialUsedAt: Date | null;
+
     // Stripe Connect (Express) account for RECEIVING buyer payments directly
     // — a seller's "own payment gateway", completely separate from
     // `stripeCustomerId` above (that one is the seller PAYING Edudeen for

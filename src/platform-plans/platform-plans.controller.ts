@@ -13,6 +13,13 @@ import { UpdatePlatformPlanDto } from './dto/update-platform-plan.dto';
 export class PlatformPlansController {
   constructor(private readonly platformPlansService: PlatformPlansService) {}
 
+  // Signed-in account: can it still start the one-time free trial?
+  @UseGuards(JwtAuthGuard)
+  @Get('free-trial-eligibility')
+  freeTrialEligibility(@Req() req: any) {
+    return this.platformPlansService.freeTrialEligibility(req.user.userId, req.user.role);
+  }
+
   // Public — pricing page reads from here instead of hardcoded frontend data.
   @Get('public')
   browsePlans() {
