@@ -102,6 +102,15 @@ export class AdminConfigController {
     });
   }
 
+  @Put('home-content')
+  updateHomeContent(@Req() req: any, @Body() body: Record<string, unknown>) {
+    return this.adminConfigService.updateHomeContent(body, {
+      adminId: req.user.userId,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+  }
+
   @Put('social-links')
   updateSocialLinks(@Req() req: any, @Body() dto: UpdateSocialLinksDto) {
     return this.adminConfigService.updateSocialLinks(dto, {

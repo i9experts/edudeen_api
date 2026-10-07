@@ -184,6 +184,11 @@ export class PlatformConfig {
 
   @Prop({ type: SocialLinksSchema, default: () => ({}) })
   socialLinks: SocialLinks;
+
+  // Admin-editable homepage copy (hero text/image, promise strip, trust items).
+  // Free-form object; admin-config.service sanitises it on write.
+  @Prop({ type: Object, default: () => ({}) })
+  homeContent: Record<string, unknown>;
 }
 
 export const PlatformConfigSchema = SchemaFactory.createForClass(PlatformConfig);

@@ -283,6 +283,39 @@ export class AdminConfigService {
     return { success: true, message: 'Social links updated', data: config };
   }
 
+  /** Admin-editable homepage + legal-page text. Only known keys survive, trimmed and length-capped; a key left out of the request keeps its stored value, a blank clears it (the site falls back to its built-in default). */
+  async updateHomeContent(body: Record<string, unknown>, meta: AuditMeta) {
+    const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+    const src = body ?? {};
+    const set: Record<string, unknown> = {};
+    for (const key of ['heroEyebrow', 'heroTitle', 'heroHighlight', 'heroText', 'heroPrimaryLabel', 'heroSecondaryLabel', 'heroBadge', 'featureEyebrow', 'featureHeading', 'featureText', 'featureLinkLabel', 'featuredCategory']) {
+      if (src[key] !== undefined) set[`homeContent.${key}`] = str(src[key], 300);
+    }
+    for (const key of ['heroImageUrl', 'googlePlayUrl']) {
+      if (src[key] === undefined) continue;
+      const v = str(src[key], 500);
+      if (v && !/^https?:\/\/\S+$/i.test(v)) throw new BadRequestException(`${key} must be a full https:// link`);
+      set[`homeContent.${key}`] = v;
+    }
+    if (src.promiseItems !== undefined) {
+      set['homeContent.promiseItems'] = (Array.isArray(src.promiseItems) ? src.promiseItems : []).map(x => str(x, 80)).filter(Boolean).slice(0, 6);
+    }
+    if (src.trustItems !== undefined) {
+      set['homeContent.trustItems'] = (Array.isArray(src.trustItems) ? src.trustItems : [])
+        .map((x: any) => ({ label: str(x?.label, 60), sub: str(x?.sub, 120) })).filter(x => x.label).slice(0, 4);
+    }
+    if (src.legalPages && typeof src.legalPages === 'object') {
+      for (const key of ['privacy-policy', 'terms-of-service', 'cookie-policy']) {
+        const page = (src.legalPages as Record<string, any>)[key];
+        if (page === undefined) continue;
+        set[`homeContent.legalPages.${key}`] = { text: str(page?.text, 40000), lastUpdated: str(page?.lastUpdated, 40) };
+      }
+    }
+    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
+    this.invalidateCache();
+    await this.logChange('home_content_updated', 'Homepage content updated', meta);
+    return { success: true, message: 'Homepage content updated', data: (config as any).homeContent };
+  }
   /**
    * Public, read-only slice of the platform config — ONLY fields that are safe
    * for anyone to see (no bank details, no email/AI/fx internals). Used by the
@@ -300,6 +333,7 @@ export class AdminConfigService {
       success: true,
       data: {
         socialLinks,
+        homeContent: (config as any).homeContent ?? {},
         payout: {
           frequency: config.payoutConfig?.payoutFrequency ?? 'monthly',
         },
