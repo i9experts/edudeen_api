@@ -238,9 +238,13 @@ export class SellerPlatformSubscriptionsService {
     const stripeCustomerId = (seller as any)?.stripeCustomerId ?? null;
 
     const now = new Date();
+    // A free plan with trial days is a time-limited trial: the store runs on it
+    // for that many days (see expireTrials) and must pick a paid plan after.
+    const trialDays = Number((freePlan as any).trialDays) || 0;
     return this.subModel.create({
       storeId, sellerId, platformPlanId: (freePlan as any)._id.toString(),
-      billingInterval: 'monthly', amountUSD: 0, status: 'active',
+      billingInterval: 'monthly', amountUSD: 0, status: trialDays > 0 ? 'trialing' : 'active',
+      trialEndsAt: trialDays > 0 ? new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000) : null,
       startedAt: now, currentPeriodStart: now, currentPeriodEnd: this.addPeriod(now, 'monthly'),
       nextBillingDate: this.addPeriod(now, 'monthly'),
       stripeCustomerId,
@@ -554,6 +558,7 @@ export class SellerPlatformSubscriptionsService {
     sub.cancelAtPeriodEnd = false;
     sub.cancelReason = null;
     sub.status = 'active';
+    sub.trialEndsAt = null;
     sub.planHistory = [...(sub.planHistory ?? []), historyEntry];
     await sub.save();
     await this.syncFeaturedBadge(storeId, newPlan);
@@ -812,6 +817,12 @@ export class SellerPlatformSubscriptionsService {
         // A real Stripe subscription exists — Stripe itself will invoice at
         // trial end and we react via webhook; just clear our local flag.
         sub.status = 'active';
+      } else if (freePlan && String(sub.platformPlanId) === String((freePlan as any)._id) && ((freePlan as any).trialDays ?? 0) > 0) {
+        // The free trial ran out and no paid plan was chosen.
+        sub.status = 'expired';
+        await sub.save();
+        expired++;
+        continue;
       } else if (freePlan) {
         sub.platformPlanId = (freePlan as any)._id.toString();
         sub.amountUSD = 0;
