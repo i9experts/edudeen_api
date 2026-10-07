@@ -209,7 +209,7 @@ export class CartService {
       const products = productIds.length
         ? await this.databaseService.repositories.productModel
             .find({ _id: { $in: productIds } })
-            .select('images sellerId')
+            .select('images sellerId status isDelete')
             .lean()
         : [];
       const productById = new Map(
@@ -231,8 +231,14 @@ export class CartService {
         sellers.map((s: any) => [s._id.toString(), s]),
       );
 
+      // A listing an admin removed (or that is no longer active) must not stay in the cart, priced and counted.
+      const liveItems = cart.items.filter((item: any) => {
+        const p = productById.get(item.productId);
+        return !!p && !p.isDelete && p.status === 'active';
+      });
+
       // Cart items map karo
-      const items = cart.items.map((item) => {
+      const items = liveItems.map((item) => {
         // Ek item ka total
         const itemTotal = item.price * item.quantity;
 

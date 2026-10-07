@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { EntitlementsService } from '../platform-plans/entitlements.service';
 import { DatabaseService } from '../database/databaseservice';
 import { RedisService } from '../redis/redis.service';
 import { verifyStoreOwnershipOrForbidden } from '../common/store-ownership.util';
@@ -36,7 +37,15 @@ export class AnalyticsService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly redis: RedisService,
+    @Optional() private readonly entitlements?: EntitlementsService,
   ) {}
+
+  /** Advanced analytics (customers, product performance, traffic, payments, exports…) is a plan feature. */
+  async assertAdvancedAnalytics(sellerId: string, storeId?: string | null): Promise<void> {
+    if (!this.entitlements) return;
+    const { storeIds } = await this.resolveScope(sellerId, storeId);
+    for (const id of storeIds) await this.entitlements.assertFeatureAllowed(id, 'advancedAnalyticsAllowed', 'Advanced analytics');
+  }
 
   private get r() {
     return this.databaseService.repositories;

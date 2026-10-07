@@ -63,6 +63,10 @@ export class SellerPlatformSubscriptionsService {
 
   /** Keeps Store.badges in sync with the `marketplaceFeaturedBadge` entitlement — reuses the existing admin-badge-driven marketplace sort/highlight logic verbatim, no changes needed there. */
   private async syncFeaturedBadge(storeId: string, plan: any) {
+    // A plan without the loyalty feature can't keep a running loyalty program (e.g. after a downgrade).
+    if (!plan?.limits?.loyaltyProgramAllowed) {
+      await this.db.repositories.loyaltyProgramModel.updateMany({ storeId, isEnabled: true }, { $set: { isEnabled: false } }).catch(() => undefined);
+    }
     try {
       const store = await this.storeModel.findById(storeId);
       if (!store) return;

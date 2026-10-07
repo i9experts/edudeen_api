@@ -45,7 +45,8 @@ export class AnalyticsController {
   }
 
   @Get('traffic-sources')
-  getTrafficSources(@Req() req: any, @Query() query: AnalyticsQueryDto) {
+  async getTrafficSources(@Req() req: any, @Query() query: AnalyticsQueryDto) {
+    await this.analyticsService.assertAdvancedAnalytics(req.user.userId, query.storeId);
     return this.analyticsService.getTrafficSources(req.user.userId, query.storeId, query);
   }
 
@@ -55,33 +56,39 @@ export class AnalyticsController {
   }
 
   @Get('customers')
-  getCustomerAnalytics(@Req() req: any, @Query() query: AnalyticsQueryDto) {
+  async getCustomerAnalytics(@Req() req: any, @Query() query: AnalyticsQueryDto) {
+    await this.analyticsService.assertAdvancedAnalytics(req.user.userId, query.storeId);
     return this.analyticsService.getCustomerAnalytics(req.user.userId, query.storeId, query);
   }
 
   @Get('products/performance')
-  getProductPerformance(@Req() req: any, @Query() query: ProductPerformanceQueryDto) {
+  async getProductPerformance(@Req() req: any, @Query() query: ProductPerformanceQueryDto) {
+    await this.analyticsService.assertAdvancedAnalytics(req.user.userId, query.storeId);
     return this.analyticsService.getProductPerformance(req.user.userId, query.storeId, query);
   }
 
   @Get('inventory-insights')
-  getInventoryInsights(@Req() req: any, @Query() query: AnalyticsQueryDto) {
+  async getInventoryInsights(@Req() req: any, @Query() query: AnalyticsQueryDto) {
+    await this.analyticsService.assertAdvancedAnalytics(req.user.userId, query.storeId);
     return this.analyticsService.getInventoryInsights(req.user.userId, query.storeId);
   }
 
   @Get('payment-methods')
-  getPaymentMethods(@Req() req: any, @Query() query: AnalyticsQueryDto) {
+  async getPaymentMethods(@Req() req: any, @Query() query: AnalyticsQueryDto) {
+    await this.analyticsService.assertAdvancedAnalytics(req.user.userId, query.storeId);
     return this.analyticsService.getPaymentMethods(req.user.userId, query.storeId, query);
   }
 
   @Get('revenue-breakdown')
-  getRevenueBreakdown(@Req() req: any, @Query() query: AnalyticsQueryDto) {
+  async getRevenueBreakdown(@Req() req: any, @Query() query: AnalyticsQueryDto) {
+    await this.analyticsService.assertAdvancedAnalytics(req.user.userId, query.storeId);
     return this.analyticsService.getRevenueBreakdown(req.user.userId, query.storeId, query);
   }
 
   @Get('export')
   async export(@Req() req: any, @Query() query: ExportQueryDto, @Res() res: Response) {
     const sellerId = req.user.userId;
+    await this.analyticsService.assertAdvancedAnalytics(sellerId, query.storeId);
 
     if (query.format === 'pdf') {
       const pdf = await this.analyticsService.exportPdf(sellerId, query.storeId, query);

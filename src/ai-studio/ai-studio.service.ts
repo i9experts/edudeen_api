@@ -1,9 +1,10 @@
 /* eslint-disable prettier/prettier */
 import { cleanAiText, cleanAiTags } from './ai-output.util';
 import {
-  BadRequestException, HttpException, HttpStatus, Injectable, Logger, NotFoundException,
+  BadRequestException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, Optional,
 } from '@nestjs/common';
 import { Types } from 'mongoose';
+import { EntitlementsService } from '../platform-plans/entitlements.service';
 import { DatabaseService } from 'src/database/databaseservice';
 import { verifyStoreOwnershipOrForbidden } from 'src/common/store-ownership.util';
 import { AiStudioCreditsService } from './ai-studio-credits.service';
@@ -38,6 +39,7 @@ export class AiStudioService {
     private readonly keywordData: KeywordDataService,
     private readonly pricingData: PricingDataService,
     private readonly imageEnhance: ImageEnhanceService,
+    @Optional() private readonly entitlements?: EntitlementsService,
   ) {}
 
   private get generationModel() { return this.db.repositories.aiGenerationModel; }
@@ -134,6 +136,7 @@ export class AiStudioService {
 
   async generateEmail(sellerId: string, storeId: string, dto: GenerateEmailDto) {
     const store = await this.verifyStore(storeId, sellerId);
+    await this.entitlements?.assertFeatureAllowed(storeId, 'emailCampaignsAllowed', 'Email campaigns');
 
     const products: Array<{ name: string; price?: number | null }> = [];
     for (const productId of dto.productIds ?? []) {

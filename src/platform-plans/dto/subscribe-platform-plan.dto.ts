@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsEnum, IsOptional, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsEnum, IsOptional, MaxLength, IsInt, Min, Max, IsObject } from 'class-validator';
 
 export class SubscribePlatformPlanDto {
   @ApiProperty({ description: 'PlatformPlan _id to subscribe this store to' })
@@ -42,11 +42,14 @@ export class ConfirmOnboardingPaymentMethodDto {
 
 export class SaveOnboardingDraftDto {
   @ApiProperty({ description: 'Which wizard step the seller is currently on (1-5)' })
+  @IsInt() @Min(1) @Max(10)
   step: number;
 
   @ApiProperty({ description: 'Furthest step reached so far — drives which steps are clickable in the header' })
+  @IsInt() @Min(1) @Max(10)
   maxReached: number;
 
   @ApiProperty({ description: 'The wizard form fields entered so far (storeName, categoryId, description, sellerType, productTypes, etc.)' })
+  @IsObject()
   form: Record<string, unknown>;
 }
