@@ -249,6 +249,48 @@ export class AuthService {
     }
   }
 
+  /** A signed-in, verified buyer opens a seller account on the same email
+   *  ("Sell on Edudeen"): the seller account reuses the buyer's verified
+   *  email and password, so no second sign-up or OTP. Returns a seller
+   *  session; if a seller account already exists it simply signs into it. */
+  async becomeSeller(userId: string) {
+    try {
+      const { userModel, sellerModel } = this.databaseService.repositories;
+      const buyer = await userModel.findById(userId);
+      if (!buyer || !buyer.isVerified || buyer.isDelete || buyer.status === 'deleted' || buyer.status === 'suspended') {
+        throw new UnauthorizedException('Your account cannot be upgraded');
+      }
+      let seller = await sellerModel.findOne({ email: buyer.email });
+      if (seller && (seller.isDelete || seller.status === 'deleted' || seller.status === 'suspended')) {
+        throw new UnauthorizedException('A seller account for this email is not available');
+      }
+      if (!seller) {
+        seller = new sellerModel({ email: buyer.email, role: 'seller' });
+        Object.assign(seller, {
+          name: buyer.name,
+          password: buyer.password,
+          phone: buyer.phone,
+          address: buyer.address,
+          profileImage: buyer.profileImage,
+          role: 'seller',
+          isVerified: true,
+        });
+        await seller.save();
+      }
+      const { accessToken, refreshToken } = await this.issueSession(seller);
+      return {
+        message: 'Seller account ready',
+        success: true,
+        data: {
+          user: { id: seller._id, name: seller.name, email: seller.email, role: seller.role, image: seller.profileImage || null },
+          token: { accessToken, refreshToken },
+        },
+      };
+    } catch (error) {
+      throw this.mapError(error, 'Could not open a seller account');
+    }
+  }
+
   async login(loginDto: LoginDto, ip?: string, userAgent?: string) {
     try {
       const { email, password, role } = loginDto;

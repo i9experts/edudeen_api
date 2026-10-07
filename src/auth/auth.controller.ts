@@ -83,6 +83,15 @@ export class AuthController {
     return this.authService.resetPassword(body.email, body.role, body.otp, body.newPassword);
   }
 
+  // Buyer → seller on the same email (the "Sell on Edudeen" flow).
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('user')
+  @Post('become-seller')
+  async becomeSeller(@Req() req: any) {
+    return this.authService.becomeSeller(req.user.userId);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   async logout(@Req() req: any) {
