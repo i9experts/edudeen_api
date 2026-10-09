@@ -317,6 +317,10 @@ export class Product {
   @Prop({ type: Object, default: null })
   aiReviewSummary: Record<string, any> | null;
 
+  // True for a draft created from an AI-generated worksheet/quiz (AI Studio "Save as digital product"). Seller reviews and publishes manually.
+  @Prop({ type: Boolean, default: false })
+  aiGenerated: boolean;
+
   // SEO overrides — see seo/schemas/seo-meta.schema.ts. Absent/empty until a
   // seller edits it or SeoAiService generates a suggestion; falls back to
   // category → store → global template via SeoResolutionService.

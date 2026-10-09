@@ -43,7 +43,7 @@ export function normalizeFilters(raw: any): SearchFilters {
 /**
  * Pure: Mongo filter for the structured search. Keywords are matched (OR) against name, description and tags
  * (plus categories matched by name via `categoryIds`). No raw model text is ever put in the query unescaped.
- * TODO(owner): replace keyword matching with embeddings / Atlas Vector Search for semantic search.
+ * Semantic (embedding) ranking is merged on top of this by SmartSearchService (see embeddings/semantic-index.service.ts).
  */
 export function buildProductFilter(f: SearchFilters, activeStoreIds: string[], categoryIds: string[] = []): Record<string, any> {
   const q: Record<string, any> = { status: 'active', isDelete: false, storeId: { $in: activeStoreIds } };
@@ -101,6 +101,27 @@ export class AiCatalogService {
     if (f.sort === 'price_asc') cards.sort((a, b) => (a.price ?? 1e12) - (b.price ?? 1e12));
     if (f.sort === 'price_desc') cards.sort((a, b) => (b.price ?? -1) - (a.price ?? -1));
     return cards.slice(0, limit);
+  }
+
+  /** Ids of active, buyable products that satisfy the structured filters (keywords ignored): the bounded candidate set for semantic ranking. */
+  async candidateIds(f: SearchFilters, limit = 1500): Promise<string[]> {
+    const stores = await this.r.storeModel.find({ status: 'active', isDelete: false }, { _id: 1 }).lean();
+    const filter = buildProductFilter({ ...f, keywords: [] }, stores.map((s: any) => s._id.toString()));
+    const rows: any[] = await this.r.productModel.find(filter).select('_id').sort({ purchaseCount: -1, viewCount: -1 }).limit(limit).lean();
+    return rows.map((p) => p._id.toString());
+  }
+
+  /** Cards for specific ids (re-checks active/store status), returned in the order of `ids`; price filters applied. */
+  async cardsByIds(ids: string[], f: Pick<SearchFilters, 'minPrice' | 'maxPrice'> = {}): Promise<ProductCard[]> {
+    const valid = ids.filter((i) => Types.ObjectId.isValid(i));
+    if (!valid.length) return [];
+    const stores = await this.r.storeModel.find({ status: 'active', isDelete: false }, { _id: 1 }).lean();
+    const products: any[] = await this.r.productModel.find({ _id: { $in: valid }, status: 'active', isDelete: false, storeId: { $in: stores.map((s: any) => s._id.toString()) } }).lean();
+    const byId = new Map(products.map((p) => [p._id.toString(), p]));
+    let cards = await this.toCards(valid.map((i) => byId.get(i)).filter(Boolean));
+    if (f.minPrice != null) cards = cards.filter((c) => c.price != null && c.price >= f.minPrice!);
+    if (f.maxPrice != null) cards = cards.filter((c) => c.price != null && c.price <= f.maxPrice!);
+    return cards;
   }
 
   async getOne(idOrSlug: string): Promise<(ProductCard & { description: string; tags: string[]; ageMin: number | null; ageMax: number | null; curricula: string[] }) | null> {

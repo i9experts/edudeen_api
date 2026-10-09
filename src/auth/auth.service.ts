@@ -22,6 +22,7 @@ import * as appleSignin from 'apple-signin-auth';
 // import axios from 'axios';
 import { RedisService } from '../redis/redis.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
+import { phoneChangeInvalidatesVerification } from 'src/phone-verification/phone-otp.util';
 
 @Injectable()
 export class AuthService {
@@ -817,10 +818,20 @@ export class AuthService {
         throw new BadRequestException('Invalid role');
       }
 
+      const update: Record<string, any> = { ...dto };
+      if (typeof dto.phone === 'string' && role !== 'admin') {
+        // A changed number is no longer the verified one: drop the flag so it must be verified again.
+        const current: any = await userModel.findById(userId).select('phoneVerified phoneE164').lean();
+        if (current?.phoneVerified && phoneChangeInvalidatesVerification(current.phoneE164, dto.phone)) {
+          update.phoneVerified = false;
+          update.phoneE164 = null;
+        }
+      }
+
       const user = await userModel
         .findByIdAndUpdate(
           userId,
-          { $set: dto },
+          { $set: update },
           { returnDocument: 'after', runValidators: true },
         )
         .select('-password -otp -otpExpiresAt');

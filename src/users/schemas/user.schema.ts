@@ -82,8 +82,20 @@ export class User {
     // match this current DB value.
     @Prop({ default: 0 })
     tokenVersion: number;
+
+    // Phone/WhatsApp-OTP verification (additive; email stays the login identity). phoneE164 is the verified
+    // number in E.164 form and is unique among verified accounts (partial index below).
+    @Prop({ type: Boolean, default: false })
+    phoneVerified: boolean;
+
+    @Prop({ type: String, default: null })
+    phoneE164: string | null;
+
+    @Prop({ type: Date, default: null })
+    phoneVerifiedAt: Date | null;
 }
 
 
 
 export const UserSchema = SchemaFactory.createForClass(User);
+UserSchema.index({ phoneE164: 1 }, { unique: true, partialFilterExpression: { phoneVerified: true, phoneE164: { $type: 'string' } } });

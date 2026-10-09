@@ -154,6 +154,8 @@ export class InventoryService {
         options: defaultVariant?.options ?? [],
         shippingWeight: defaultVariant?.shippingWeight ?? null,
         variantCount: variants.length,
+        // Lets the Inventory page edit stock inline for single-variant products.
+        defaultVariantId: defaultVariant?._id ?? null,
         minPrice,
         maxPrice,
         // digital-only — full config so re-opening Edit repopulates correctly

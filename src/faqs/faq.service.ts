@@ -157,6 +157,8 @@ export class FaqService {
   // ─────────────────────────────────────────
 
   async search(query: string) {
+    // No search text -> no results (a missing $search value made MongoDB throw a 500).
+    if (typeof query !== 'string' || !query.trim()) return { success: true, count: 0, query: '', data: [] };
     const faqs = await this.faqModel
       .find({
         isActive: true,

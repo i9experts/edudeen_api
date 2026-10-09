@@ -41,6 +41,6 @@ import { RedisModule } from '../redis/redis.module';
   ],
   controllers: [NotificationsController],
   providers: [NotificationsService, NotificationsGateway, WsAuthService, NotificationsProcessor, FirebaseAdminService, EmailService, ChannelMessagingService],
-  exports: [NotificationsService],
+  exports: [NotificationsService, ChannelMessagingService],
 })
 export class NotificationsModule {}

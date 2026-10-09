@@ -5,6 +5,7 @@ import {
   Get,
   Post,
   Delete,
+  Patch,
   Body,
   Param,
   Req,
@@ -13,6 +14,7 @@ import {
 } from '@nestjs/common';
 
 import { ProductsService } from './products.service';
+import { ProductStockService } from './product-stock.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -20,7 +22,10 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 
 @Controller('api/products')
 export class productController {
-  constructor(private readonly ProductsService: ProductsService) {}
+  constructor(
+    private readonly ProductsService: ProductsService,
+    private readonly productStockService: ProductStockService,
+  ) {}
 
   @UseGuards(OptionalJwtAuthGuard)
   @Get('products-by-category')
@@ -228,6 +233,15 @@ export class productController {
   async editProduct(@Req() req: any, @Body() body: any) {
     const { userId: sellerId } = req.user;
     return this.ProductsService.editProduct(sellerId, body);
+  }
+
+  // Bulk stock editing for the seller Inventory page: { storeId, updates: [{ variantId, stock }] }.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Patch('stock/bulk')
+  async bulkUpdateStock(@Req() req: any, @Body() body: any) {
+    const { userId: sellerId } = req.user;
+    return this.productStockService.bulkUpdateStock(sellerId, String(body?.storeId ?? ''), body?.updates);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

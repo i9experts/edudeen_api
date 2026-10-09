@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Injectable, Optional } from '@nestjs/common';
+import { BadRequestException, Injectable, Optional } from '@nestjs/common';
 import { EntitlementsService } from '../platform-plans/entitlements.service';
 import { DatabaseService } from '../database/databaseservice';
 import { RedisService } from '../redis/redis.service';
@@ -681,7 +681,7 @@ export class AnalyticsService {
   // ═══════════════════════════════════════════════════════════════════════
 
   private requireStoreId(storeId: string | null | undefined): string {
-    if (!storeId) throw new Error('storeId is required for export');
+    if (!storeId) throw new BadRequestException('storeId is required');
     return storeId;
   }
 

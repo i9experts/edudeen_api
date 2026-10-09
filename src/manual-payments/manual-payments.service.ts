@@ -14,7 +14,7 @@ import { SubmitManualPaymentDto } from './dto/submit-manual-payment.dto';
 import { ReuploadManualPaymentDto } from './dto/reupload-manual-payment.dto';
 
 import { clampInt } from 'src/common/query-safety.util';
-import { ReceiptCheckService } from './receipt-check.service';
+import { ReceiptCheckService, buildReceiptExpectation } from './receipt-check.service';
 import { hasDirectPayment, type DirectPaymentDetails } from 'src/common/direct-payment.util';
 /** Mirrors OrdersService's local `sellerPayoutBasis`/`sellerPayoutCurrency` —
  *  settlement must always be computed and labeled in the SELLER'S OWN
@@ -152,7 +152,9 @@ export class ManualPaymentsService {
     this.notifySellerOfProof(proof).catch(() => {});
     // Advisory: read the screenshot in the background so the seller sees a match/mismatch hint.
     if (this.receiptCheckService && proof.storeId) {
-      this.receiptCheckService.check(file.buffer, file.mimetype, amountPKR)
+      const receiptSvc = this.receiptCheckService;
+      this.db.repositories.storeModel.findById(proof.storeId).select('directPayment').lean<{ directPayment?: DirectPaymentDetails | null }>()
+        .then((s) => receiptSvc.check(file.buffer, file.mimetype, amountPKR, buildReceiptExpectation(s?.directPayment, dto.transactionReference)))
         .then((rc) => this.proofModel.updateOne({ _id: proof._id }, { $set: { receiptCheck: rc } }))
         .catch(() => {});
     }

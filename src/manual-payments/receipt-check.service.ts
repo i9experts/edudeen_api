@@ -22,6 +22,8 @@ export interface ReceiptCheck {
 export interface ReceiptExpectation {
   /** Last digits of the seller's account/number, or the account title, to compare with the payee on the receipt. */
   accountHint?: string | null;
+  /** Several acceptable hints (account, IBAN, JazzCash, Easypaisa, title): the payee only mismatches when NONE fit. */
+  accountHints?: Array<string | null | undefined>;
   /** Reference/transaction id the buyer typed, if any. */
   reference?: string | null;
 }
@@ -59,6 +61,17 @@ export function compareReceiptAmount(amountRead: number | null, expectedPKR: num
 
 const digits = (s: unknown) => String(s ?? '').replace(/\D/g, '');
 
+/** Pure: what to expect on the receipt, from the seller's direct-payment details + the buyer's typed reference. Never throws. */
+export function buildReceiptExpectation(
+  dp: { accountNumber?: string | null; iban?: string | null; jazzcashNumber?: string | null; easypaisaNumber?: string | null; accountTitle?: string | null } | null | undefined,
+  reference?: string | null,
+): ReceiptExpectation {
+  return {
+    accountHints: [dp?.accountNumber, dp?.iban, dp?.jazzcashNumber, dp?.easypaisaNumber, dp?.accountTitle],
+    reference: reference ? String(reference).slice(0, 80) : null,
+  };
+}
+
 /** Pure: full evaluation of what was read from the receipt vs what we expect. Advisory flags only. */
 export function evaluateReceipt(read: ReceiptRead, expectedPKR: number, expected: ReceiptExpectation = {}, now: Date = new Date()): Pick<ReceiptCheck, 'status' | 'note' | 'amountRead' | 'referenceRead' | 'payeeRead' | 'dateRead' | 'flags'> {
   const flags: string[] = [];
@@ -81,12 +94,14 @@ export function evaluateReceipt(read: ReceiptRead, expectedPKR: number, expected
       if (ageDays < -1) { flags.push('future_date'); notes.push('The receipt date is in the future.'); }
     }
   }
-  if (expected.accountHint && base.payeeRead) {
-    const hint = digits(expected.accountHint).slice(-4);
+  const hints = [expected.accountHint, ...(expected.accountHints ?? [])].map((h) => String(h ?? '').trim()).filter(Boolean);
+  if (hints.length && base.payeeRead) {
     const payeeDigits = digits(base.payeeRead);
-    const textHit = String(base.payeeRead).toLowerCase().includes(String(expected.accountHint).toLowerCase());
+    const payeeText = String(base.payeeRead).toLowerCase();
     // Receipts usually mask the middle digits, so only compare the last 4 when both sides have them.
-    if (hint.length === 4 && payeeDigits.length >= 4 && !payeeDigits.endsWith(hint) && !textHit) {
+    const numeric = hints.filter((h) => digits(h).length >= 4);
+    const anyFits = hints.some((h) => payeeText.includes(h.toLowerCase()) || (digits(h).length >= 4 && payeeDigits.length >= 4 && payeeDigits.endsWith(digits(h).slice(-4))));
+    if (numeric.length && payeeDigits.length >= 4 && !anyFits) {
       flags.push('payee_mismatch'); notes.push('The receiving account on the receipt does not look like your account.');
     }
   }

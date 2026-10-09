@@ -1455,6 +1455,7 @@ export class StoreService {
         ...p,
         variants:            variantsByProduct.get(p._id.toString()) ?? [],
         sellerName:          seller ? seller.name : null,
+        storeName:           (store as any).name ?? null,
         sellerVerified:      seller ? !!seller.isVerified : false,
         defaultVariantPrice: variant?.price ?? null,
         variantId:           variant?._id ?? null,

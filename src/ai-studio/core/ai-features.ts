@@ -28,8 +28,10 @@ export const AI_FEATURE_DEFS = {
   cod_risk:          { label: 'COD risk explanation',      group: 'platform', credits: 0 },
   review_summary:    { label: 'Review summaries',          group: 'platform', credits: 0 },
   ask_data:          { label: 'Admin ask-your-data',       group: 'platform', credits: 0 },
-  voice_search:      { label: 'Voice search (stub)',       group: 'platform', credits: 0 },
-  quiz_audio:        { label: 'Quiz / audio (stub)',       group: 'platform', credits: 0 },
+  voice_search:      { label: 'Voice search (browser speech to text)', group: 'platform', credits: 0 },
+  semantic_search:   { label: 'Semantic search (embeddings)', group: 'platform', credits: 0 },
+  // --- Phase 5 follow-ups ---
+  quiz_generator:    { label: 'Quiz generator',            group: 'studio',   credits: 8 },
 } as const;
 
 export type AiFeatureKey = keyof typeof AI_FEATURE_DEFS;

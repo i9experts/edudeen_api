@@ -208,8 +208,9 @@ export class NotificationsService {
   }
 
   async updatePreferences(userId: string, role: string, dto: Record<string, any>) {
-    const { pushEnabled, emailEnabled, whatsappEnabled, smsEnabled, language, ...prefFlags } = dto;
+    const { pushEnabled, emailEnabled, whatsappEnabled, smsEnabled, retentionChannelsEnabled, language, ...prefFlags } = dto;
     const update: Record<string, any> = {};
+    if (retentionChannelsEnabled !== undefined) update.retentionChannelsEnabled = retentionChannelsEnabled;
     if (pushEnabled !== undefined) update.pushEnabled = pushEnabled;
     if (emailEnabled !== undefined) update.emailEnabled = emailEnabled;
     if (whatsappEnabled !== undefined) update.whatsappEnabled = whatsappEnabled;

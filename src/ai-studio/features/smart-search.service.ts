@@ -1,7 +1,9 @@
 /* eslint-disable prettier/prettier */
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { AiService } from '../core/ai.service';
 import { AiFlagsService } from '../core/ai-flags.service';
+import { SemanticIndexService } from '../embeddings/semantic-index.service';
+import { reciprocalRankFusion } from '../embeddings/embedding.util';
 import { AiCatalogService, CURRICULA_KEYS, EDUCATION_LEVELS, PRODUCT_TYPES, SearchFilters, normalizeFilters } from './catalog.service';
 
 export const SEARCH_REWRITE_SCHEMA = {
@@ -49,12 +51,12 @@ export class SmartSearchService {
   private readonly logger = new Logger(SmartSearchService.name);
   private readonly cache = new RewriteCache();
 
-  constructor(private readonly ai: AiService, private readonly flags: AiFlagsService, private readonly catalog: AiCatalogService) {}
+  constructor(private readonly ai: AiService, private readonly flags: AiFlagsService, private readonly catalog: AiCatalogService, @Optional() private readonly semantic?: SemanticIndexService) {}
 
   /** Query (English / Urdu / Roman Urdu) -> structured filters -> existing catalogue search. Works without AI (keyword fallback). */
   async search(rawQuery: string, userId: string | null, limit = 12) {
     const q = String(rawQuery ?? '').trim().slice(0, 200);
-    if (!q) return { success: true, data: { query: '', interpreted: null, usedAi: false, products: [] } };
+    if (!q) return { success: true, data: { query: '', interpreted: null, usedAi: false, usedSemantic: false, products: [] } };
 
     let filters: SearchFilters | null = this.cache.get(q);
     let usedAi = !!filters;
@@ -85,6 +87,19 @@ export class SmartSearchService {
       products = await this.catalog.search({ keywords: filters.keywords });
       relaxed = products.length > 0;
     }
-    return { success: true, data: { query: q, interpreted: filters, usedAi, relaxed, products } };
+    // Hybrid retrieval: merge the keyword result with the embedding neighbours (reciprocal-rank fusion). Keyword-only when embeddings are off.
+    let usedSemantic = false;
+    if (this.semantic?.isAvailable() && filters.sort !== 'price_asc' && filters.sort !== 'price_desc') {
+      const semIds = await this.semantic.rank(q, filters, 24);
+      if (semIds.length) {
+        const fused = reciprocalRankFusion([products.map((p) => p.id), semIds]);
+        const have = new Map(products.map((p) => [p.id, p]));
+        const missing = fused.map((f) => f.id).filter((id) => !have.has(id)).slice(0, limit);
+        for (const c of await this.catalog.cardsByIds(missing, filters)) have.set(c.id, c);
+        products = fused.map((f) => have.get(f.id)).filter((c): c is NonNullable<typeof c> => !!c).slice(0, limit);
+        usedSemantic = products.length > 0;
+      }
+    }
+    return { success: true, data: { query: q, interpreted: filters, usedAi, usedSemantic, relaxed, products } };
   }
 }

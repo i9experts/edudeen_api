@@ -1,10 +1,10 @@
 /* eslint-disable prettier/prettier */
 import {
-  Body, Controller, Get, HttpException, HttpStatus, Param, Post, Put, Query, Req, UseGuards,
+  Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, Put, Query, Req, UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { IsBoolean, IsIn, IsMongoId, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsMongoId, IsObject, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -26,6 +26,11 @@ import { HelpBotService } from './features/help-bot.service';
 import { StudioExtrasService } from './features/studio-extras.service';
 import { ModerationAiService } from './features/moderation-ai.service';
 import { AskDataService } from './features/ask-data.service';
+import { QuizService } from './features/quiz.service';
+import { WeeklyDigestService } from './features/weekly-digest.service';
+import { SemanticIndexService } from './embeddings/semantic-index.service';
+import { ImageEnhanceService } from './providers/image-enhance.service';
+import { TtsService } from './providers/tts.service';
 
 class FlagDto {
   @IsString() @MaxLength(40) feature: string;
@@ -50,6 +55,36 @@ class ImageCheckDto {
   @IsString() @MaxLength(1000) imageUrl: string;
   @IsOptional() @IsString() @MaxLength(200) productName?: string;
 }
+class VoiceSearchDto {
+  @IsString() @MaxLength(300) transcript: string;
+  @IsOptional() @IsIn(['ur-PK', 'en-PK', 'en-US', 'en-GB', 'ur', 'en']) lang?: string;
+}
+class QuizDto {
+  @IsOptional() @IsString() @MaxLength(6000) sourceText?: string;
+  @IsOptional() @IsMongoId() productId?: string;
+  @IsOptional() @IsString() @MaxLength(40) grade?: string;
+  @IsOptional() @IsIn(['en', 'ur']) language?: 'en' | 'ur';
+  @IsOptional() @IsInt() @Min(0) @Max(15) mcq?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(10) trueFalse?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(10) short?: number;
+  @IsOptional() @IsString() @MaxLength(120) title?: string;
+}
+class SheetContentDto {
+  @IsObject() content: Record<string, unknown>;
+  @IsOptional() @IsBoolean() includeAnswers?: boolean;
+}
+class SaveSheetDto {
+  @IsOptional() @IsMongoId() generationId?: string;
+  @IsOptional() @IsObject() content?: Record<string, unknown>;
+  @IsOptional() @IsString() @MaxLength(120) title?: string;
+  @IsOptional() @IsBoolean() includeAnswers?: boolean;
+}
+class AudioDto {
+  @IsString() @MaxLength(5000) text: string;
+  @IsOptional() @IsIn(['en', 'ur']) lang?: 'en' | 'ur';
+}
+class DigestSettingDto { @IsBoolean() weeklyDigestEnabled: boolean; }
+class BackfillDto { @IsOptional() @IsInt() @Min(1) @Max(2000) limit?: number; }
 class ReplyDraftDto { @IsOptional() @IsIn(['friendly', 'professional']) tone?: 'friendly' | 'professional'; }
 
 /** Public / buyer-facing AI endpoints. Everything degrades to "available:false" when AI is off. */
@@ -59,6 +94,7 @@ export class AiPublicController {
   constructor(
     private readonly ai: AiService, private readonly flags: AiFlagsService, private readonly textGen: TextGenerationService,
     private readonly search: SmartSearchService, private readonly assistant: AssistantService, private readonly reviews: ReviewsAiService,
+    private readonly imageEnhance: ImageEnhanceService, private readonly tts: TtsService, private readonly semantic: SemanticIndexService,
   ) {}
 
   /** The web app hides AI UI unless `available && features[x]`. */
@@ -66,7 +102,14 @@ export class AiPublicController {
   @Get('features')
   async features(@Query('storeId') storeId?: string) {
     const features = await this.flags.enabledMap(storeId && /^[a-f0-9]{24}$/i.test(storeId) ? storeId : null);
-    return { success: true, data: { available: this.ai.isAvailable(), studio: this.textGen.available, features } };
+    return {
+      success: true,
+      data: {
+        available: this.ai.isAvailable(), studio: this.textGen.available, features,
+        // Capabilities that depend on extra configuration (the web app hides / disables the matching UI).
+        extras: { imageEnhancer: this.imageEnhance.available, tts: this.tts.available, semanticSearch: this.semantic.isAvailable() },
+      },
+    };
   }
 
   @UseGuards(OptionalJwtAuthGuard)
@@ -90,16 +133,20 @@ export class AiPublicController {
     return this.reviews.summary(productId);
   }
 
-  /** TODO(owner): voice search needs a speech-to-text provider (Whisper/Google STT). The browser can use the Web Speech API and call GET /api/ai/search with the transcript. */
+  /**
+   * Voice search = TEXT in. The browser turns speech into text on the device (Web Speech API) and sends only the transcript here;
+   * no audio is ever uploaded. It runs through the same smart-search pipeline as typed queries (alias of GET /api/ai/search).
+   * The admin can switch it off with the `voice_search` flag.
+   */
+  @UseGuards(OptionalJwtAuthGuard)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @HttpCode(200)
   @Post('voice-search')
-  voiceSearch() {
-    throw new HttpException({ success: false, errorCode: 'NOT_IMPLEMENTED', message: 'Voice search is coming soon. Type your search for now.' }, HttpStatus.NOT_IMPLEMENTED);
-  }
-
-  /** TODO(owner): quiz generation + audio (text-to-speech) need a TTS provider and a quiz data model. */
-  @Post('quiz-audio')
-  quizAudio() {
-    throw new HttpException({ success: false, errorCode: 'NOT_IMPLEMENTED', message: 'Quizzes and audio are coming soon.' }, HttpStatus.NOT_IMPLEMENTED);
+  async voiceSearch(@Req() req: any, @Body() dto: VoiceSearchDto) {
+    if (!(await this.flags.isEnabled('voice_search'))) {
+      throw new HttpException({ success: false, errorCode: 'AI_FEATURE_DISABLED', message: 'Voice search is currently turned off. Please type your search.' }, HttpStatus.FORBIDDEN);
+    }
+    return this.search.search(dto.transcript, req.user?.userId ?? null);
   }
 }
 
@@ -113,7 +160,47 @@ export class AiSellerController {
   constructor(
     private readonly translate: TranslateService, private readonly cod: CodRiskService, private readonly reviews: ReviewsAiService,
     private readonly insights: InsightsService, private readonly help: HelpBotService, private readonly extras: StudioExtrasService,
+    private readonly quiz: QuizService, private readonly digest: WeeklyDigestService,
   ) {}
+
+  // ---- quiz generator + worksheet/quiz export ----
+
+  @Post('quiz')
+  generateQuiz(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Body() dto: QuizDto) {
+    return this.quiz.generate(req.user.userId, storeId, dto);
+  }
+
+  /** Printable HTML of the (edited) quiz or worksheet. Free: no AI call. */
+  @HttpCode(200)
+  @Post('sheet/html')
+  sheetHtml(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Body() dto: SheetContentDto) {
+    return this.quiz.html(req.user.userId, storeId, dto.content, dto.includeAnswers === true);
+  }
+
+  /** "Save as digital product (draft)": PDF (English) -> private upload -> draft product at price 0, flagged aiGenerated. */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('sheet/save-as-product')
+  saveSheetAsProduct(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Body() dto: SaveSheetDto) {
+    return this.quiz.saveAsDraftProduct(req.user.userId, storeId, dto);
+  }
+
+  /** Downloadable audio needs a server TTS adapter (disabled by default -> 503). The preview uses browser SpeechSynthesis instead. */
+  @Post('quiz/audio')
+  quizAudio(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Body() dto: AudioDto) {
+    return this.quiz.audio(req.user.userId, storeId, dto.text, dto.lang === 'ur' ? 'ur' : 'en');
+  }
+
+  // ---- opt-in weekly digest ----
+
+  @Get('insights/settings')
+  digestSettings(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string) {
+    return this.digest.getSettings(req.user.userId, storeId);
+  }
+
+  @Put('insights/settings')
+  setDigestSettings(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Body() dto: DigestSettingDto) {
+    return this.digest.setWeeklyDigest(req.user.userId, storeId, dto.weeklyDigestEnabled);
+  }
 
   @Post('translate')
   translateText(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Body() dto: TranslateDto) {
@@ -185,7 +272,26 @@ export class AiAdminController {
   constructor(
     private readonly ai: AiService, private readonly flags: AiFlagsService, private readonly db: DatabaseService,
     private readonly activityLog: ActivityLogService, private readonly moderation: ModerationAiService, private readonly askData: AskDataService,
+    private readonly semantic: SemanticIndexService,
   ) {}
+
+  /** Semantic-search index state (needs VOYAGE_API_KEY; otherwise `available:false`). */
+  @Get('embeddings/status')
+  async embeddingsStatus() {
+    return { success: true, data: await this.semantic.status() };
+  }
+
+  /** Idempotent backfill: embeds products that are new or whose text changed, at most `limit` per call (default 200). Safe to call repeatedly. */
+  @Throttle({ default: { limit: 6, ttl: 60_000 } })
+  @Post('embeddings/backfill')
+  async embeddingsBackfill(@Req() req: any, @Body() dto: BackfillDto) {
+    if (!this.semantic.isAvailable()) {
+      throw new HttpException({ success: false, errorCode: 'AI_UNAVAILABLE', message: 'Embeddings are not configured (set VOYAGE_API_KEY).' }, HttpStatus.SERVICE_UNAVAILABLE);
+    }
+    const result = await this.semantic.sync({ maxEmbed: dto?.limit ?? 200 });
+    await this.audit(req, 'ai_embeddings_backfill', `Embedding backfill: ${result.embedded} embedded, ${result.remaining} remaining`);
+    return { success: true, data: result };
+  }
 
   private async audit(req: any, action: string, description: string) {
     await this.activityLog.log({

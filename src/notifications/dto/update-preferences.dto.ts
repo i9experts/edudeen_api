@@ -42,6 +42,10 @@ export class UpdatePreferencesDto {
   smsEnabled?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  retentionChannelsEnabled?: boolean;
+
+  @IsOptional()
   @IsIn(['en', 'ur'])
   language?: 'en' | 'ur';
 }

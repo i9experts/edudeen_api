@@ -1,5 +1,8 @@
 /* eslint-disable prettier/prettier */
 import { Module } from '@nestjs/common';
+import { MongooseModule } from '@nestjs/mongoose';
+import { ProductsModule } from '../products/product.module';
+import { UploadModule } from '../upload/upload.module';
 import { AuthModule } from '../auth/auth.module';
 import { RedisModule } from '../redis/redis.module';
 import { AdminConfigModule } from '../admin-config/admin-config.module';
@@ -27,6 +30,14 @@ import { HelpBotService } from './features/help-bot.service';
 import { StudioExtrasService } from './features/studio-extras.service';
 import { ModerationAiService } from './features/moderation-ai.service';
 import { AskDataService } from './features/ask-data.service';
+import { QuizService } from './features/quiz.service';
+import { WeeklyDigestService } from './features/weekly-digest.service';
+import { TtsService } from './providers/tts.service';
+import { EmbeddingService } from './embeddings/embedding.service';
+import { SemanticIndexService } from './embeddings/semantic-index.service';
+import { ProductEmbedding, ProductEmbeddingSchema } from './embeddings/product-embedding.schema';
+import { AiStudioSetting, AiStudioSettingSchema } from './schemas/ai-studio-setting.schema';
+import { AiCronService } from './core/ai-cron.service';
 
 /**
  * AI Studio — seller-only AI tools (Listing Writer, SEO Booster, Email
@@ -49,7 +60,13 @@ import { AskDataService } from './features/ask-data.service';
  * See src/ai-studio/README.md for env vars and provider plug-in points.
  */
 @Module({
-  imports: [AuthModule, RedisModule, AdminConfigModule],
+  imports: [
+    AuthModule, RedisModule, AdminConfigModule, ProductsModule, UploadModule,
+    MongooseModule.forFeature([
+      { name: ProductEmbedding.name, schema: ProductEmbeddingSchema },
+      { name: AiStudioSetting.name, schema: AiStudioSettingSchema },
+    ]),
+  ],
   controllers: [AiStudioController, PublicWorksheetTrialController, AdminAiStudioController, AiPublicController, AiSellerController, AiAdminController],
   providers: [
     AiStudioService,
@@ -62,6 +79,8 @@ import { AskDataService } from './features/ask-data.service';
     // Phase 5: shared AI gateway + feature services
     AiService, AiFlagsService, AiCatalogService, SmartSearchService, AssistantService, ReviewsAiService, TranslateService,
     CodRiskService, InsightsService, HelpBotService, StudioExtrasService, ModerationAiService, AskDataService,
+    // Phase 5 follow-ups: embeddings/semantic search, quiz + PDF draft products, TTS adapter, opt-in weekly digest, AI cron jobs
+    EmbeddingService, SemanticIndexService, QuizService, TtsService, WeeklyDigestService, AiCronService,
   ],
   // The scheduler recovers stale credit holds (see SchedulerService.recoverStaleAiStudioHolds).
   exports: [AiStudioCreditsService, AiService, AiFlagsService, SmartSearchService],

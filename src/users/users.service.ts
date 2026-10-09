@@ -9,6 +9,7 @@ import { DatabaseService } from 'src/database/databaseservice';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { AuthService } from 'src/auth/auth.service';
+import { phoneChangeInvalidatesVerification } from 'src/phone-verification/phone-otp.util';
 
 @Injectable()
 export class UsersService {
@@ -34,6 +35,10 @@ export class UsersService {
     if (!user) throw new NotFoundException('User not found');
 
     user.name = dto.name ?? user.name;
+    if (dto.phone !== undefined && user.phoneVerified && phoneChangeInvalidatesVerification(user.phoneE164, dto.phone)) {
+      user.phoneVerified = false; // a changed number must be verified again
+      user.phoneE164 = null;
+    }
     user.phone = dto.phone ?? user.phone;
     user.profileImage = dto.profileImage ?? user.profileImage;
     user.address = dto.address ?? user.address;

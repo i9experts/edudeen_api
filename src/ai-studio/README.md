@@ -87,3 +87,15 @@ The Image Enhancer's credits/history/jobId-polling plumbing is fully wired —
 swapping in a real provider is a one-file change in
 `providers/image-enhance.service.ts` (marked with
 `TODO: integrate image enhancement provider`).
+
+
+## Phase 5 follow-ups (embeddings, voice, quiz, digest, enhancer)
+Env (all optional; each feature is simply OFF when its env is missing - clean "unavailable", never a crash, never a credit debit):
+- Semantic search: `VOYAGE_API_KEY`, `VOYAGE_MODEL` (default voyage-3.5-lite), `VOYAGE_OUTPUT_DIM`, `EMBEDDINGS_BATCH_SIZE` (32), `EMBEDDINGS_MIN_INTERVAL_MS` (400), `SEMANTIC_MAX_CANDIDATES` (1500), `SEMANTIC_MIN_SCORE` (0.3), `ATLAS_VECTOR_INDEX` (name of an Atlas Vector Search index on `product_embeddings.vector`; when set `$vectorSearch` is used, otherwise cosine runs in-process).
+  Vectors live in their own collection `product_embeddings` (never on the product document). Incremental sync runs every 5 min (recent updates) and nightly (full, capped); admin: `GET /api/admin/ai/embeddings/status`, `POST /api/admin/ai/embeddings/backfill {limit}`. Only changed text (hash) is re-embedded.
+- Voice search: browser speech-to-text only (Web Speech API). `POST /api/ai/voice-search {transcript}` is a text alias of `GET /api/ai/search`; no audio reaches our servers. Admin flag `voice_search`.
+- Quiz generator (`quiz_generator`, credit metered): `POST /api/ai/seller/:storeId/quiz`; free helpers `sheet/html`, `sheet/save-as-product` (English PDF via pdf-lib -> private upload -> DRAFT digital product, price 0, `aiGenerated: true`; Urdu content is refused with 422 `PDF_URDU_UNSUPPORTED`, use the printable HTML). Listen = browser SpeechSynthesis. Server TTS is an adapter interface (`providers/tts.service.ts`, `TTS_PROVIDER`, disabled by default).
+- Weekly digest: opt-in per store (`PUT /api/ai/seller/:storeId/insights/settings`), hourly job runs it once per ISO week only for opted-in stores, only when the wallet can pay (otherwise skipped + one notification), respects the `weekly_insights` kill switch.
+- Image Enhancer: `CLOUDINARY_AI_ENABLED=true` (+ `CLOUDINARY_CLOUD_NAME`) uses Cloudinary transformations (`e_upscale`, `e_improve`, `e_background_removal`; some are Cloudinary add-ons that must be enabled on the account). Otherwise the tool answers 503 before any credit hold. Claude is only used for alt text / photo check.
+- Legacy Studio on the dev mock provider: no credit hold, `creditsCharged: 0`, response carries `isSample: true` + `sampleNotice`. Production without a key still answers 503.
+- Rate limit: `AI_RATE_LIMIT_PER_MIN` is now enforced through Redis (fixed window, shared across instances) with an in-memory fallback when Redis is down.

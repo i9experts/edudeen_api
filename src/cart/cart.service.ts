@@ -1,8 +1,9 @@
 /* eslint-disable prettier/prettier */
-import { pickBestCampaign } from '../marketing/campaign-pricing.util';
+import { resolveCartCampaignDiscount } from '../marketing/campaign-pricing.util';
 import { isValidObjectId } from 'mongoose';
 import { sanitizeDigitalForPublicView } from 'src/products/product-public-view.util';
-import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, Optional } from '@nestjs/common';
+import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 
 import { DatabaseService } from 'src/database/databaseservice';
 import { AddToCartDto, MAX_CART_LINE_QUANTITY } from './dto/add-to-cart.dto';
@@ -12,7 +13,8 @@ const MAX_WISHLIST_ITEMS = 200;
 
 @Injectable()
 export class CartService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  // ExchangeRateService is optional so unit tests can build the service with only the database.
+  constructor(private readonly databaseService: DatabaseService, @Optional() private readonly exchangeRate?: ExchangeRateService) {}
 
   async addToCart(userId: string, requestedStoreId: string | undefined, dto: AddToCartDto) {
     try {
@@ -244,10 +246,14 @@ export class CartService {
       const variants = variantIds.length
         ? await this.databaseService.repositories.productVariantModel
             .find({ _id: { $in: variantIds } })
-            .select('price')
+            .select('price currency')
             .lean()
         : [];
       const livePriceByVariant = new Map((variants as any[]).map((v) => [v._id.toString(), v.price as number]));
+      const liveCurrencyByVariant = new Map((variants as any[]).map((v) => [v._id.toString(), (v.currency as string | null) ?? null]));
+      // A store sells in ONE currency, so the cart has one: the currency every amount in this response is in.
+      const cartCurrency: string =
+        liveItems.map((i: any) => liveCurrencyByVariant.get(i.productVariantId) ?? i.currency).find((c) => !!c) ?? 'PKR';
 
       // Cart items map karo
       const items = liveItems.map((item) => {
@@ -297,16 +303,10 @@ export class CartService {
         })
         .select('name endDate discountType discountValue currency sponsorType')
         .lean();
-      const best = pickBestCampaign(
-        (rawCampaigns as any[]).map((c) => ({
-          campaignId: String(c._id), name: c.name, discountType: c.discountType ?? null, discountValue: c.discountValue ?? null,
-          currency: c.currency ?? null, endDate: c.endDate, sponsorType: c.sponsorType ?? 'seller',
-        })),
-        totalPrice,
+      const campaignDiscount = await resolveCartCampaignDiscount(
+        rawCampaigns as any[], totalPrice, cartCurrency,
+        this.exchangeRate ? (amount, from, to) => this.exchangeRate!.convert(amount, from, to) : undefined,
       );
-      const campaignDiscount = best && best.discountAmount > 0
-        ? { campaignId: best.campaign.campaignId, name: best.campaign.name, amount: best.discountAmount, discountType: best.campaign.discountType, discountValue: best.campaign.discountValue, currency: best.campaign.currency }
-        : null;
 
       // Final response
       return {
@@ -317,6 +317,7 @@ export class CartService {
           items,
           totalItems,
           totalPrice,
+          currency: cartCurrency,
           campaignDiscount,
           totalAfterDiscount: Math.round((totalPrice - (campaignDiscount?.amount ?? 0)) * 100) / 100,
         },

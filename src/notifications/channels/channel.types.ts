@@ -1,6 +1,12 @@
 ﻿/** Out-of-app message channels (WhatsApp, SMS). Opt-in only, env-driven, disabled by default. */
 export type ChannelId = 'whatsapp' | 'sms';
-export type ChannelEvent = 'order_placed' | 'cod_confirmation' | 'order_shipped' | 'order_delivered';
+export type ChannelEvent =
+  | 'order_placed' | 'cod_confirmation' | 'order_shipped' | 'order_delivered'
+  // retention (opt-in, promotions category) and account verification
+  | 'cart_reminder' | 'back_in_stock' | 'price_drop' | 'referral_reward' | 'phone_otp';
+
+/** Events that are not order updates: gated by the promotions category + the separate retention opt-in. */
+export const RETENTION_EVENTS: ReadonlySet<ChannelEvent> = new Set<ChannelEvent>(['cart_reminder', 'back_in_stock', 'price_drop', 'referral_reward']);
 export type MessageLang = 'en' | 'ur';
 
 export interface OutboundMessage {

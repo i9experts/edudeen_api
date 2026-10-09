@@ -306,6 +306,10 @@ export class AiStudioService {
   async startImageEnhance(sellerId: string, storeId: string, dto: GenerateImageEnhanceDto) {
     await this.verifyStore(storeId, sellerId);
     await this.flags?.assertEnabled('image_enhancer', storeId);
+    // No real provider configured -> clean "unavailable", before any history row or credit hold.
+    if (!this.imageEnhance.available) {
+      throw new HttpException({ success: false, errorCode: 'AI_UNAVAILABLE', message: 'Image enhancement is not available right now. No credits were charged.' }, HttpStatus.SERVICE_UNAVAILABLE);
+    }
 
     const generation = await this.createGeneration({
       sellerId, storeId, tool: 'image_enhancer', productId: null,
@@ -536,28 +540,33 @@ export class AiStudioService {
     const generation = await this.createGeneration(params);
     const generationId = generation._id.toString();
     const startedAt = Date.now();
-    const txnId = await this.holdOrFailGeneration(generationId, params.storeId, params.sellerId, params.tool);
-    const cost = this.credits.costOf(params.tool);
+    // The local mock provider (dev, no key) is free and clearly labelled: it never touches the wallet.
+    const sample = this.textGeneration.name === 'mock';
+    const txnId = sample ? null : await this.holdOrFailGeneration(generationId, params.storeId, params.sellerId, params.tool);
+    const cost = sample ? 0 : this.credits.costOf(params.tool);
 
     try {
       const { output, provider, model, usage } = await params.execute();
-      await this.credits.capture(txnId);
+      if (txnId) await this.credits.capture(txnId);
       await this.generationModel.updateOne(
         { _id: generationId },
-        { $set: { status: 'succeeded', outputPayload: output, providerUsed: provider, modelUsed: model, creditsCharged: cost,
+        { $set: { status: 'succeeded', outputPayload: sample ? { ...output, isSample: true } : output, providerUsed: provider, modelUsed: model, creditsCharged: cost,
           latencyMs: Date.now() - startedAt, tokensIn: usage?.inputTokens ?? 0, tokensOut: usage?.outputTokens ?? 0, cacheReadTokens: usage?.cacheReadTokens ?? 0,
           costUsd: usage ? estimateCostUsd(model, { ...usage, cacheCreateTokens: 0 }) : 0 } },
       );
       return {
         success: true,
-        data: { generationId, sessionId: generation.sessionId, creditsCharged: cost, provider, ...output },
+        data: {
+          generationId, sessionId: generation.sessionId, creditsCharged: cost, provider, ...output,
+          ...(sample ? { isSample: true, sampleNotice: 'Sample output - AI is not configured on this server. No credits were charged.' } : {}),
+        },
       };
     } catch (error) {
       const providerError = error instanceof AiProviderError ? error : null;
       const message = providerError?.message ?? (error as Error).message ?? 'Generation failed';
       this.logger.error(`${params.tool} generation ${generationId} failed (provider: ${this.textGeneration.providerName}): ${message}`);
 
-      await this.credits.refund(txnId, `${params.tool} failed: ${message}`);
+      if (txnId) await this.credits.refund(txnId, `${params.tool} failed: ${message}`);
       await this.generationModel.updateOne(
         { _id: generationId },
         { $set: { status: 'failed', errorMessage: message, creditsCharged: 0 } },

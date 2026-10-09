@@ -33,6 +33,7 @@ import { optionNameSet, optionsKey, validateOptions } from './variant-options.ut
 import { AttributesService } from 'src/attributes/attributes.service';
 
 import { clampInt } from 'src/common/query-safety.util';
+import { resolveStoreNames } from './store-name.util';
 const EDUCATION_LEVEL_VALUES: string[] = Object.values(EducationLevel);
 
 /** Prices arrive on `body: any` endpoints, so they are checked here rather
@@ -779,6 +780,11 @@ export class ProductsService {
     const sellerMap = new Map(
       sellers.map((s) => [s._id.toString(), s]),
     );
+    // Store names for the cards — one query for the whole page.
+    const storeNameMap = await resolveStoreNames(
+      this.databaseService.repositories.storeModel,
+      storeIds as string[],
+    );
 
     const productsWithVariants = await this.attachCampaignBadges(
       products.map((p) => {
@@ -786,6 +792,7 @@ export class ProductsService {
         return this.sanitizeDigitalForPublicView({
           ...p,
           sellerName: seller ? seller.name : null,
+          storeName: storeNameMap.get(String(p.storeId)) ?? null,
           sellerVerified: seller ? !!seller.isVerified : false,
           variants: this.applySubscriberPricing(
             variantMap[p._id.toString()] || [],
@@ -853,6 +860,10 @@ export class ProductsService {
       .select('name isVerified')
       .lean();
     const sellerMap = new Map(sellers.map((s) => [s._id.toString(), s]));
+    const storeNameMap = await resolveStoreNames(
+      this.databaseService.repositories.storeModel,
+      storeIds as string[],
+    );
 
     return this.attachCampaignBadges(
       products.map((p) => {
@@ -860,6 +871,7 @@ export class ProductsService {
         return this.sanitizeDigitalForPublicView({
           ...p,
           sellerName: seller ? seller.name : null,
+          storeName: storeNameMap.get(String(p.storeId)) ?? null,
           sellerVerified: seller ? !!seller.isVerified : false,
           variants: this.applySubscriberPricing(
             variantMap[p._id.toString()] || [],

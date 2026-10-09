@@ -58,6 +58,55 @@ export function pickBestCampaign(
   return best;
 }
 
+export interface CartCampaignDiscount {
+  campaignId: string;
+  name: string;
+  /** the discount, in `currency` */
+  amount: number;
+  /** currency of `amount`: always the CART's own currency */
+  currency: string;
+  discountType: 'percentage' | 'fixed' | null;
+  /** as configured: a percent, or - for a fixed sale - an amount in `valueCurrency` */
+  discountValue: number | null;
+  /** only for fixed sales: the currency `discountValue` is written in (a campaign is USD unless stated) */
+  valueCurrency: string | null;
+}
+
+/**
+ * The cart view of the running sale. A fixed-amount campaign value is in the campaign's currency (USD by default)
+ * while the cart subtotal is in the store's currency, so the value is converted first and the returned `amount` is in
+ * the CART's currency - a PKR cart never reports "USD". A fixed campaign that cannot be converted (no rate / no
+ * converter) is left out of the cart view rather than shown with a wrong number.
+ */
+export async function resolveCartCampaignDiscount(
+  rawCampaigns: any[],
+  subtotal: number,
+  cartCurrency: string,
+  convert?: (amount: number, from: string, to: string) => Promise<number>,
+): Promise<CartCampaignDiscount | null> {
+  const candidates: Array<ActiveCampaignForStore & { origValue: number | null; valueCurrency: string | null }> = [];
+  for (const c of rawCampaigns) {
+    let value: number | null = c.discountValue ?? null;
+    const valueCurrency: string | null = c.discountType === 'fixed' ? (c.currency ?? 'USD') : null;
+    if (c.discountType === 'fixed' && value != null && valueCurrency && valueCurrency !== cartCurrency) {
+      if (!convert) continue;
+      try { value = await convert(value, valueCurrency, cartCurrency); } catch { continue; }
+    }
+    candidates.push({
+      campaignId: String(c._id), name: c.name, discountType: c.discountType ?? null, discountValue: value,
+      currency: cartCurrency, endDate: c.endDate, sponsorType: c.sponsorType ?? 'seller',
+      origValue: c.discountValue ?? null, valueCurrency,
+    });
+  }
+  const best = pickBestCampaign(candidates, subtotal);
+  const chosen = best ? candidates.find((c) => c.campaignId === best.campaign.campaignId) : null;
+  if (!best || !chosen || best.discountAmount <= 0) return null;
+  return {
+    campaignId: chosen.campaignId, name: chosen.name, amount: best.discountAmount, currency: cartCurrency,
+    discountType: chosen.discountType, discountValue: chosen.origValue, valueCurrency: chosen.valueCurrency,
+  };
+}
+
 /** Badge/merchandising selection (no dollar amount in play — e.g. a product
  *  card just needs "which sale is this in"). Prefers a campaign that actually
  *  carries a discount over a badge-only one, then soonest-ending. */

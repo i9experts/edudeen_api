@@ -51,6 +51,10 @@ export class NotificationPreference {
   @Prop({ default: false })
   smsEnabled: boolean;
 
+  // Separate opt-in for retention messages (cart reminder, price/stock alerts, referral rewards) over WhatsApp/SMS.
+  @Prop({ default: false })
+  retentionChannelsEnabled: boolean;
+
   // Language of WhatsApp/SMS messages.
   @Prop({ type: String, enum: ['en', 'ur'], default: 'en' })
   language: string;

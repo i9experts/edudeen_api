@@ -5,6 +5,11 @@ export const ORDER_VAR_ORDER: Record<ChannelEvent, string[]> = {
   cod_confirmation: ['orderNumber', 'total'],
   order_shipped: ['orderNumber', 'carrier', 'trackingNumber'],
   order_delivered: ['orderNumber'],
+  cart_reminder: ['itemCount', 'link'],
+  back_in_stock: ['product', 'link'],
+  price_drop: ['product', 'price', 'link'],
+  referral_reward: ['code', 'link'],
+  phone_otp: ['code'],
 };
 
 const T: Record<ChannelEvent, Record<MessageLang, string>> = {
@@ -23,6 +28,26 @@ const T: Record<ChannelEvent, Record<MessageLang, string>> = {
   order_delivered: {
     en: 'Edudeen: your order #{orderNumber} has been delivered. We hope you enjoy it!',
     ur: 'ایجوڈین: آپ کا آرڈر #{orderNumber} پہنچا دیا گیا ہے۔ امید ہے آپ کو پسند آئے گا!',
+  },
+  cart_reminder: {
+    en: 'Edudeen: you left {itemCount} item(s) in your cart. Finish your order: {link}',
+    ur: 'ایجوڈین: آپ کی ٹوکری میں {itemCount} چیزیں رہ گئی ہیں۔ آرڈر مکمل کریں: {link}',
+  },
+  back_in_stock: {
+    en: 'Edudeen: "{product}" from your Saved list is back in stock: {link}',
+    ur: 'ایجوڈین: آپ کی محفوظ فہرست کی "{product}" دوبارہ دستیاب ہے: {link}',
+  },
+  price_drop: {
+    en: 'Edudeen: price drop on "{product}" - now {price}: {link}',
+    ur: 'ایجوڈین: "{product}" کی قیمت کم ہو گئی - اب {price}: {link}',
+  },
+  referral_reward: {
+    en: 'Edudeen: thanks for inviting a friend! Your reward code is {code}. Use it at checkout: {link}',
+    ur: 'ایجوڈین: دوست کو مدعو کرنے کا شکریہ! آپ کا انعامی کوڈ {code} ہے۔ چیک آؤٹ پر استعمال کریں: {link}',
+  },
+  phone_otp: {
+    en: 'Edudeen: your verification code is {code}. It expires in 5 minutes. Do not share it with anyone.',
+    ur: 'ایجوڈین: آپ کا تصدیقی کوڈ {code} ہے۔ یہ 5 منٹ میں ختم ہو جائے گا۔ اسے کسی کو نہ بتائیں۔',
   },
 };
 

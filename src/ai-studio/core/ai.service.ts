@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
 import Anthropic from '@anthropic-ai/sdk';
@@ -10,7 +10,8 @@ import { AiFeatureKey } from './ai-features';
 import { AiFlagsService } from './ai-flags.service';
 import { loadGuidelines } from './guidelines';
 import { stripPiiDeep } from './pii.util';
-import { SlidingWindowLimiter } from './rate-limiter';
+import { RedisBackedLimiter } from './rate-limiter';
+import { RedisService } from '../../redis/redis.service';
 
 export const AI_UNAVAILABLE = 'AI_UNAVAILABLE';
 export const AI_RATE_LIMITED = 'AI_RATE_LIMITED';
@@ -88,7 +89,7 @@ const RETRY_STATUS =new Set([408, 409, 429, 500, 502, 503, 504, 529]);
 export class AiService {
   private readonly logger = new Logger(AiService.name);
   private client: Anthropic | null = null;
-  private readonly limiter: SlidingWindowLimiter;
+  private readonly limiter: RedisBackedLimiter;
   readonly modelStandard: string;
   readonly modelFast: string;
   /** Test hook: replace the sleep used between retries. */
@@ -99,11 +100,12 @@ export class AiService {
     private readonly db: DatabaseService,
     private readonly flags: AiFlagsService,
     private readonly credits?: AiStudioCreditsService,
+    @Optional() redis?: RedisService,
   ) {
     this.modelStandard = config.get<string>('ANTHROPIC_MODEL') || config.get<string>('AI_TEXT_MODEL_ADVANCED') || 'claude-sonnet-5';
     this.modelFast = config.get<string>('ANTHROPIC_MODEL_FAST') || config.get<string>('AI_TEXT_MODEL_STANDARD') || 'claude-haiku-4-5';
     const perMin = Number(config.get<string>('AI_RATE_LIMIT_PER_MIN'));
-    this.limiter = new SlidingWindowLimiter(Number.isFinite(perMin) && perMin > 0 ? perMin : 20, 60_000);
+    this.limiter = new RedisBackedLimiter(Number.isFinite(perMin) && perMin > 0 ? perMin : 20, 60_000, redis ?? null);
     this.apiKey = config.get<string>('ANTHROPIC_API_KEY') || '';
     currentAiService = this;
     const prov = (config.get<string>('AI_PROVIDER') || '').toLowerCase();
@@ -137,7 +139,7 @@ export class AiService {
     await this.flags.assertEnabled(req.feature, req.storeId);
 
     const principal = req.storeId || req.userId || req.adminId || 'anon';
-    if (!this.limiter.tryConsume(`${req.feature}:${principal}`) || !this.limiter.tryConsume(`all:${principal}`)) {
+    if (!(await this.limiter.tryConsume(`${req.feature}:${principal}`)) || !(await this.limiter.tryConsume(`all:${principal}`))) {
       throw new HttpException({ success: false, errorCode: AI_RATE_LIMITED, message: 'Too many AI requests. Please wait a minute and try again.' }, HttpStatus.TOO_MANY_REQUESTS);
     }
 

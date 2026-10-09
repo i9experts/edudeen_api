@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { productController } from './products.controller';
 import { ProductsService } from './products.service';
+import { ProductStockService } from './product-stock.service';
 import { EducationLevelService } from './education-level.service';
 import { AuthModule } from 'src/auth/auth.module';
 import { RedisModule } from 'src/redis/redis.module';
@@ -19,7 +20,7 @@ import { AttributesModule } from 'src/attributes/attributes.module';
     AttributesModule,
   ],
   controllers: [productController],
-  providers: [ProductsService, EducationLevelService],
+  providers: [ProductsService, ProductStockService, EducationLevelService],
   exports: [ProductsService],
 })
 export class ProductsModule {}

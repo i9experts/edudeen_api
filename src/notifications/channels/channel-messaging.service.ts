@@ -3,8 +3,9 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { DatabaseService } from 'src/database/databaseservice';
 import { QUEUE_NAMES, NOTIFICATION_CHANNEL_JOB } from 'src/queues/queue.constants';
-import type { ChannelEvent, ChannelId } from './channel.types';
+import { RETENTION_EVENTS, type ChannelEvent, type ChannelId } from './channel.types';
 import { buildChannels, planDelivery } from './channel-plan';
+import { renderMessage } from './message-templates';
 
 export interface ChannelJob {
   channel: ChannelId;
@@ -42,13 +43,18 @@ export class ChannelMessagingService {
       const prefs: any = await notificationPreferenceModel.findOne({ userId: args.userId }).lean();
       if (!prefs || (prefs.whatsappEnabled !== true && prefs.smsEnabled !== true)) return; // opt-in only
       const user: any = await userModel.findById(args.userId).select('phone').lean();
+      // Order updates follow the orders category; retention messages (cart reminder, price alerts, referral)
+      // need the promotions category AND the separate retention opt-in, so an order-updates opt-in never starts marketing.
+      const categoryEnabled = RETENTION_EVENTS.has(args.event)
+        ? prefs.prefs?.promotions !== false && prefs.retentionChannelsEnabled === true
+        : prefs.prefs?.orders !== false;
       const plan = planDelivery({
         event: args.event,
         vars: args.vars,
         rawPhone: user?.phone || args.fallbackPhone,
         channels,
         prefs: {
-          ordersCategoryEnabled: prefs.prefs?.orders !== false,
+          ordersCategoryEnabled: categoryEnabled,
           whatsappEnabled: prefs.whatsappEnabled === true,
           smsEnabled: prefs.smsEnabled === true,
           language: prefs.language === 'ur' ? 'ur' : 'en',
@@ -65,6 +71,32 @@ export class ChannelMessagingService {
     } catch (err: any) {
       this.logger.error(`sendOrderEvent failed: ${err?.message}`);
     }
+  }
+
+  /** True when at least one out-of-app channel (WhatsApp/SMS) is configured on this server. */
+  isAnyChannelConfigured(): boolean {
+    return buildChannels().some((c) => c.isConfigured());
+  }
+
+  /**
+   * Account-verification delivery (phone OTP). NOT preference-gated (the user asked for it) and NOT queued/retried
+   * (a stale code is useless): WhatsApp first, SMS as fallback. Returns ok=false instead of throwing; the code is
+   * never logged.
+   */
+  async sendDirect(args: { to: string; event: ChannelEvent; vars: Record<string, string>; lang?: 'en' | 'ur' }): Promise<{ ok: boolean; channel?: ChannelId; error?: string }> {
+    const lang = args.lang === 'ur' ? 'ur' : 'en';
+    const text = renderMessage(args.event, lang, args.vars);
+    for (const channel of buildChannels()) {
+      if (!channel.isConfigured()) continue;
+      try {
+        const res = await channel.send({ to: args.to, event: args.event, lang, vars: args.vars, text });
+        if (res.ok) return { ok: true, channel: channel.id };
+        this.logger.warn(`${channel.id} direct send failed: ${String(res.error ?? '').slice(0, 80)}`);
+      } catch (err: any) {
+        this.logger.warn(`${channel.id} direct send threw: ${String(err?.message ?? '').slice(0, 80)}`);
+      }
+    }
+    return { ok: false, error: 'no_channel_delivered' };
   }
 
   /** Called by the queue processor. Throws on failure so BullMQ retries. */

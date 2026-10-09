@@ -132,8 +132,19 @@ export class Seller {
     // store — there's nothing left to resume once onboarding is done.
     @Prop({ type: Object, default: null })
     onboardingDraft: { step: number; maxReached: number; form: Record<string, unknown> } | null;
+
+    // Phone/WhatsApp-OTP verification (additive; email stays the login identity). Unique among verified sellers.
+    @Prop({ type: Boolean, default: false })
+    phoneVerified: boolean;
+
+    @Prop({ type: String, default: null })
+    phoneE164: string | null;
+
+    @Prop({ type: Date, default: null })
+    phoneVerifiedAt: Date | null;
 }
 
 
 
-export const SellerSchema = SchemaFactory.createForClass(Seller); 
+export const SellerSchema = SchemaFactory.createForClass(Seller);
+SellerSchema.index({ phoneE164: 1 }, { unique: true, partialFilterExpression: { phoneVerified: true, phoneE164: { $type: 'string' } } });

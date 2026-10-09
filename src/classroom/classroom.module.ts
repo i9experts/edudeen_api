@@ -16,6 +16,9 @@ import { CoursesService } from './courses.service';
 import { CourseProgress, CourseProgressSchema } from './schemas/course.schema';
 import { UploadModule } from '../upload/upload.module';
 import { CuratedCollection, CuratedCollectionSchema } from './schemas/curated-collection.schema';
+import { LearningPath, LearningPathSchema } from './schemas/learning-path.schema';
+import { LearningPathsService } from './learning-paths.service';
+import { AdminLearningPathsController, LearningPathsController } from './learning-paths.controller';
 import { AdminCuratedCollectionsController, BundlesController, CoursesController, CuratedCollectionsController, ProductQuestionsController, QuoteRequestsController, SavedListsController } from './classroom.controllers';
 
 /**
@@ -34,9 +37,10 @@ import { AdminCuratedCollectionsController, BundlesController, CoursesController
       { name: QuoteRequest.name, schema: QuoteRequestSchema },
       { name: CuratedCollection.name, schema: CuratedCollectionSchema },
       { name: CourseProgress.name, schema: CourseProgressSchema },
+      { name: LearningPath.name, schema: LearningPathSchema },
     ]),
   ],
-  controllers: [SavedListsController, ProductQuestionsController, QuoteRequestsController, BundlesController, CuratedCollectionsController, AdminCuratedCollectionsController, CoursesController],
-  providers: [SavedListsService, ProductQuestionsService, QuoteRequestsService, BundlesService, CuratedCollectionsService, CoursesService],
+  controllers: [SavedListsController, ProductQuestionsController, QuoteRequestsController, BundlesController, CuratedCollectionsController, AdminCuratedCollectionsController, CoursesController, LearningPathsController, AdminLearningPathsController],
+  providers: [SavedListsService, ProductQuestionsService, QuoteRequestsService, BundlesService, CuratedCollectionsService, CoursesService, LearningPathsService],
 })
 export class ClassroomModule {}

@@ -70,6 +70,8 @@ import { OnboardingSlidesModule } from './onboarding-slides/onboarding-slides.mo
 import { AttributesModule } from './attributes/attributes.module';
 import { StoreDashboardModule } from './store-dashboard/store-dashboard.module';
 import { CouriersModule } from './couriers/couriers.module';
+import { RetentionModule } from './retention/retention.module';
+import { PhoneVerificationModule } from './phone-verification/phone-verification.module';
 
 @Module({
   imports: [
@@ -147,6 +149,8 @@ import { CouriersModule } from './couriers/couriers.module';
     ExchangeRateModule,
     StoreDashboardModule,
     CouriersModule,
+    RetentionModule,
+    PhoneVerificationModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }, { provide: APP_INTERCEPTOR, useClass: NoOperatorKeysInterceptor }],
