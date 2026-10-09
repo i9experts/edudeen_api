@@ -4,7 +4,8 @@ import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { FirebaseAdminService } from 'src/firebase/firebase.config';
 import { EmailService } from 'src/otp/services/email.service';
-import { QUEUE_NAMES, NOTIFICATION_PUSH_JOB, NOTIFICATION_EMAIL_JOB } from 'src/queues/queue.constants';
+import { QUEUE_NAMES, NOTIFICATION_PUSH_JOB, NOTIFICATION_EMAIL_JOB, NOTIFICATION_CHANNEL_JOB } from 'src/queues/queue.constants';
+import { ChannelMessagingService } from './channels/channel-messaging.service';
 
 /**
  * Dispatches queued push/email jobs raised by NotificationsService.notify().
@@ -18,6 +19,7 @@ export class NotificationsProcessor extends WorkerHost {
   constructor(
     private readonly firebaseAdminService: FirebaseAdminService,
     private readonly emailService: EmailService,
+    private readonly channelMessaging: ChannelMessagingService,
   ) {
     super();
   }
@@ -33,6 +35,9 @@ export class NotificationsProcessor extends WorkerHost {
         return;
       case NOTIFICATION_EMAIL_JOB:
         await this.emailService.sendMail(job.data.to, job.data.subject, job.data.html);
+        return;
+      case NOTIFICATION_CHANNEL_JOB:
+        await this.channelMessaging.deliver(job.data);
         return;
       default:
         this.logger.error(`Unknown notification job "${job.name}" — dropping job ${job.id}`);

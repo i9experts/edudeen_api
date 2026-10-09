@@ -311,17 +311,34 @@ export class ExchangeRateService {
     return { items, total, page, limit };
   }
 
+  /**
+   * Fetches "units of `currency` per 1 USD" from free, keyless providers, tried in
+   * order — the first valid answer wins. Frankfurter (ECB) does NOT publish PKR,
+   * which is why it used to answer 404 for the main currency; it is kept as one
+   * of the fallbacks for currencies the ECB does cover. Every value must be a
+   * finite positive number, and `ingestRate` still applies the sanity band and
+   * abnormal-jump gate afterwards — an unusable answer is never stored.
+   */
   private async fetchProviderRate(currency: string): Promise<number> {
-    const res = await fetch(`https://api.frankfurter.app/latest?from=USD&to=${currency}`, { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) throw new Error(`Provider returned HTTP ${res.status}`);
-    const data = (await res.json()) as { rates?: Record<string, number> };
-    const rate = data?.rates?.[currency];
-    if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) {
-      throw new Error(`Provider returned an invalid rate: ${JSON.stringify(data)}`);
+    const providers: { name: string; url: string; pick: (d: any) => unknown }[] = [
+      { name: 'open.er-api.com', url: 'https://open.er-api.com/v6/latest/USD', pick: d => (d?.result === 'success' ? d?.rates?.[currency] : undefined) },
+      { name: 'currency-api (jsdelivr)', url: 'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json', pick: d => d?.usd?.[currency.toLowerCase()] },
+      { name: 'frankfurter.dev', url: `https://api.frankfurter.dev/v1/latest?base=USD&symbols=${currency}`, pick: d => d?.rates?.[currency] },
+    ];
+    const failures: string[] = [];
+    for (const provider of providers) {
+      try {
+        const res = await fetch(provider.url, { signal: AbortSignal.timeout(10_000) });
+        if (!res.ok) { failures.push(`${provider.name}: HTTP ${res.status}`); continue; }
+        const rate = provider.pick(await res.json());
+        if (typeof rate === 'number' && Number.isFinite(rate) && rate > 0) return rate;
+        failures.push(`${provider.name}: no usable ${currency} rate in the response`);
+      } catch (err: any) {
+        failures.push(`${provider.name}: ${err?.message ?? 'request failed'}`);
+      }
     }
-    return rate;
+    throw new Error(`No FX provider returned a ${currency} rate (${failures.join('; ')})`);
   }
-
   /** A currency with no rate at all (fresh database, before the daily cron has
    *  ever run) would block every checkout in it. Fetch the first rate on demand
    *  through the normal sanity-checked ingest; null if the provider is down, in

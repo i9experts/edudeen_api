@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { DatabaseService } from 'src/database/databaseservice';
 import { AiCreditsService } from 'src/platform-plans/ai-credits.service';
 import { AiToolType } from './schemas/ai-generation.schema';
+import { AI_FEATURE_DEFS } from './core/ai-features';
 
 /**
  * Frontend-mappable error code: on 402 + this code, show the "Buy Credits"
@@ -13,14 +14,9 @@ import { AiToolType } from './schemas/ai-generation.schema';
 export const INSUFFICIENT_AI_CREDITS = 'INSUFFICIENT_AI_CREDITS';
 
 /** Per-generation cost defaults, overridable via AI_CREDIT_COST_* env vars. */
-const DEFAULT_TOOL_COSTS: Record<AiToolType, number> = {
-  listing_writer: 5,
-  seo_booster: 5,
-  email_campaigns: 5,
-  worksheet_builder: 10,
-  price_optimizer: 10,
-  image_enhancer: 15,
-};
+const DEFAULT_TOOL_COSTS = Object.fromEntries(
+  (Object.keys(AI_FEATURE_DEFS) as AiToolType[]).map((k) => [k, AI_FEATURE_DEFS[k].credits]),
+) as Record<AiToolType, number>;
 
 /**
  * Charge-on-success credit handling for AI Studio, layered on the existing

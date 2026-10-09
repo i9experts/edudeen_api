@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { pickBestCampaign } from '../marketing/campaign-pricing.util';
 import { isValidObjectId } from 'mongoose';
 import { sanitizeDigitalForPublicView } from 'src/products/product-public-view.util';
 import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
@@ -237,10 +238,22 @@ export class CartService {
         return !!p && !p.isDelete && p.status === 'active';
       });
 
+      // Price from the variant's CURRENT price (the same source checkout charges), not the
+      // snapshot taken when the item was added — a sale started/ended since then must show here.
+      const variantIds = [...new Set(liveItems.map((item: any) => item.productVariantId))];
+      const variants = variantIds.length
+        ? await this.databaseService.repositories.productVariantModel
+            .find({ _id: { $in: variantIds } })
+            .select('price')
+            .lean()
+        : [];
+      const livePriceByVariant = new Map((variants as any[]).map((v) => [v._id.toString(), v.price as number]));
+
       // Cart items map karo
       const items = liveItems.map((item) => {
+        const unitPrice = livePriceByVariant.get(item.productVariantId) ?? item.price;
         // Ek item ka total
-        const itemTotal = item.price * item.quantity;
+        const itemTotal = unitPrice * item.quantity;
 
         // Overall totals me add karo
         totalItems += item.quantity;
@@ -267,11 +280,33 @@ export class CartService {
           image: images,
           options: (item as any).options ?? [],
 
-          unitPrice: item.price, // single product price
+          unitPrice, // single product price (live)
           quantity: item.quantity, // quantity
           itemTotal: itemTotal, // quantity × price
         };
       });
+
+      // The store's running sale (admin campaign) — the same rule checkout applies (best single
+      // campaign on the subtotal), so the cart shows the discount instead of revealing it only
+      // at the last checkout step. Coupons / gift cards / membership prices are applied at checkout.
+      const now = new Date();
+      const rawCampaigns = await this.databaseService.repositories.campaignModel
+        .find({
+          isDelete: false, status: 'active', startDate: { $lte: now }, endDate: { $gte: now },
+          $or: [{ sponsorType: 'platform' }, { participatingStoreIds: { $in: [storeId] } }],
+        })
+        .select('name endDate discountType discountValue currency sponsorType')
+        .lean();
+      const best = pickBestCampaign(
+        (rawCampaigns as any[]).map((c) => ({
+          campaignId: String(c._id), name: c.name, discountType: c.discountType ?? null, discountValue: c.discountValue ?? null,
+          currency: c.currency ?? null, endDate: c.endDate, sponsorType: c.sponsorType ?? 'seller',
+        })),
+        totalPrice,
+      );
+      const campaignDiscount = best && best.discountAmount > 0
+        ? { campaignId: best.campaign.campaignId, name: best.campaign.name, amount: best.discountAmount, discountType: best.campaign.discountType, discountValue: best.campaign.discountValue, currency: best.campaign.currency }
+        : null;
 
       // Final response
       return {
@@ -282,6 +317,8 @@ export class CartService {
           items,
           totalItems,
           totalPrice,
+          campaignDiscount,
+          totalAfterDiscount: Math.round((totalPrice - (campaignDiscount?.amount ?? 0)) * 100) / 100,
         },
       };
     } catch (error: any) {

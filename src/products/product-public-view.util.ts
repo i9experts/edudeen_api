@@ -14,7 +14,7 @@ interface DigitalShape {
 export function sanitizeDigitalForPublicView<T extends { digital?: unknown }>(
   product: T,
 ): T {
-  product = hideLiveLink(product);
+  product = hideAiReview(hideLiveLink(product));
   if (!product?.digital) return product;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { files, preview, buyerDeliveryMessage, sampleFile, ...safeDigital } =
@@ -31,6 +31,21 @@ export function sanitizeDigitalForPublicView<T extends { digital?: unknown }>(
       sampleName: sample?.name ?? null,
     },
   } as T;
+}
+
+/** The admin-only AI pre-moderation result never goes into public views. */
+function hideAiReview<T>(product: T): T {
+  if (!product || typeof product !== 'object') return product;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { aiReview, ...rest } = product as Record<string, unknown>;
+  // The trust badge is public; who set it (an admin id) is not.
+  const trust = rest.trust as Record<string, unknown> | null | undefined;
+  if (trust && typeof trust === 'object' && 'reviewedBy' in trust) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { reviewedBy, ...publicTrust } = trust;
+    rest.trust = publicTrust;
+  }
+  return rest as T;
 }
 
 /** A live class's meeting link goes only to buyers (GET /api/courses/live/:productId), never into public views. */

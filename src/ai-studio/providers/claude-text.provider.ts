@@ -86,7 +86,11 @@ export class ClaudeTextGenerationProvider implements TextGenerationAdapter {
       }
     }
 
-    return { json, text, provider: this.name, model, usedWebSearch: useWebSearch };
+    const u: any = (response as any).usage ?? {};
+    return {
+      json, text, provider: this.name, model, usedWebSearch: useWebSearch,
+      usage: { inputTokens: u.input_tokens ?? 0, outputTokens: u.output_tokens ?? 0, cacheReadTokens: u.cache_read_input_tokens ?? 0 },
+    };
   }
 
   /** Server-side tool loops can pause at their iteration limit — resume by re-sending. */

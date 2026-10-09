@@ -8,6 +8,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NOTIFICATION_TYPES } from '../notifications/notification.types';
 import { verifyStoreOwnershipStrict } from '../common/store-ownership.util';
 import { INSTITUTION_TYPES, QuoteRequest, QuoteRequestDocument } from './schemas/quote-request.schema';
+import { cleanNetTerms, cleanPurchaseOrder } from './quote-terms.util';
 
 export const MAX_OPEN_QUOTES_PER_BUYER = 10;
 const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -119,6 +120,25 @@ export class QuoteRequestsService {
     return { success: true, message: label, data: q.toObject() };
   }
 
+  /** Buyer adds the institution's purchase order (number and/or uploaded file) to a quote that has a price. */
+  async attachPurchaseOrder(userId: string, id: string, body: any) {
+    if (!isValidObjectId(id)) throw new NotFoundException('Quote not found');
+    const q = await this.quoteModel.findById(id);
+    if (!q || q.buyerId !== userId) throw new NotFoundException('Quote not found');
+    if (!['quoted', 'accepted'].includes(q.status)) throw new BadRequestException('A purchase order can be added once the seller has sent a price');
+    let po;
+    try { po = cleanPurchaseOrder(body); } catch (e: any) { throw new BadRequestException(e?.message); }
+    q.purchaseOrderNumber = po.purchaseOrderNumber;
+    q.purchaseOrderUrl = po.purchaseOrderUrl;
+    await q.save();
+    void this.notificationsService.notify({
+      recipientId: q.sellerId, recipientRole: 'seller', type: NOTIFICATION_TYPES.QUOTE_ACCEPTED,
+      title: `Purchase order added for ${q.number}`, body: po.purchaseOrderNumber ? `PO ${po.purchaseOrderNumber}` : 'A purchase order file was uploaded',
+      data: { quoteId: String(q._id), storeId: q.storeId, link: `/store/${q.storeId}/quotes` },
+    });
+    return { success: true, message: 'Purchase order saved', data: q.toObject() };
+  }
+
   async listForSeller(storeId: string, sellerId: string, status?: string) {
     await verifyStoreOwnershipStrict(this.databaseService.repositories.storeModel, storeId, sellerId);
     const filter: any = { storeId };
@@ -142,7 +162,9 @@ export class QuoteRequestsService {
       if (Number.isNaN(validUntil.getTime()) || validUntil.getTime() < Date.now()) throw new BadRequestException('"Valid until" must be a future date');
     }
     const rounded = Math.round(unitPrice * 100) / 100;
-    q.offer = { unitPrice: rounded, totalPrice: Math.round(rounded * q.quantity * 100) / 100, currency: (store as any).baseCurrency || 'PKR', validUntil, note: str(body?.note, 1000) };
+    let netTerms: string;
+    try { netTerms = cleanNetTerms(body?.netTerms); } catch (e: any) { throw new BadRequestException(e?.message); }
+    q.offer = { unitPrice: rounded, totalPrice: Math.round(rounded * q.quantity * 100) / 100, currency: (store as any).baseCurrency || 'PKR', validUntil, note: str(body?.note, 1000), netTerms };
     q.status = 'quoted';
     q.quotedAt = new Date();
     await q.save();

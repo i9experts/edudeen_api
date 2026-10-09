@@ -289,6 +289,11 @@ export class Product {
   @Prop({ default: false })
   isFeatured: boolean;
 
+  // Admin-assigned trust badges (set in the listing review; see products/trust-badges.util.ts).
+  // Plain nested object, null until an admin sets something.
+  @Prop({ type: Object, default: null })
+  trust: { scholarReviewed: boolean; ageAppropriateMin: number | null; ageAppropriateMax: number | null; reviewedAt?: Date; reviewedBy?: string } | null;
+
   @Prop({ default: false })
   isDelete: boolean;
 
@@ -297,6 +302,20 @@ export class Product {
   // after a seller delete, but not after an admin takedown.
   @Prop({ default: false })
   removedByAdmin: boolean;
+
+  // Urdu copy (AI-translated drafts the seller reviews; shown to buyers browsing in Urdu).
+  @Prop({ type: String, default: null })
+  nameUr: string | null;
+
+  @Prop({ type: String, default: null })
+  descriptionUr: string | null;
+
+  // AI pre-moderation result for the admin listing review (advisory only, admin decides) and the cached review summary.
+  @Prop({ type: Object, default: null })
+  aiReview: Record<string, any> | null;
+
+  @Prop({ type: Object, default: null })
+  aiReviewSummary: Record<string, any> | null;
 
   // SEO overrides — see seo/schemas/seo-meta.schema.ts. Absent/empty until a
   // seller edits it or SeoAiService generates a suggestion; falls back to
@@ -320,4 +339,8 @@ ProductSchema.index({ purchaseCount: -1 });
 ProductSchema.index({ viewCount: -1 });
 ProductSchema.index({ tags: 1 });
 ProductSchema.index({ status: 1 });
+// perf: compound indexes for hot query paths (additive)
+ProductSchema.index({ storeId: 1, status: 1, isDelete: 1 });
+ProductSchema.index({ status: 1, isDelete: 1, createdAt: -1 });
+ProductSchema.index({ categoryId: 1, status: 1, isDelete: 1 });
 ProductSchema.index({ scheduledAt: 1 });

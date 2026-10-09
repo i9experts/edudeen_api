@@ -45,6 +45,8 @@ export interface TextGenerationResult {
   provider: string;
   model: string;
   usedWebSearch: boolean;
+  /** Token usage reported by the provider (absent for the mock). */
+  usage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
 }
 
 export interface TextGenerationAdapter {

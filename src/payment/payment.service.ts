@@ -19,6 +19,8 @@ import { StripeConnectService } from 'src/stripe-connect/stripe-connect.service'
 import { CommissionRulesService } from 'src/commission-rules/commission-rules.service';
 import Stripe from 'stripe';
 import { orderPlacedEmail } from 'src/notifications/templates/notification-email.template';
+import { getHostedProvider } from './providers/hosted-providers.registry';
+import type { HostedRedirect, VerifiedCallback } from './providers/payment-provider.types';
 
 @Injectable()
 export class PaymentService {
@@ -777,6 +779,174 @@ export class PaymentService {
     return { orderIds: orders.map((o: any) => o._id.toString()) };
   }
 
+  // ── JazzCash / Easypaisa (hosted redirect rails, PKR) ─────────────────────
+
+  /** Starts a hosted-gateway payment for a checkout. Returns the form/redirect the browser must follow. */
+  async startHostedPayment(
+    userId: string,
+    checkoutId: string,
+    providerId: string,
+    env: Record<string, string | undefined> = process.env,
+  ): Promise<{ success: true; data: HostedRedirect & { txnRef: string; amount: number; currency: string } }> {
+    const provider = getHostedProvider(providerId, env);
+    if (!provider || !provider.isConfigured()) {
+      throw new BadRequestException('This payment method is not available right now');
+    }
+    if (!checkoutId) throw new BadRequestException('checkoutId is required');
+    const apiBase = (env.API_PUBLIC_URL ?? '').trim().replace(/\/$/, '');
+    if (!apiBase) throw new BadRequestException('Online payment is not fully configured (API_PUBLIC_URL missing)');
+
+    const { checkoutModel, paymentTransactionModel, productVariantModel, userModel } = this.databaseService.repositories;
+    const checkout = await checkoutModel.findOne({ _id: checkoutId, userId, isDelete: false });
+    if (!checkout) throw new NotFoundException('Checkout not found');
+    if (checkout.status === 'completed') throw new BadRequestException('Checkout already completed');
+    if (checkout.status === 'cancelled') throw new BadRequestException('Checkout is cancelled');
+    if (checkout.status === 'expired') throw new BadRequestException('Checkout has expired');
+    if (checkout.expiredAt && checkout.expiredAt < new Date()) {
+      await checkoutModel.findByIdAndUpdate(checkout._id, { status: 'expired' });
+      throw new BadRequestException('Checkout has expired');
+    }
+    if (!provider.supportsCurrency(checkout.currency)) {
+      throw new BadRequestException(`${provider.label} is only available for PKR checkouts`);
+    }
+
+    const physicalItems = checkout.items.filter((i: any) => i.type === 'physical');
+    if (physicalItems.length > 0) {
+      const variants = await productVariantModel
+        .find({ _id: { $in: [...new Set<string>(physicalItems.map((i: any) => i.variantId as string))] }, isDelete: false })
+        .select('stock unlimitedStock')
+        .lean();
+      const byId = new Map<string, any>((variants as any[]).map((v: any) => [String(v._id), v]));
+      for (const item of physicalItems) {
+        const v = byId.get(String(item.variantId));
+        if (!v) throw new BadRequestException(`Item not available: ${item.name}`);
+        if (!v.unlimitedStock && v.stock < item.quantity) throw new BadRequestException(`Insufficient stock for ${item.name}`);
+      }
+    }
+    await this.assertGiftCardStillCovers(checkout);
+
+    const amount = this.computeChargeAmount(checkout, 'full');
+    const amountMinor = Math.round(amount * 100);
+    if (amountMinor <= 0) throw new BadRequestException('Nothing to pay for this checkout');
+
+    // A fresh reference per attempt; earlier unfinished attempts are closed.
+    await paymentTransactionModel.updateMany(
+      { checkoutId: checkout._id.toString(), paymentType: { $in: ['jazzcash', 'easypaisa'] }, status: 'pending', isDelete: false },
+      { status: 'failed' },
+    );
+    const txnRef = `T${Date.now()}${Math.floor(Math.random() * 900 + 100)}`;
+    await paymentTransactionModel.create({
+      userId,
+      checkoutId: checkout._id.toString(),
+      paymentType: provider.id,
+      amount,
+      currency: checkout.currency,
+      fxSnapshots: checkout.fxSnapshots,
+      paymentScope: 'full',
+      status: 'pending',
+      providerTxnRef: txnRef,
+    });
+    await checkoutModel.findByIdAndUpdate(checkout._id, { paymentType: provider.id, status: 'payment_pending' });
+
+    const user: any = await userModel.findById(userId).select('email phone phoneNumber').lean();
+    const redirect = provider.buildRedirect({
+      txnRef,
+      amountMinor,
+      currency: checkout.currency,
+      description: `Edudeen order ${checkout._id.toString().slice(-6)}`,
+      buyerEmail: user?.email ?? null,
+      buyerPhone: user?.phone ?? user?.phoneNumber ?? null,
+      returnUrl: `${apiBase}/api/payment/pk/${provider.id}/callback`,
+    });
+    return { success: true, data: { ...redirect, txnRef, amount, currency: checkout.currency } };
+  }
+
+  /** Callback from JazzCash/Easypaisa: verify with the adapter, then place the order. Never trusts the browser. */
+  async handleHostedCallback(
+    providerId: string,
+    payload: Record<string, any>,
+    env: Record<string, string | undefined> = process.env,
+  ): Promise<{ outcome: 'success' | 'failed' | 'invalid'; checkoutId: string | null }> {
+    const provider = getHostedProvider(providerId, env);
+    if (!provider || !provider.isConfigured()) return { outcome: 'invalid', checkoutId: null };
+    const verified: VerifiedCallback = await provider.verifyCallback(payload);
+    if (!verified.valid || !verified.txnRef) return { outcome: 'invalid', checkoutId: null };
+
+    const { paymentTransactionModel } = this.databaseService.repositories;
+    const tx: any = await paymentTransactionModel.findOne({ providerTxnRef: verified.txnRef, paymentType: provider.id, isDelete: false }).lean();
+    if (!tx) return { outcome: 'invalid', checkoutId: null };
+
+    if (!verified.success) {
+      await paymentTransactionModel.updateOne({ _id: tx._id, status: 'pending' }, { status: 'failed' });
+      return { outcome: 'failed', checkoutId: tx.checkoutId };
+    }
+    await this.finalizeHostedPayment(verified.txnRef, provider.id, { amountMinor: verified.amountMinor, providerRef: verified.providerRef });
+    return { outcome: 'success', checkoutId: tx.checkoutId };
+  }
+
+  /** Places the order(s) for a hosted payment whose callback was VERIFIED. Idempotent per transaction. */
+  async finalizeHostedPayment(
+    txnRef: string,
+    provider: string,
+    paid: { amountMinor: number | null; providerRef: string | null },
+  ): Promise<{ orderIds: string[] } | null> {
+    const { checkoutModel, paymentTransactionModel, orderModel, addressModel, cartModel } = this.databaseService.repositories;
+
+    const transaction = await paymentTransactionModel.findOneAndUpdate(
+      { providerTxnRef: txnRef, paymentType: provider, status: { $in: ['pending', 'failed'] }, isDelete: false },
+      { status: 'completed', paidAt: new Date(), providerRef: paid.providerRef },
+      { returnDocument: 'after' },
+    );
+    if (!transaction) {
+      const existing = await paymentTransactionModel.findOne({ providerTxnRef: txnRef, paymentType: provider, isDelete: false });
+      if (existing?.status === 'completed') return { orderIds: existing.orderIds };
+      await this.activityLogService.log({
+        storeId: 'platform', category: 'finance', action: 'hosted_payment_without_transaction',
+        description: `${provider} reported payment ${txnRef} but no claimable transaction exists`,
+        actorId: 'system', actorRole: 'system', isSecurityAlert: true, targetId: txnRef, targetType: 'payment',
+      });
+      return null;
+    }
+
+    const checkout = await checkoutModel.findOne({ _id: transaction.checkoutId, isDelete: false });
+    if (!checkout || checkout.status === 'completed') return { orderIds: transaction.orderIds };
+
+    // Amount safety net: what the gateway says it captured must equal what this checkout asks for.
+    const expectedMinor = Math.round(this.computeChargeAmount(checkout, 'full') * 100);
+    if (paid.amountMinor == null || paid.amountMinor !== expectedMinor || (checkout.currency || '').toUpperCase() !== 'PKR') {
+      await paymentTransactionModel.findByIdAndUpdate(transaction._id, { status: 'pending', paidAt: null });
+      await this.activityLogService.log({
+        storeId: 'platform', category: 'finance', action: 'payment_amount_currency_mismatch',
+        description: `${provider} confirmed ${paid.amountMinor} but checkout ${checkout._id} expected ${expectedMinor} PKR (paisa) - order NOT created, needs manual review`,
+        actorId: 'system', actorRole: 'system', isSecurityAlert: true, targetId: checkout._id.toString(), targetType: 'checkout',
+      });
+      throw new BadRequestException('Payment amount mismatch — this payment requires manual review');
+    }
+
+    const payInfo = { paymentType: provider, isPaid: true };
+    let orders: any[];
+    try {
+      orders = await this.createOrder(transaction.userId, checkout, orderModel, addressModel, payInfo, payInfo);
+    } catch (err: any) {
+      if (typeof err?.message === 'string' && err.message.startsWith('Stock not available')) {
+        // The buyer's money is captured but the goods are gone and these rails have no refund API here.
+        await this.activityLogService.log({
+          storeId: 'platform', category: 'finance', action: 'unfulfillable_payment_refund_needed',
+          description: `${provider} payment ${txnRef} for checkout ${checkout._id} captured but ${err.message} - REFUND MANUALLY`,
+          actorId: 'system', actorRole: 'system', isSecurityAlert: true, targetId: checkout._id.toString(), targetType: 'checkout',
+        });
+        throw new BadRequestException(`${err.message}. Our team has been alerted and will refund your payment.`);
+      }
+      await paymentTransactionModel.findByIdAndUpdate(transaction._id, { status: 'pending', paidAt: null });
+      throw new BadRequestException('Order creation failed, will retry');
+    }
+
+    await paymentTransactionModel.findByIdAndUpdate(transaction._id, { orderIds: orders.map((o: any) => o._id.toString()) });
+    await checkoutModel.findByIdAndUpdate(checkout._id, { status: 'completed' });
+    await this.removeCheckedOutItemsFromCart(transaction.userId, checkout, cartModel);
+    return { orderIds: orders.map((o: any) => o._id.toString()) };
+  }
+
   /** Full refund for a captured charge that can't become an order (e.g. stock
    *  sold out after the buyer paid). Marks the transaction 'failed' with
    *  `amountRefunded` already bumped, so the `charge.refunded` webhook this
@@ -889,6 +1059,17 @@ export class PaymentService {
       }
     }
 
+    // A declined hosted (JazzCash/Easypaisa) attempt with nothing newer pending.
+    const hostedPending = await paymentTransactionModel.exists({
+      checkoutId, status: 'pending', paymentType: { $in: ['jazzcash', 'easypaisa'] }, isDelete: false,
+    });
+    if (!hostedPending) {
+      const hostedFailed = await paymentTransactionModel.exists({
+        checkoutId, status: 'failed', paymentType: { $in: ['jazzcash', 'easypaisa'] }, isDelete: false,
+      });
+      if (hostedFailed) return { success: true, data: { status: 'failed', orders: [] } };
+    }
+
     return { success: true, data: { status: 'pending', orders: [] } };
   }
 
@@ -932,14 +1113,14 @@ export class PaymentService {
    *  of creating duplicate orders / double-decrementing stock / double-spending
    *  coupons and gift cards. Released again if order creation fails so the
    *  buyer can retry. */
-  private async claimCheckoutForPlacement(checkoutId: string, userId: string) {
+  private async claimCheckoutForPlacement(checkoutId: string, userId: string, extraSet: Record<string, any> = {}) {
     const claimed = await this.databaseService.repositories.checkoutModel.findOneAndUpdate(
       {
         _id: checkoutId, userId, isDelete: false,
         status: { $in: ['pending', 'payment_pending'] },
         orderPlacementStartedAt: null,
       },
-      { $set: { orderPlacementStartedAt: new Date() } },
+      { $set: { orderPlacementStartedAt: new Date(), ...extraSet } },
       { returnDocument: 'after' },
     );
     if (!claimed) throw new ConflictException('This checkout is already being processed');
@@ -1004,11 +1185,14 @@ export class PaymentService {
       );
     }
 
+    // One query for all variants instead of one per line.
+    const codVariants = await productVariantModel
+      .find({ _id: { $in: [...new Set<string>(checkout.items.map((i: any) => i.variantId as string))] }, isDelete: false })
+      .select('stock unlimitedStock')
+      .lean();
+    const codVariantById = new Map<string, any>((codVariants as any[]).map((v: any) => [String(v._id), v]));
     for (const item of checkout.items) {
-      const variant = await productVariantModel.findOne({
-        _id: item.variantId,
-        isDelete: false,
-      });
+      const variant = codVariantById.get(String(item.variantId));
       if (!variant)
         throw new BadRequestException(`Item not available: ${item.name}`);
       if (!variant.unlimitedStock && variant.stock < item.quantity) {
@@ -1019,15 +1203,11 @@ export class PaymentService {
     }
 
     await this.assertGiftCardStillCovers(checkout);
-    await this.claimCheckoutForPlacement(checkoutId, userId);
+    // The claim also records the payment type/status (was a separate update).
+    await this.claimCheckoutForPlacement(checkoutId, userId, { paymentType: 'cash_on_delivery', status: 'payment_pending' });
 
     let orders: any[];
     try {
-      await checkoutModel.findByIdAndUpdate(checkoutId, {
-        paymentType: 'cash_on_delivery',
-        status: 'payment_pending',
-      });
-
       const codPaymentInfo = { paymentType: 'cash_on_delivery', isPaid: false };
       orders = await this.createOrder(userId, checkout, orderModel, addressModel, codPaymentInfo, codPaymentInfo);
     } catch (err) {
@@ -1035,22 +1215,24 @@ export class PaymentService {
       throw err;
     }
 
-    await paymentTransactionModel.create({
-      userId,
-      checkoutId: checkout._id.toString(),
-      orderIds: orders.map((o: any) => o._id.toString()),
-      paymentType: 'cash_on_delivery',
-      amount: checkout.totalAmount,
-      currency: checkout.currency,
-      fxSnapshots: checkout.fxSnapshots,
-      status: 'completed',
-      stripePaymentIntentId: null,
-      stripeClientSecret: null,
-      paidAt: null,
-    });
-
-    await checkoutModel.findByIdAndUpdate(checkoutId, { status: 'completed' });
-    await this.removeCheckedOutItemsFromCart(userId, checkout, cartModel);
+    // Independent writes: run them together.
+    await Promise.all([
+      paymentTransactionModel.create({
+        userId,
+        checkoutId: checkout._id.toString(),
+        orderIds: orders.map((o: any) => o._id.toString()),
+        paymentType: 'cash_on_delivery',
+        amount: checkout.totalAmount,
+        currency: checkout.currency,
+        fxSnapshots: checkout.fxSnapshots,
+        status: 'completed',
+        stripePaymentIntentId: null,
+        stripeClientSecret: null,
+        paidAt: null,
+      }),
+      checkoutModel.findByIdAndUpdate(checkoutId, { status: 'completed' }),
+      this.removeCheckedOutItemsFromCart(userId, checkout, cartModel),
+    ]);
 
     return {
       success: true,
@@ -1295,34 +1477,47 @@ export class PaymentService {
     // --- STOCK MINUS (atomic, sirf physical, unlimited variants skip decrement) ---
     const decremented: { variantId: string; quantity: number }[] = [];
 
-    for (const item of physicalItems) {
-      const variant = await productVariantModel
-        .findOne({ _id: item.variantId, isDelete: false })
-        .select('unlimitedStock')
-        .lean();
-      if (!variant || (variant as any).unlimitedStock) continue;
-
-      const res = await productVariantModel.updateOne(
-        {
-          _id: item.variantId,
-          stock: { $gte: item.quantity },
-          isDelete: false,
-        },
-        { $inc: { stock: -item.quantity } },
-      );
-
-      if (res.modifiedCount === 0) {
-        for (const d of decremented) {
-          await productVariantModel.updateOne(
-            { _id: d.variantId },
-            { $inc: { stock: d.quantity } },
-          );
-        }
-        throw new BadRequestException(
-          `Stock not available for item: ${item.name}`,
+    // One lookup for every line's unlimitedStock flag (was one query per line),
+    // then the conditional (atomic) decrements run concurrently. A failed
+    // reservation rolls back every decrement that did succeed.
+    const stockVariants = physicalItems.length
+      ? await productVariantModel
+          .find({ _id: { $in: [...new Set<string>(physicalItems.map((i: any) => i.variantId as string))] }, isDelete: false })
+          .select('unlimitedStock')
+          .lean()
+      : [];
+    const unlimitedById = new Map<string, boolean>(
+      (stockVariants as any[]).map((v: any) => [String(v._id), !!v.unlimitedStock]),
+    );
+    const reservable = physicalItems.filter(
+      (i: any) => unlimitedById.has(String(i.variantId)) && !unlimitedById.get(String(i.variantId)),
+    );
+    const reservations = await Promise.allSettled(
+      reservable.map((item: any) =>
+        productVariantModel.updateOne(
+          { _id: item.variantId, stock: { $gte: item.quantity }, isDelete: false },
+          { $inc: { stock: -item.quantity } },
+        ),
+      ),
+    );
+    let failedItem: any = null;
+    reservations.forEach((r, idx) => {
+      const item = reservable[idx];
+      if (r.status === 'fulfilled' && (r.value as any).modifiedCount > 0) {
+        decremented.push({ variantId: item.variantId, quantity: item.quantity });
+      } else if (!failedItem) {
+        failedItem = item;
+      }
+    });
+    if (failedItem) {
+      if (decremented.length > 0) {
+        await productVariantModel.bulkWrite(
+          decremented.map((d) => ({
+            updateOne: { filter: { _id: d.variantId }, update: { $inc: { stock: d.quantity } } },
+          })),
         );
       }
-      decremented.push({ variantId: item.variantId, quantity: item.quantity });
+      throw new BadRequestException(`Stock not available for item: ${failedItem.name}`);
     }
 
     // --- shipping address (physical ke liye) ---
@@ -1491,6 +1686,8 @@ export class PaymentService {
         autoDiscountTotal,
         platformSponsoredDiscountTotal,
         totalAmount: this.round(subtotal + shippingFee),
+        giftMessage: checkout.giftMessage ?? null,
+        giftWrap: !!checkout.giftWrap,
         paymentType: physicalPayment.paymentType,
         paymentStatus: physicalPayment.paymentStatus ?? (physicalPayment.isPaid ? 'paid' : 'unpaid'),
         isPaid: physicalPayment.isPaid,
@@ -1565,10 +1762,12 @@ export class PaymentService {
     }
 
     // purchaseCount increment — har item ke product pe
-    for (const item of checkout.items) {
-      await productModel.findByIdAndUpdate(item.productId, {
-        $inc: { purchaseCount: item.quantity },
-      });
+    if (checkout.items.length > 0) {
+      await productModel.bulkWrite(
+        checkout.items.map((item: any) => ({
+          updateOne: { filter: { _id: item.productId }, update: { $inc: { purchaseCount: item.quantity } } },
+        })),
+      );
     }
 
     // Coupon/reward-voucher usage is only counted once the order is
@@ -1660,6 +1859,11 @@ export class PaymentService {
           body: `Your order #${createdOrder.orderNumber} has been placed.`,
           data: { orderId: createdOrder._id.toString() },
           email: orderPlacedEmail(createdOrder),
+          channelEvent: {
+            event: createdOrder.paymentType === 'cash_on_delivery' ? 'cod_confirmation' : 'order_placed',
+            vars: { orderNumber: String(createdOrder.orderNumber ?? ''), total: `${createdOrder.currency ?? ''} ${createdOrder.totalAmount ?? ''}`.trim() },
+            fallbackPhone: createdOrder.shippingAddress?.phoneNumber ?? null,
+          },
         })
         .catch(() => {});
     }

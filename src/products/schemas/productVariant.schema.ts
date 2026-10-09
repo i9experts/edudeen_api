@@ -70,4 +70,6 @@ export const ProductVariantSchema = SchemaFactory.createForClass(ProductVariant)
 
 ProductVariantSchema.index({ productId: 1 });
 ProductVariantSchema.index({ sku: 1 });
+// perf: compound indexes for hot query paths (additive)
+ProductVariantSchema.index({ productId: 1, status: 1, isDelete: 1 });
 ProductVariantSchema.index({ barcode: 1 }, { sparse: true });

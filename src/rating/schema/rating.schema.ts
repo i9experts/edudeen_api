@@ -82,3 +82,6 @@ RatingSchema.index({ productId: 1 });
 RatingSchema.index({ userId: 1 });
 RatingSchema.index({ storeId: 1 });
 RatingSchema.index({ userId: 1, productId: 1 });
+// perf: compound indexes for hot query paths (additive)
+RatingSchema.index({ productId: 1, createdAt: -1 });
+RatingSchema.index({ storeId: 1, createdAt: -1 });

@@ -74,3 +74,5 @@ export class Cart {
 export const CartSchema = SchemaFactory.createForClass(Cart);
 
 CartSchema.index({ userId: 1, storeId: 1 });
+// perf: compound indexes for hot query paths (additive)
+CartSchema.index({ userId: 1, status: 1, isDelete: 1 });

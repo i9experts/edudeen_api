@@ -68,6 +68,8 @@ import { ManualPaymentsModule } from './manual-payments/manual-payments.module';
 import { ExchangeRateModule } from './exchange-rate/exchange-rate.module';
 import { OnboardingSlidesModule } from './onboarding-slides/onboarding-slides.module';
 import { AttributesModule } from './attributes/attributes.module';
+import { StoreDashboardModule } from './store-dashboard/store-dashboard.module';
+import { CouriersModule } from './couriers/couriers.module';
 
 @Module({
   imports: [
@@ -143,6 +145,8 @@ import { AttributesModule } from './attributes/attributes.module';
     ClassroomModule,
     PromotionsModule,
     ExchangeRateModule,
+    StoreDashboardModule,
+    CouriersModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }, { provide: APP_INTERCEPTOR, useClass: NoOperatorKeysInterceptor }],

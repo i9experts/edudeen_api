@@ -16,7 +16,7 @@ export class PaymentTransaction {
   @Prop({ type: [String], default: [] })
   orderIds: string[];
 
-  @Prop({ enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer'], required: true })
+  @Prop({ enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer', 'jazzcash', 'easypaisa'], required: true })
   paymentType: string;
 
   @Prop({ required: true })
@@ -70,6 +70,14 @@ export class PaymentTransaction {
   @Prop({ type: String, default: null })
   stripeClientSecret: string | null;
 
+  // JazzCash / Easypaisa hosted checkout: our unique reference sent to the gateway,
+  // and the gateway's own reference once the payment is verified.
+  @Prop({ type: String, default: null })
+  providerTxnRef: string | null;
+
+  @Prop({ type: String, default: null })
+  providerRef: string | null;
+
   @Prop({ type: Date, default: null })
   paidAt: Date | null;
 
@@ -98,3 +106,4 @@ export const PaymentTransactionSchema =
 
 PaymentTransactionSchema.index({ orderIds: 1 });
 PaymentTransactionSchema.index({ stripePaymentIntentId: 1 });
+PaymentTransactionSchema.index({ providerTxnRef: 1 }, { sparse: true });

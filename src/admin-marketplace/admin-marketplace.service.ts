@@ -12,6 +12,7 @@ import { StoreService } from '../store/store.service';
 import { assertValidVerificationTransition, type VerificationStatus } from '../store/schemas/store.schema';
 import { MarketplaceListingQueryDto } from './dto/marketplace-listing-query.dto';
 import { LeadsQueryDto } from './dto/leads-query.dto';
+import { mergeTrustBadges } from '../products/trust-badges.util';
 
 interface AuditMeta {
   adminId: string;
@@ -159,6 +160,20 @@ export class AdminMarketplaceService {
     return { success: true, message: isFeatured ? 'Listing featured' : 'Listing unfeatured' };
   }
 
+  /** Sets the admin trust badges (scholar reviewed, age-appropriate range) on a listing. Omitted fields are kept. */
+  async setTrustBadges(id: string, input: { scholarReviewed?: boolean; ageAppropriateMin?: number | null; ageAppropriateMax?: number | null }, meta: AuditMeta) {
+    const product: any = await this.findProductOrThrow(id);
+    let next;
+    try {
+      next = mergeTrustBadges(product.trust, input);
+    } catch (e: any) {
+      throw new BadRequestException(e?.message ?? 'Invalid trust badges');
+    }
+    await this.r.productModel.findByIdAndUpdate(id, { $set: { trust: { ...next, reviewedAt: new Date(), reviewedBy: meta.adminId } } });
+    this.log('listing_trust_updated', `Trust badges on "${product.name}" updated (scholar reviewed: ${next.scholarReviewed}, ages: ${next.ageAppropriateMin ?? '-'}-${next.ageAppropriateMax ?? '-'})`, meta, id);
+    return { success: true, message: 'Trust badges updated', data: next };
+  }
+
   async remove(id: string, meta: AuditMeta) {
     const product = await this.findProductOrThrow(id);
     // Also drops the featured flag, or a removed listing kept its slot in featured rails.
@@ -208,6 +223,9 @@ export class AdminMarketplaceService {
         status: product.status,
         scheduledAt: product.scheduledAt,
         reviewNote: product.reviewNote ?? null,
+        ageMin: product.ageMin ?? null,
+        ageMax: product.ageMax ?? null,
+        trust: product.trust ?? null,
         createdAt: product.createdAt,
         updatedAt: product.updatedAt,
         category: (category as any)?.name ?? null,

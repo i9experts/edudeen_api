@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Optional } from '@nestjs/common';
+import { SmartSearchService } from 'src/ai-studio/features/smart-search.service';
 import { DatabaseService } from 'src/database/databaseservice';
 import { ProductsService } from 'src/products/products.service';
 import { StoreService } from 'src/store/store.service';
@@ -17,6 +18,8 @@ export class SearchService {
     private readonly databaseService: DatabaseService,
     private readonly productsService: ProductsService,
     private readonly storeService: StoreService,
+    // Phase 5: optional AI fallback for zero-result searches (EN / Urdu / Roman Urdu -> filters). Absent/unavailable AI = plain search only.
+    @Optional() private readonly smartSearch?: SmartSearchService,
   ) {}
 
   private get r() {
@@ -29,7 +32,19 @@ export class SearchService {
    *  forget — a history write must never fail the search itself). */
   async searchProducts(q: string, page: number, limit: number, userId: string | null, viewerId: string | null = userId) {
     // viewerId (for member pricing) can be set without recording history (userId null).
-    const result = await this.productsService.searchProducts(q, page, limit, viewerId);
+    let result: any = await this.productsService.searchProducts(q, page, limit, viewerId);
+
+    // Zero hits on the first full results page: let smart search interpret the query (cached rewrites, keyword fallback).
+    if (this.smartSearch && page === 1 && limit >= 8 && result?.data?.total === 0 && (q || '').trim().length >= 3) {
+      try {
+        const smart = await this.smartSearch.search(q, userId, limit);
+        const ids = smart.data.products.map((p) => p.id);
+        if (ids.length) {
+          const products = await this.productsService.getShapedProductsByIds(ids, viewerId);
+          if (products.length) result = { ...result, message: 'Showing smart-search matches', aiAssisted: true, data: { total: products.length, page, limit, products } };
+        }
+      } catch { /* never let the AI fallback break search */ }
+    }
 
     if (userId && (q || '').trim()) {
       this.recordSearch(userId, q).catch(() => undefined);

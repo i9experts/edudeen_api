@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import {
-  ArrayMaxSize, ArrayNotEmpty, IsArray, IsBoolean, IsIn, IsInt, IsMongoId,
+  ArrayMaxSize, ArrayNotEmpty, IsArray, IsBoolean, IsIn, IsInt, IsMongoId, IsObject,
   IsNotEmpty, IsOptional, IsString, IsUrl, Matches, Max, MaxLength, Min,
   ValidateIf, IsDefined,
 } from 'class-validator';
@@ -132,4 +132,8 @@ export class AcceptGenerationDto {
   /** Overrides the generation's own productId when applying. */
   @IsOptional() @IsMongoId()
   productId?: string;
+
+  /** The seller's manual edits of the AI draft (title/description/tags). Re-sanitised server-side before it touches the product. */
+  @IsOptional() @IsObject()
+  edits?: Record<string, unknown>;
 }

@@ -4,7 +4,10 @@ import { Document } from 'mongoose';
 
 export type AiGenerationDocument = AiGeneration & Document;
 
-export const AI_TOOL_TYPES = [
+import { AI_FEATURE_KEYS } from '../core/ai-features';
+
+// Seller-facing AI Studio tools (history list + product accept flow).
+export const AI_STUDIO_TOOL_TYPES = [
   'listing_writer',
   'price_optimizer',
   'worksheet_builder',
@@ -12,6 +15,8 @@ export const AI_TOOL_TYPES = [
   'email_campaigns',
   'image_enhancer',
 ] as const;
+// Every AI feature is logged in this collection (call logs for the newer features use the feature key).
+export const AI_TOOL_TYPES = AI_FEATURE_KEYS;
 export type AiToolType = (typeof AI_TOOL_TYPES)[number];
 
 export const AI_GENERATION_SCOPES = ['seller', 'platform'] as const;
@@ -68,6 +73,15 @@ export class AiGeneration {
   @Prop({ type: Boolean, default: false }) accepted: boolean;
   @Prop({ type: Date, default: null }) acceptedAt: Date | null;
   @Prop({ type: Boolean, default: false }) appliedToProduct: boolean;
+
+  // Per-call telemetry written by AiService (Phase 5). isCallLog rows are API-call logs, not seller history items.
+  @Prop({ type: Boolean, default: false }) isCallLog: boolean;
+  @Prop({ type: Number, default: 0 }) tokensIn: number;
+  @Prop({ type: Number, default: 0 }) tokensOut: number;
+  @Prop({ type: Number, default: 0 }) cacheReadTokens: number;
+  @Prop({ type: Number, default: 0 }) costUsd: number;
+  @Prop({ type: Number, default: 0 }) latencyMs: number;
+  @Prop({ type: String, default: null }) userId: string | null;
 }
 
 export const AiGenerationSchema = SchemaFactory.createForClass(AiGeneration);

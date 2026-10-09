@@ -7,6 +7,7 @@ import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
 import { NotificationsGateway } from './notifications.gateway';
 import { NotificationsProcessor } from './notifications.processor';
+import { ChannelMessagingService } from './channels/channel-messaging.service';
 import { FirebaseAdminService } from '../firebase/firebase.config';
 import { EmailService } from '../otp/services/email.service';
 import { QueueModule } from '../queues/queue.module';
@@ -39,7 +40,7 @@ import { RedisModule } from '../redis/redis.module';
     }),
   ],
   controllers: [NotificationsController],
-  providers: [NotificationsService, NotificationsGateway, WsAuthService, NotificationsProcessor, FirebaseAdminService, EmailService],
+  providers: [NotificationsService, NotificationsGateway, WsAuthService, NotificationsProcessor, FirebaseAdminService, EmailService, ChannelMessagingService],
   exports: [NotificationsService],
 })
 export class NotificationsModule {}

@@ -40,6 +40,10 @@ export const PlacementLimitsSchema = SchemaFactory.createForClass(PlacementLimit
 export class AiConfig {
   @Prop({ type: Number, default: 1000 }) monthlyCreditLimit: number;
   @Prop({ type: String, default: 'claude-sonnet-5' }) aiModel: string;
+  // Kill switches (Phase 5). featureFlags: { [featureKey]: false } disables a feature platform-wide (missing = on; __all: false = everything).
+  // storeOverrides: { [storeId]: ['feature_key' | '__all'] } disables features for one store.
+  @Prop({ type: Object, default: {} }) featureFlags: Record<string, boolean>;
+  @Prop({ type: Object, default: {} }) storeOverrides: Record<string, string[]>;
 }
 export const AiConfigSchema = SchemaFactory.createForClass(AiConfig);
 

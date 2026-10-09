@@ -49,13 +49,15 @@ export class AdminModerationService {
 
     const baseFilter = { targetType: { $in: MARKETPLACE_TARGET_TYPES } };
 
-    const [queueTotal, urgent, approvedToday, resolvedTodayRows] = await Promise.all([
+    const [queueTotal, urgent, approvedToday, resolvedTodayRows, pendingListings] = await Promise.all([
       this.r.reportModel.countDocuments({ ...baseFilter, status: { $ne: 'resolved' } }),
       this.r.reportModel.countDocuments({ ...baseFilter, status: { $ne: 'resolved' }, riskLevel: 'high' }),
       this.r.reportModel.countDocuments({ ...baseFilter, resolution: 'approved', resolvedAt: { $gte: startOfDay } }),
       this.r.reportModel
         .find({ ...baseFilter, status: 'resolved', resolvedAt: { $gte: startOfDay } }, { createdAt: 1, resolvedAt: 1 })
         .lean<{ createdAt: Date; resolvedAt: Date }[]>(),
+      // Products waiting for an admin to approve them (Admin → Listings) — what the dashboard's "Awaiting review" means.
+      this.r.productModel.countDocuments({ status: 'pending_review', isDelete: false }),
     ]);
 
     const avgReviewMinutes =
@@ -69,6 +71,7 @@ export class AdminModerationService {
       success: true,
       data: {
         queueTotal,
+        pendingListings,
         urgent,
         approvedToday,
         avgReviewMinutes: Math.round(avgReviewMinutes * 10) / 10,

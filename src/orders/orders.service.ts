@@ -166,6 +166,7 @@ export class OrdersService {
             status: item.status,
           })),
           tracking: so.tracking,
+          trackingEvents: so.trackingEvents ?? [],
           shippedAt: so.shippedAt,
           deliveredAt: so.deliveredAt,
         };
@@ -526,6 +527,10 @@ export class OrdersService {
         type: so.fulfillmentType,
         subtotal: so.subtotal,
         tracking: so.tracking ?? null,
+        shipment: so.shipment ?? null,
+        giftMessage: order.giftMessage ?? null,
+        giftWrap: !!order.giftWrap,
+        trackingEvents: so.trackingEvents ?? [],
         shippedAt: so.shippedAt ?? null,
         deliveredAt: so.deliveredAt ?? null,
         items: (so.items ?? []).map((it: any) => ({
@@ -725,6 +730,15 @@ export class OrdersService {
               : `Order #${orderId} has been delivered.`,
           data: { orderId, status },
           email: orderStatusEmail(order.orderNumber ?? orderId, status, tracking),
+          channelEvent: {
+            event: status === 'shipped' ? 'order_shipped' : 'order_delivered',
+            vars: {
+              orderNumber: String(order.orderNumber ?? orderId),
+              carrier: String(tracking?.carrier ?? 'Courier'),
+              trackingNumber: String(tracking?.trackingNumber ?? ''),
+            },
+            fallbackPhone: order.shippingAddress?.phoneNumber ?? null,
+          },
         })
         .catch(() => {});
     }

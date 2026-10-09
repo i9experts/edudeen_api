@@ -13,7 +13,9 @@ import { TextGenerationService } from './providers/text-generation.service';
 import { KeywordDataService } from './providers/keyword-data.service';
 import { PricingDataService } from './providers/pricing-data.service';
 import { ImageEnhanceService } from './providers/image-enhance.service';
-import { AiToolType } from './schemas/ai-generation.schema';
+import { AiToolType, AI_STUDIO_TOOL_TYPES } from './schemas/ai-generation.schema';
+import { AiFlagsService } from './core/ai-flags.service';
+import { estimateCostUsd } from './core/ai.service';
 import {
   AcceptGenerationDto, GenerateEmailDto, GenerateImageEnhanceDto, GenerateListingDto,
   GeneratePriceDto, GenerateSeoDto, GenerateWorksheetDto, GenerateWorksheetTrialDto,
@@ -40,6 +42,7 @@ export class AiStudioService {
     private readonly pricingData: PricingDataService,
     private readonly imageEnhance: ImageEnhanceService,
     @Optional() private readonly entitlements?: EntitlementsService,
+    @Optional() private readonly flags?: AiFlagsService,
   ) {}
 
   private get generationModel() { return this.db.repositories.aiGenerationModel; }
@@ -73,7 +76,7 @@ export class AiStudioService {
             description: result.json!.description,
             suggestedTags: result.json!.suggestedTags,
           },
-          provider: result.provider, model: result.model,
+          provider: result.provider, model: result.model, usage: result.usage,
         };
       },
     });
@@ -128,7 +131,7 @@ export class AiStudioService {
             lowConfidence: lookup.lowConfidence,
             keywordResearch: lookup.keywords,
           },
-          provider: result.provider, model: result.model,
+          provider: result.provider, model: result.model, usage: result.usage,
         };
       },
     });
@@ -161,7 +164,7 @@ export class AiStudioService {
             previewText: result.json!.previewText,
             body: result.json!.body,
           },
-          provider: result.provider, model: result.model,
+          provider: result.provider, model: result.model, usage: result.usage,
         };
       },
     });
@@ -186,7 +189,7 @@ export class AiStudioService {
         });
         return {
           output: { title: result.json!.title, sections: result.json!.sections },
-          provider: result.provider, model: result.model,
+          provider: result.provider, model: result.model, usage: result.usage,
         };
       },
     });
@@ -288,7 +291,7 @@ export class AiStudioService {
             explanation: result.json!.explanation,
             externalMarketNote,
           },
-          provider: result.provider, model: result.model,
+          provider: result.provider, model: result.model, usage: result.usage,
         };
       },
     });
@@ -302,6 +305,7 @@ export class AiStudioService {
    */
   async startImageEnhance(sellerId: string, storeId: string, dto: GenerateImageEnhanceDto) {
     await this.verifyStore(storeId, sellerId);
+    await this.flags?.assertEnabled('image_enhancer', storeId);
 
     const generation = await this.createGeneration({
       sellerId, storeId, tool: 'image_enhancer', productId: null,
@@ -378,7 +382,9 @@ export class AiStudioService {
   async listGenerations(sellerId: string, storeId: string, query: { toolType?: string; sessionId?: string; page?: string; limit?: string }) {
     await this.verifyStore(storeId, sellerId);
     const filter: Record<string, any> = { storeId };
+    filter.isCallLog = { $ne: true }; // per-call telemetry rows are admin-only
     if (query.toolType) filter.toolType = query.toolType;
+    else filter.toolType = { $in: [...AI_STUDIO_TOOL_TYPES] };
     if (query.sessionId) filter.sessionId = query.sessionId;
 
     const page = Math.max(1, parseInt(query.page ?? '1', 10) || 1);
@@ -408,14 +414,33 @@ export class AiStudioService {
     if (!generation) throw new NotFoundException('Generation not found');
     if (generation.status !== 'succeeded') throw new BadRequestException('Only a succeeded generation can be accepted');
 
+    // Seller edits of the draft win over the AI text (only known text fields, bounded; cleaned again in buildProductUpdate).
+    if (dto.edits && typeof dto.edits === 'object' && (generation.toolType === 'listing_writer' || generation.toolType === 'seo_booster')) {
+      const e = dto.edits as Record<string, unknown>;
+      const merged: Record<string, any> = { ...(generation.outputPayload ?? {}) };
+      for (const k of ['title', 'description', 'optimizedTitle'] as const) if (typeof e[k] === 'string') merged[k] = (e[k] as string).slice(0, 5000);
+      for (const k of ['suggestedTags', 'optimizedTags'] as const) if (Array.isArray(e[k])) merged[k] = (e[k] as unknown[]).slice(0, 30);
+      generation.outputPayload = merged;
+      generation.markModified('outputPayload');
+    }
+
     let appliedToProduct = false;
     if (dto.applyToProduct) {
       const productId = dto.productId ?? generation.productId;
       if (!productId) throw new BadRequestException('No productId on this generation — pass one to apply the output');
       const product = await this.getOwnedProduct(storeId, productId);
-      const update = this.buildProductUpdate(generation.toolType, generation.outputPayload ?? {});
-      if (!update) throw new BadRequestException(`Output of ${generation.toolType} cannot be applied to a product`);
-      await this.db.repositories.productModel.updateOne({ _id: product._id }, { $set: update });
+      if (generation.toolType === 'price_optimizer') {
+        // One-click price apply: only when the product has exactly one variant (otherwise the seller picks which variant).
+        const price = Number((generation.outputPayload as any)?.suggestedPrice);
+        if (!(price > 0)) throw new BadRequestException('This generation has no suggested price to apply');
+        const variants = await this.db.repositories.productVariantModel.find({ productId: product._id.toString(), isDelete: { $ne: true } }).select('_id').lean();
+        if (variants.length !== 1) throw new BadRequestException('This product has several variants - set the price on the variant you want.');
+        await this.db.repositories.productVariantModel.updateOne({ _id: variants[0]._id }, { $set: { price } });
+      } else {
+        const update = this.buildProductUpdate(generation.toolType, generation.outputPayload ?? {});
+        if (!update) throw new BadRequestException(`Output of ${generation.toolType} cannot be applied to a product`);
+        await this.db.repositories.productModel.updateOne({ _id: product._id }, { $set: update });
+      }
       appliedToProduct = true;
       generation.productId = productId;
     }
@@ -505,19 +530,23 @@ export class AiStudioService {
   private async runGeneration(params: {
     sellerId: string; storeId: string; tool: AiToolType; productId: string | null;
     regenerateFromId?: string; inputPayload: Record<string, any>;
-    execute: () => Promise<{ output: Record<string, any>; provider: string; model: string }>;
+    execute: () => Promise<{ output: Record<string, any>; provider: string; model: string; usage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number } }>;
   }) {
+    await this.flags?.assertEnabled(params.tool, params.storeId); // admin kill switch (global + per store)
     const generation = await this.createGeneration(params);
     const generationId = generation._id.toString();
+    const startedAt = Date.now();
     const txnId = await this.holdOrFailGeneration(generationId, params.storeId, params.sellerId, params.tool);
     const cost = this.credits.costOf(params.tool);
 
     try {
-      const { output, provider, model } = await params.execute();
+      const { output, provider, model, usage } = await params.execute();
       await this.credits.capture(txnId);
       await this.generationModel.updateOne(
         { _id: generationId },
-        { $set: { status: 'succeeded', outputPayload: output, providerUsed: provider, modelUsed: model, creditsCharged: cost } },
+        { $set: { status: 'succeeded', outputPayload: output, providerUsed: provider, modelUsed: model, creditsCharged: cost,
+          latencyMs: Date.now() - startedAt, tokensIn: usage?.inputTokens ?? 0, tokensOut: usage?.outputTokens ?? 0, cacheReadTokens: usage?.cacheReadTokens ?? 0,
+          costUsd: usage ? estimateCostUsd(model, { ...usage, cacheCreateTokens: 0 }) : 0 } },
       );
       return {
         success: true,

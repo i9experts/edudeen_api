@@ -614,14 +614,21 @@ export class AuthService {
       }
 
       const newOtp = AuthService.generateOtp();
-      const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+      // Same 5-minute window as the sign-up OTP and as the email text promises.
+      const otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
       user.otp = AuthService.hashOtp(newOtp);
       user.otpExpiresAt = otpExpiresAt;
       user.otpAttempts = 0;
       await user.save();
 
-      await this.otpService.sendOtp(user.email, newOtp);
+      try {
+        await this.otpService.sendOtp(user.email, newOtp);
+      } catch {
+        throw new ServiceUnavailableException(
+          "We couldn't send the verification email right now. Please try again in a few minutes.",
+        );
+      }
 
       return {
         message: 'New OTP sent successfully to your email',

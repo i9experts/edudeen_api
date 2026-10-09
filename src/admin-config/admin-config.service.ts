@@ -291,7 +291,7 @@ export class AdminConfigService {
     for (const key of ['heroEyebrow', 'heroTitle', 'heroHighlight', 'heroText', 'heroPrimaryLabel', 'heroSecondaryLabel', 'heroBadge', 'featureEyebrow', 'featureHeading', 'featureText', 'featureLinkLabel', 'featuredCategory']) {
       if (src[key] !== undefined) set[`homeContent.${key}`] = str(src[key], 300);
     }
-    for (const key of ['heroImageUrl', 'googlePlayUrl']) {
+    for (const key of ['heroImageUrl', 'googlePlayUrl', 'appStoreUrl']) {
       if (src[key] === undefined) continue;
       const v = str(src[key], 500);
       if (v && !/^https?:\/\/\S+$/i.test(v)) throw new BadRequestException(`${key} must be a full https:// link`);
@@ -303,6 +303,14 @@ export class AdminConfigService {
     if (src.trustItems !== undefined) {
       set['homeContent.trustItems'] = (Array.isArray(src.trustItems) ? src.trustItems : [])
         .map((x: any) => ({ label: str(x?.label, 60), sub: str(x?.sub, 120) })).filter(x => x.label).slice(0, 4);
+    }
+    if (src.about && typeof src.about === 'object') {
+      const a = src.about as Record<string, any>;
+      const about: Record<string, unknown> = {};
+      for (const key of ['eyebrow', 'heading', 'approachEyebrow', 'approachHeading', 'headedEyebrow', 'headedHeading', 'ctaHeading', 'ctaButton']) about[key] = str(a[key], 200);
+      for (const key of ['intro', 'approachText', 'headedText']) about[key] = str(a[key], 1200);
+      about.pillars = (Array.isArray(a.pillars) ? a.pillars : []).map((x: any) => ({ title: str(x?.title, 60), desc: str(x?.desc, 300) })).slice(0, 4);
+      set['homeContent.about'] = about;
     }
     if (src.legalPages && typeof src.legalPages === 'object') {
       for (const key of ['privacy-policy', 'terms-of-service', 'cookie-policy']) {

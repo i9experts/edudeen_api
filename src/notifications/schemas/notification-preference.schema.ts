@@ -43,6 +43,17 @@ export class NotificationPreference {
 
   @Prop({ default: true })
   emailEnabled: boolean;
+
+  // Out-of-app channels are OPT-IN (default off). See notifications/channels.
+  @Prop({ default: false })
+  whatsappEnabled: boolean;
+
+  @Prop({ default: false })
+  smsEnabled: boolean;
+
+  // Language of WhatsApp/SMS messages.
+  @Prop({ type: String, enum: ['en', 'ur'], default: 'en' })
+  language: string;
 }
 
 export const NotificationPreferenceSchema = SchemaFactory.createForClass(NotificationPreference);

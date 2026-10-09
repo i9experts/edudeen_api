@@ -147,7 +147,14 @@ export class CheckoutController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
-  @Post('admin/shipping-zones')
+  @Post('admin/shipping-zones/seed-defaults')
+async adminSeedDefaultShippingZones() {
+return this.checkoutService.adminSeedDefaultShippingZones();
+}
+
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
+@Post('admin/shipping-zones')
   async adminCreateShippingZone(@Body() body: any) {
     return this.checkoutService.adminCreateShippingZone(body);
   }
@@ -164,6 +171,13 @@ export class CheckoutController {
   @Delete('admin/shipping-zones/:id')
   async adminDeleteShippingZone(@Param('id') id: string) {
     return this.checkoutService.adminDeleteShippingZone(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('user')
+  @Post('gift-options')
+  async setGiftOptions(@Req() req: any, @Body() body: any) {
+    return this.checkoutService.setGiftOptions(req.user.userId, body);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

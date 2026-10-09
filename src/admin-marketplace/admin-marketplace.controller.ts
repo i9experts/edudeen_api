@@ -8,6 +8,7 @@ import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { AdminMarketplaceService } from './admin-marketplace.service';
 import { MarketplaceListingQueryDto } from './dto/marketplace-listing-query.dto';
 import { SetFeaturedDto } from './dto/set-featured.dto';
+import { SetTrustBadgesDto } from './dto/set-trust-badges.dto';
 import { SetStoreBadgeDto } from './dto/set-store-badge.dto';
 import { LeadsQueryDto } from './dto/leads-query.dto';
 import { RejectLeadDto } from './dto/reject-lead.dto';
@@ -39,6 +40,11 @@ export class AdminMarketplaceController {
   @Patch('listings/:id/feature')
   setFeatured(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: SetFeaturedDto) {
     return this.adminMarketplaceService.setFeatured(id, dto.isFeatured, this.meta(req));
+  }
+
+  @Patch('listings/:id/trust')
+  setTrustBadges(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: SetTrustBadgesDto) {
+    return this.adminMarketplaceService.setTrustBadges(id, dto, this.meta(req));
   }
 
   @Patch('listings/:id/remove')

@@ -1,4 +1,4 @@
-import { IsBoolean, IsOptional } from 'class-validator';
+import { IsBoolean, IsIn, IsOptional } from 'class-validator';
 
 export class UpdatePreferencesDto {
   @IsOptional()
@@ -32,4 +32,16 @@ export class UpdatePreferencesDto {
   @IsOptional()
   @IsBoolean()
   emailEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  whatsappEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  smsEnabled?: boolean;
+
+  @IsOptional()
+  @IsIn(['en', 'ur'])
+  language?: 'en' | 'ur';
 }

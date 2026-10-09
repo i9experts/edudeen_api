@@ -13,6 +13,20 @@ import { TextGenerationService } from './providers/text-generation.service';
 import { KeywordDataService } from './providers/keyword-data.service';
 import { PricingDataService } from './providers/pricing-data.service';
 import { ImageEnhanceService } from './providers/image-enhance.service';
+import { AiService } from './core/ai.service';
+import { AiFlagsService } from './core/ai-flags.service';
+import { AiPublicController, AiSellerController, AiAdminController } from './ai-features.controller';
+import { AiCatalogService } from './features/catalog.service';
+import { SmartSearchService } from './features/smart-search.service';
+import { AssistantService } from './features/assistant.service';
+import { ReviewsAiService } from './features/reviews-ai.service';
+import { TranslateService } from './features/translate.service';
+import { CodRiskService } from './features/cod-risk.service';
+import { InsightsService } from './features/insights.service';
+import { HelpBotService } from './features/help-bot.service';
+import { StudioExtrasService } from './features/studio-extras.service';
+import { ModerationAiService } from './features/moderation-ai.service';
+import { AskDataService } from './features/ask-data.service';
 
 /**
  * AI Studio — seller-only AI tools (Listing Writer, SEO Booster, Email
@@ -36,7 +50,7 @@ import { ImageEnhanceService } from './providers/image-enhance.service';
  */
 @Module({
   imports: [AuthModule, RedisModule, AdminConfigModule],
-  controllers: [AiStudioController, PublicWorksheetTrialController, AdminAiStudioController],
+  controllers: [AiStudioController, PublicWorksheetTrialController, AdminAiStudioController, AiPublicController, AiSellerController, AiAdminController],
   providers: [
     AiStudioService,
     AiStudioCreditsService,
@@ -45,8 +59,11 @@ import { ImageEnhanceService } from './providers/image-enhance.service';
     KeywordDataService,
     PricingDataService,
     ImageEnhanceService,
+    // Phase 5: shared AI gateway + feature services
+    AiService, AiFlagsService, AiCatalogService, SmartSearchService, AssistantService, ReviewsAiService, TranslateService,
+    CodRiskService, InsightsService, HelpBotService, StudioExtrasService, ModerationAiService, AskDataService,
   ],
   // The scheduler recovers stale credit holds (see SchedulerService.recoverStaleAiStudioHolds).
-  exports: [AiStudioCreditsService],
+  exports: [AiStudioCreditsService, AiService, AiFlagsService, SmartSearchService],
 })
 export class AiStudioModule {}

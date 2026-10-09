@@ -9,7 +9,7 @@ const chain = (value: any) => ({ select: () => ({ lean: () => Promise.resolve(va
 
 // A physical cart from one store, with every collaborator stubbed out.
 function makeService(opts: { pickedAddress?: any; zonesConfigured?: boolean } = {}) {
-  const checkoutDoc = { _id: { toString: () => 'chk1' }, items: [] };
+  const checkoutDoc = { _id: { toString: () => 'chk1' }, items: [], set: jest.fn() };
   const addressModel = {
     findOne: jest.fn((filter: any) => {
       if (filter._id) return Promise.resolve(opts.pickedAddress === undefined ? { _id: ADDR_ID } : opts.pickedAddress);
@@ -22,12 +22,12 @@ function makeService(opts: { pickedAddress?: any; zonesConfigured?: boolean } = 
   };
   const repositories: any = {
     cartModel: { findOne: jest.fn().mockResolvedValue({ items: [{ productId: 'p1', productVariantId: 'v1', quantity: 1 }] }) },
-    productModel: { findOne: jest.fn().mockResolvedValue({ _id: { toString: () => 'p1' }, storeId: 's1', sellerId: 'sel1', type: 'physical', name: 'Workbook', images: [] }) },
-    productVariantModel: { findOne: jest.fn().mockResolvedValue({ _id: { toString: () => 'v1' }, productId: 'p1', price: 900, stock: 5, currency: 'PKR' }) },
+    productModel: { find: jest.fn().mockResolvedValue([{ _id: { toString: () => 'p1' }, storeId: 's1', sellerId: 'sel1', type: 'physical', name: 'Workbook', images: [] }]) },
+    productVariantModel: { find: jest.fn().mockResolvedValue([{ _id: { toString: () => 'v1' }, productId: 'p1', price: 900, stock: 5, currency: 'PKR' }]) },
     storeModel: {
       findOne: jest.fn(() => chain({ status: 'active' })),
       findById: jest.fn(() => chain({ directPayment: null })),
-      find: jest.fn(() => chain([{ codEnabled: true }])),
+      find: jest.fn(() => chain([{ _id: 's1', status: 'active', codEnabled: true, directPayment: null }])),
     },
     sellerModel: { find: jest.fn(() => chain([])) },
     subscriptionPlanModel: { findOne: jest.fn(() => chain(null)) },
@@ -37,7 +37,7 @@ function makeService(opts: { pickedAddress?: any; zonesConfigured?: boolean } = 
   };
   const svc: any = new CheckoutService(
     { repositories } as any,
-    { getActiveBenefits: jest.fn().mockResolvedValue(null), resolveProductDiscount: jest.fn() } as any,
+    { getActiveBenefits: jest.fn().mockResolvedValue(null), getActiveBenefitsBatch: jest.fn().mockResolvedValue(new Map()), resolveProductDiscount: jest.fn() } as any,
     { getActiveCampaignsForStores: jest.fn().mockResolvedValue(new Map()) } as any,
     { isManualPaymentEnabled: jest.fn().mockResolvedValue(false) } as any,
     { buildSnapshots: jest.fn().mockResolvedValue([]) } as any,
@@ -57,7 +57,7 @@ describe('createCheckout uses what the buyer picked', () => {
 
     expect(addressModel.findOne).toHaveBeenCalledWith({ _id: ADDR_ID, userId: 'u1', isDelete: false });
     expect(checkoutModel.create).toHaveBeenCalledWith(expect.objectContaining({ addressId: ADDR_ID }));
-    expect(addShipping).toHaveBeenCalledWith('u1', { checkoutId: 'chk1', shippingZoneId: ZONE_ID });
+    expect(addShipping).toHaveBeenCalledWith('u1', { checkoutId: 'chk1', shippingZoneId: ZONE_ID }, expect.anything());
     expect(res.data.summary).toEqual(expect.objectContaining({ shippingFee: 250, totalAmount: 1150 }));
   });
 

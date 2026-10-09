@@ -154,6 +154,46 @@ export class OrderTracking {
 
 export const OrderTrackingSchema = SchemaFactory.createForClass(OrderTracking);
 
+// A shipment booked through a courier integration (see src/couriers). Manual tracking
+// (OrderTracking above) stays the default; this is only set when a seller books via a courier.
+@Schema({ _id: false })
+export class CourierShipment {
+  @Prop({ type: String, default: null })
+  courier: string | null;
+
+  @Prop({ type: String, default: null })
+  trackingNumber: string | null;
+
+  @Prop({ type: String, default: null })
+  labelUrl: string | null;
+
+  @Prop({ type: Date, default: null })
+  bookedAt: Date | null;
+}
+
+export const CourierShipmentSchema = SchemaFactory.createForClass(CourierShipment);
+
+// One courier status update (from a courier webhook) on the order timeline.
+@Schema({ _id: false })
+export class TrackingEvent {
+  @Prop({ type: String, default: null })
+  status: string | null;
+
+  @Prop({ type: String, default: null })
+  description: string | null;
+
+  @Prop({ type: String, default: null })
+  location: string | null;
+
+  @Prop({ type: Date, default: null })
+  at: Date | null;
+
+  @Prop({ type: String, default: 'courier' })
+  source: string;
+}
+
+export const TrackingEventSchema = SchemaFactory.createForClass(TrackingEvent);
+
 // ek store ka hissa — status items se derive hota hai
 @Schema({ _id: true })
 export class SellerOrder {
@@ -227,6 +267,12 @@ export class SellerOrder {
 
   @Prop({ type: OrderTrackingSchema, default: null })
   tracking: OrderTracking | null;
+
+  @Prop({ type: CourierShipmentSchema, default: null })
+  shipment: CourierShipment | null;
+
+  @Prop({ type: [TrackingEventSchema], default: [] })
+  trackingEvents: TrackingEvent[];
 
   @Prop({ type: Date, default: null })
   shippedAt: Date | null;
@@ -380,10 +426,17 @@ export class Order {
   @Prop({ type: String, default: null })
   attributedStoreBannerId: string | null;
 
+  // Gift options chosen at checkout (physical orders only).
+  @Prop({ type: String, default: null })
+  giftMessage: string | null;
+
+  @Prop({ type: Boolean, default: false })
+  giftWrap: boolean;
+
   @Prop({ required: true })
   totalAmount: number;
 
-  @Prop({ enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer'], required: true })
+  @Prop({ enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer', 'jazzcash', 'easypaisa'], required: true })
   paymentType: string;
 
   // 'pending_verification' — manual bank-transfer order awaiting an admin to
@@ -448,3 +501,7 @@ OrderSchema.index({ 'sellerOrders.storeId': 1 });
 OrderSchema.index({ 'sellerOrders.items.status': 1 });
 OrderSchema.index({ paymentStatus: 1 });
 OrderSchema.index({ createdAt: -1 });
+// perf: compound indexes for hot query paths (additive)
+OrderSchema.index({ 'sellerOrders.storeId': 1, createdAt: -1 });
+OrderSchema.index({ userId: 1, createdAt: -1 });
+OrderSchema.index({ 'sellerOrders.sellerId': 1, createdAt: -1 });

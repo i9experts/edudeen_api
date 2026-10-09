@@ -24,6 +24,10 @@ export class QuoteOffer {
 
   @Prop({ type: String, default: '' })
   note: string;
+
+  // Payment terms the seller offers (see quote-terms.util.ts). 'none' = pay on acceptance.
+  @Prop({ type: String, enum: ['none', 'net_15', 'net_30', 'net_45'], default: 'none' })
+  netTerms: string;
 }
 const QuoteOfferSchema = SchemaFactory.createForClass(QuoteOffer);
 
@@ -84,6 +88,13 @@ export class QuoteRequest {
 
   @Prop({ type: String, default: '' })
   declineReason: string;
+
+  // Institution's purchase order (number and/or an uploaded file link), added by the buyer.
+  @Prop({ type: String, default: '' })
+  purchaseOrderNumber: string;
+
+  @Prop({ type: String, default: null })
+  purchaseOrderUrl: string | null;
 
   @Prop({ type: Date, default: null })
   quotedAt: Date | null;

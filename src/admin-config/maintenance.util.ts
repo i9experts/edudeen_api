@@ -91,7 +91,7 @@ export function maintenanceState(m: MaintenanceSettings, now = new Date()): 'act
 }
 
 /** Never blocked: admin tools and sign-in (so admins can switch maintenance off), the status endpoint, and payment webhooks (blocking those loses money). */
-const EXEMPT = [/^\/api\/admin(\/|$)/, /^\/api\/auth(\/|$)/, /^\/api\/platform-config(\/|$)/, /webhook/i, /^\/api\/health/, /^\/health/];
+const EXEMPT = [/^\/api\/admin(\/|$)/, /^\/api\/auth(\/|$)/, /^\/api\/platform-config(\/|$)/, /webhook/i, /^\/api\/payment\/pk\/[a-z]+\/callback/i, /^\/api\/health/, /^\/health/];
 
 export type RequestArea = 'checkout' | 'uploads' | 'seller' | 'buyer';
 

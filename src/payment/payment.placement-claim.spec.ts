@@ -22,7 +22,7 @@ function makeService(createOrderImpl?: () => Promise<any[]>, giftCardsService: a
   const repos: any = {
     checkoutModel,
     storeModel: { find: jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }) }) },
-    productVariantModel: { findOne: jest.fn().mockResolvedValue({ stock: 10, unlimitedStock: false }) },
+    productVariantModel: { find: jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: 'v1', stock: 10, unlimitedStock: false }]) }) }) },
     paymentTransactionModel: { create: jest.fn().mockResolvedValue({}) },
     orderModel: {}, addressModel: {}, cartModel: {},
   };

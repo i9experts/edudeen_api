@@ -58,13 +58,25 @@ export interface PeriodTotals {
   buyerIds: string[];
 }
 
-export async function periodTotals(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>): Promise<PeriodTotals> {
+/** Converts an amount between currencies (e.g. ExchangeRateService.convert). */
+export type AmountConverter = (amount: number, fromCurrency: string) => Promise<number>;
+
+/**
+ * Totals for a period. Orders are stored in the currency the buyer paid in, so a
+ * plain sum across orders mixes PKR and USD into one meaningless number. Pass a
+ * `convert` (to the report's currency) and every currency bucket is converted
+ * before summing; without it the old single-sum behaviour is kept (callers whose
+ * scope is already single-currency). A currency that cannot be converted is left
+ * out of the money totals and listed in `unconvertedCurrencies` — never summed
+ * as if it were the report currency.
+ */
+export async function periodTotals(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>, convert?: AmountConverter): Promise<PeriodTotals & { unconvertedCurrencies: string[] }> {
   const rows = await orderModel.aggregate([
     ...sellerOrderMatchStage(from, to, scopeMatch),
     { $addFields: { itemRefund: itemRefundSumField() } },
     {
       $group: {
-        _id: null,
+        _id: convert ? '$currency' : null,
         orderCount: { $sum: { $cond: [notCancelledCond(), 1, 0] } },
         cancelledCount: { $sum: { $cond: [notCancelledCond(), 0, 1] } },
         refundedCount: { $sum: { $cond: [{ $eq: ['$sellerOrders.status', 'refunded'] }, 1, 0] } },
@@ -75,23 +87,35 @@ export async function periodTotals(orderModel: Model<any>, from: Date, to: Date,
     },
   ]);
 
-  const row = rows[0] ?? {
-    orderCount: 0, cancelledCount: 0, refundedCount: 0, grossRevenue: 0, refundAmount: 0, buyerIds: [],
-  };
-  const netRevenue = round(row.grossRevenue - row.refundAmount);
+  let orderCount = 0, cancelledCount = 0, refundedCount = 0, grossRevenue = 0, refundAmount = 0;
+  const buyers = new Set<string>();
+  const unconvertedCurrencies: string[] = [];
+  for (const row of rows) {
+    orderCount += row.orderCount; cancelledCount += row.cancelledCount; refundedCount += row.refundedCount;
+    for (const b of row.buyerIds ?? []) buyers.add(b);
+    if (!convert) { grossRevenue += row.grossRevenue; refundAmount += row.refundAmount; continue; }
+    const cur: string = row._id || 'USD';
+    try {
+      grossRevenue += await convert(row.grossRevenue, cur);
+      refundAmount += await convert(row.refundAmount, cur);
+    } catch {
+      unconvertedCurrencies.push(cur);
+    }
+  }
+  const netRevenue = round(grossRevenue - refundAmount);
   return {
-    orderCount: row.orderCount,
-    cancelledCount: row.cancelledCount,
-    refundedCount: row.refundedCount,
-    grossRevenue: round(row.grossRevenue),
-    refundAmount: round(row.refundAmount),
+    orderCount,
+    cancelledCount,
+    refundedCount,
+    grossRevenue: round(grossRevenue),
+    refundAmount: round(refundAmount),
     netRevenue,
-    avgOrderValue: row.orderCount > 0 ? round(netRevenue / row.orderCount) : 0,
-    uniqueBuyerCount: (row.buyerIds ?? []).length,
-    buyerIds: (row.buyerIds ?? []) as string[],
+    avgOrderValue: orderCount > 0 ? round(netRevenue / orderCount) : 0,
+    uniqueBuyerCount: buyers.size,
+    buyerIds: [...buyers],
+    unconvertedCurrencies,
   };
 }
-
 export async function repeatBuyerPercent(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>): Promise<number> {
   const rows = await orderModel.aggregate([
     ...sellerOrderMatchStage(from, to, scopeMatch),

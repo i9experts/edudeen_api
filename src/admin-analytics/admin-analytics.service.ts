@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ExchangeRateService } from '../exchange-rate/exchange-rate.service';
 import { isValidObjectId } from 'mongoose';
 import { DatabaseService } from '../database/databaseservice';
 import { RedisService } from '../redis/redis.service';
@@ -41,7 +42,14 @@ export class AdminAnalyticsService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly redis: RedisService,
+    @Optional() private readonly exchangeRates?: ExchangeRateService,
   ) {}
+
+  /** Platform-wide money is reported in USD (the platform's pivot currency): each order's amount is converted from the currency the buyer paid in. */
+  private get toUSD(): ((amount: number, fromCurrency: string) => Promise<number>) | undefined {
+    const fx = this.exchangeRates;
+    return fx ? (amount, from) => fx.convert(amount, from, 'USD') : undefined;
+  }
 
   private get r() {
     return this.databaseService.repositories;
@@ -143,8 +151,8 @@ export class AdminAnalyticsService {
 
     return this.cached(this.key('overview', this.scopeLabel(scope), { from, to, compare }), async () => {
       const [current, previous, sellersActiveThisMonth, prevSellersActiveThisMonth, platformEarnings, totalSellers, totalStores, activeStores, totalCustomers, newUsers] = await Promise.all([
-        periodTotals(this.r.orderModel, from, to, scope),
-        periodTotals(this.r.orderModel, previousFrom, previousTo, scope),
+        periodTotals(this.r.orderModel, from, to, scope, this.toUSD),
+        periodTotals(this.r.orderModel, previousFrom, previousTo, scope, this.toUSD),
         this.countActiveSellers(from, to, scope),
         this.countActiveSellers(previousFrom, previousTo, scope),
         this.getPlatformEarnings(from, to, scope),
@@ -159,6 +167,8 @@ export class AdminAnalyticsService {
 
       const data: Record<string, any> = {
         period: { from, to },
+        currency: 'USD',
+        unconvertedCurrencies: current.unconvertedCurrencies,
         totalGMV: current.grossRevenue,
         totalRevenue: current.netRevenue,
         totalRevenueChangePercent: percentChange(current.netRevenue, previous.netRevenue),
@@ -242,9 +252,9 @@ export class AdminAnalyticsService {
 
     return this.cached(this.key('revenue-breakdown', this.scopeLabel(scope), { from, to, compare }), async () => {
       const [orderTotals, platformEarnings, previousOrderTotals, previousPlatformEarnings] = await Promise.all([
-        periodTotals(this.r.orderModel, from, to, scope),
+        periodTotals(this.r.orderModel, from, to, scope, this.toUSD),
         this.getPlatformEarnings(from, to, scope),
-        compare ? periodTotals(this.r.orderModel, previousFrom, previousTo, scope) : null,
+        compare ? periodTotals(this.r.orderModel, previousFrom, previousTo, scope, this.toUSD) : null,
         compare ? this.getPlatformEarnings(previousFrom, previousTo, scope) : null,
       ]);
 
@@ -738,7 +748,7 @@ export class AdminAnalyticsService {
 
     return this.cached(this.key('orders-status-breakdown', this.scopeLabel(scope), { from, to }), async () => {
       const [totals, statusRows] = await Promise.all([
-        periodTotals(this.r.orderModel, from, to, scope),
+        periodTotals(this.r.orderModel, from, to, scope, this.toUSD),
         this.r.orderModel.aggregate([
           ...sellerOrderMatchStage(from, to, scope),
           { $group: { _id: '$sellerOrders.status', count: { $sum: 1 } } },

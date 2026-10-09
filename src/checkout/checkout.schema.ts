@@ -172,7 +172,7 @@ export class Checkout {
   @Prop({ type: String, default: null })
   shippingZoneId: string | null;
 
-  @Prop({ type: String, enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer'], default: null })
+  @Prop({ type: String, enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer', 'jazzcash', 'easypaisa'], default: null })
   paymentType: string | null;
 
   @Prop({ type: String, default: null })
@@ -276,6 +276,13 @@ export class Checkout {
   @Prop({ type: Date, default: null })
   orderPlacementStartedAt: Date | null;
 
+  // Optional gift note + gift wrapping for the physical items (free). Copied to the order at placement.
+  @Prop({ type: String, default: null })
+  giftMessage: string | null;
+
+  @Prop({ type: Boolean, default: false })
+  giftWrap: boolean;
+
   // Marketing attribution — client-reported (mobile app has no meaningful
   // Referer/UTM headers), captured at checkout-creation time and copied onto
   // the resulting Order(s) for analytics. Defaults to 'other' when the
@@ -304,3 +311,6 @@ CheckoutSchema.index({ status: 1 });
 CheckoutSchema.index({ createdAt: -1 });
 CheckoutSchema.index({ 'items.sellerId': 1 });
 CheckoutSchema.index({ 'items.storeId': 1 });
+// perf: compound indexes for hot query paths (additive)
+CheckoutSchema.index({ userId: 1, status: 1 });
+CheckoutSchema.index({ status: 1, expiredAt: 1 });

@@ -128,6 +128,12 @@ export class QuoteRequestsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Patch('mine/:id/purchase-order')
+  purchaseOrder(@Req() req: any, @Param('id') id: string, @Body() body: any) {
+    return this.quotes.attachPurchaseOrder(req.user.userId, id, body);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Patch('mine/:id/:action')
   respond(@Req() req: any, @Param('id') id: string, @Param('action') action: string) {
     if (!['accept', 'decline', 'cancel'].includes(action)) return { success: false, message: 'Unknown action' };

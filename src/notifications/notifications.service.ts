@@ -9,6 +9,8 @@ import { EmailService } from 'src/otp/services/email.service';
 import { NotificationsGateway } from './notifications.gateway';
 import { QUEUE_NAMES, NOTIFICATION_PUSH_JOB, NOTIFICATION_EMAIL_JOB } from 'src/queues/queue.constants';
 import { NOTIFICATION_CATEGORY } from './notification.types';
+import { ChannelMessagingService } from './channels/channel-messaging.service';
+import type { ChannelEvent } from './channels/channel.types';
 
 import { clampInt } from 'src/common/query-safety.util';
 export interface NotifyParams {
@@ -20,6 +22,8 @@ export interface NotifyParams {
   data?: Record<string, any>;
   /** Only set this when the event should also send an email — not every in-app notification warrants one. */
   email?: { subject: string; html: string };
+  /** Also send this over WhatsApp/SMS (only to buyers who opted in; ignored when no channel is configured). */
+  channelEvent?: { event: ChannelEvent; vars: Record<string, string>; fallbackPhone?: string | null };
 }
 
 @Injectable()
@@ -32,6 +36,7 @@ export class NotificationsService {
     private readonly firebaseAdminService: FirebaseAdminService,
     private readonly emailService: EmailService,
     @InjectQueue(QUEUE_NAMES.NOTIFICATIONS) private readonly queue: Queue,
+    private readonly channelMessaging: ChannelMessagingService,
   ) {}
 
   /**
@@ -68,6 +73,11 @@ export class NotificationsService {
       this.gateway.emitUnreadCount(recipientId, unreadCount);
 
       if (!categoryAllowed) return;
+
+      if (params.channelEvent && recipientRole === 'user') {
+        // Fire and forget: opt-in check + queued send happen off this path.
+        void this.channelMessaging.sendOrderEvent({ userId: recipientId, ...params.channelEvent });
+      }
 
       const pushEnabled = prefs?.pushEnabled !== false;
       if (pushEnabled) {
@@ -198,10 +208,13 @@ export class NotificationsService {
   }
 
   async updatePreferences(userId: string, role: string, dto: Record<string, any>) {
-    const { pushEnabled, emailEnabled, ...prefFlags } = dto;
+    const { pushEnabled, emailEnabled, whatsappEnabled, smsEnabled, language, ...prefFlags } = dto;
     const update: Record<string, any> = {};
     if (pushEnabled !== undefined) update.pushEnabled = pushEnabled;
     if (emailEnabled !== undefined) update.emailEnabled = emailEnabled;
+    if (whatsappEnabled !== undefined) update.whatsappEnabled = whatsappEnabled;
+    if (smsEnabled !== undefined) update.smsEnabled = smsEnabled;
+    if (language === 'en' || language === 'ur') update.language = language;
     for (const [key, value] of Object.entries(prefFlags)) {
       if (value !== undefined) update[`prefs.${key}`] = value;
     }

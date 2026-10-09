@@ -17,6 +17,9 @@ import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import { SUPPORTED_CURRENCIES, FxSnapshot } from 'src/exchange-rate/schemas/exchange-rate.schema';
 import { GiftCardsService } from 'src/gift-cards/gift-cards.service';
 import { DiscountsService } from 'src/discounts/discounts.service';
+import { configuredHostedProviderIds } from 'src/payment/providers/hosted-providers.registry';
+import { DEFAULT_PK_ZONES, missingDefaultZones } from './default-pk-zones';
+import { sanitizeGiftOptions } from './gift-options.util';
 
 // Shipping zones are a Pakistan-domestic geography feature (predates the
 // PKR/USD split entirely) — ShippingZone.shippingPrice has no currency
@@ -150,15 +153,21 @@ export class CheckoutService {
       throw new BadRequestException('Cart is empty');
 
     // agar items array diya to sirf woh, warna sab cart items
+    // A selection may carry an explicit quantity (Buy Now: exactly what the buyer
+    // chose, whatever else sits in the cart). Stock/price are still validated per
+    // line below; the cart document itself is not modified here.
     const selectedItems: any[] =
       body.items && Array.isArray(body.items) && body.items.length > 0
-        ? cart.items.filter((cartItem: any) =>
-            body.items.some(
-              (sel: any) =>
-                sel.productId === cartItem.productId &&
-                sel.variantId === cartItem.productVariantId,
-            ),
-          )
+        ? cart.items
+            .map((cartItem: any) => {
+              const sel = body.items.find(
+                (s: any) => s.productId === cartItem.productId && s.variantId === cartItem.productVariantId,
+              );
+              if (!sel) return null;
+              const q = Number(sel.quantity);
+              return Number.isInteger(q) && q >= 1 && q <= 99 ? { ...(cartItem.toObject?.() ?? cartItem), quantity: q } : cartItem;
+            })
+            .filter(Boolean)
         : cart.items;
 
     if (selectedItems.length === 0)
@@ -169,34 +178,21 @@ export class CheckoutService {
 
     // Cache one lookup per store so a multi-item cart from the same store
     // doesn't re-query the buyer's subscription per item.
+    // Pre-filled in ONE batched query below (was one per store, plus again for shipping).
     const benefitsCache = new Map<
       string,
       { benefits: any[]; planName: string } | null
     >();
-    const getBenefits = async (storeId: string) => {
-      if (!benefitsCache.has(storeId)) {
-        benefitsCache.set(
-          storeId,
-          await this.subscriptionBenefits.getActiveBenefits(userId, storeId),
-        );
-      }
-      return benefitsCache.get(storeId);
-    };
+    const getBenefits = async (storeId: string) => benefitsCache.get(storeId) ?? null;
 
     let subscriberSavingsUSD = 0;
 
-    // Cache one lookup per store — a multi-item cart from the same store
-    // shouldn't re-query the store's status per item.
-    const storeStatusCache = new Map<string, boolean>();
+    // Store docs (status, COD flag, direct-payment details) for every store in the
+    // cart + the checkout store, loaded once and reused below.
+    const storeDocById = new Map<string, any>();
     const isStoreActive = async (storeId: string): Promise<boolean> => {
-      if (!storeStatusCache.has(storeId)) {
-        const store = await storeModel
-          .findOne({ _id: storeId, isDelete: false })
-          .select('status')
-          .lean();
-        storeStatusCache.set(storeId, !!store && (store as any).status === 'active');
-      }
-      return storeStatusCache.get(storeId)!;
+      const s = storeDocById.get(String(storeId));
+      return !!s && !s.isDelete && s.status === 'active';
     };
 
     // Pass 1: resolve product/variant, validate stock, and compute each
@@ -210,6 +206,29 @@ export class CheckoutService {
     const rawItems: Array<{ product: any; variant: any; cartItem: any }> = [];
     const storeSubtotals = new Map<string, number>();
 
+    // One query for all products and one for all variants instead of two per cart line
+    // (each round trip to the database costs real time on a hosted cluster).
+    const [pricedProducts, pricedVariants] = await Promise.all([
+      productModel.find({ _id: { $in: [...new Set(selectedItems.map((i: any) => i.productId))] }, status: 'active', isDelete: false }),
+      productVariantModel.find({ _id: { $in: [...new Set(selectedItems.map((i: any) => i.productVariantId))] }, status: 'active', isDelete: false }),
+    ]);
+    const productById = new Map<string, any>(pricedProducts.map((p: any) => [p._id.toString(), p]));
+    const variantById = new Map<string, any>(pricedVariants.map((v: any) => [v._id.toString(), v]));
+
+    // Everything else the pricing passes need, fetched in parallel (one query each,
+    // not one per store / per line).
+    const prefetchStoreIds = [...new Set([...pricedProducts.map((p: any) => String(p.storeId)), String(storeId)])];
+    const sellerIds = [...new Set(pricedProducts.map((p: any) => p.sellerId).filter(Boolean))];
+    const [storeDocs, benefitsByStore, sellers] = await Promise.all([
+      storeModel.find({ _id: { $in: prefetchStoreIds } }).select('status isDelete codEnabled directPayment name slug').lean(),
+      this.subscriptionBenefits.getActiveBenefitsBatch(userId, prefetchStoreIds),
+      sellerIds.length
+        ? this.databaseService.repositories.sellerModel.find({ _id: { $in: sellerIds } }).select('name isVerified').lean()
+        : Promise.resolve([] as any[]),
+    ]);
+    for (const s of storeDocs as any[]) storeDocById.set(String(s._id), s);
+    for (const sid of prefetchStoreIds) benefitsCache.set(sid, benefitsByStore.get(sid) ?? null);
+
     for (const cartItem of selectedItems) {
       // Defense in depth: carts saved before quantity validation existed may
       // hold 0/negative/fractional lines, which would subtract from totals.
@@ -219,11 +238,7 @@ export class CheckoutService {
         );
       }
 
-      const product = await productModel.findOne({
-        _id: cartItem.productId,
-        status: 'active',
-        isDelete: false,
-      });
+      const product = productById.get(String(cartItem.productId));
       if (!product)
         throw new BadRequestException(
           `Product not found: ${cartItem.productId}`,
@@ -238,11 +253,7 @@ export class CheckoutService {
         );
       }
 
-      const variant = await productVariantModel.findOne({
-        _id: cartItem.productVariantId,
-        status: 'active',
-        isDelete: false,
-      });
+      const variant = variantById.get(String(cartItem.productVariantId));
       if (!variant)
         throw new BadRequestException(
           `Variant not found: ${cartItem.productVariantId}`,
@@ -274,15 +285,6 @@ export class CheckoutService {
     // Batch-resolve seller name + verification badge across every distinct
     // seller in this checkout — same one-query-instead-of-N pattern used on
     // the product listing endpoints.
-    const sellerIds = [
-      ...new Set(rawItems.map((r) => r.product.sellerId).filter(Boolean)),
-    ];
-    const sellers = sellerIds.length
-      ? await this.databaseService.repositories.sellerModel
-          .find({ _id: { $in: sellerIds } })
-          .select('name isVerified')
-          .lean()
-      : [];
     const sellerMap = new Map(sellers.map((s: any) => [s._id.toString(), s]));
 
     // Pass 2: resolve subscriber pricing now that each store's raw subtotal is known.
@@ -561,10 +563,7 @@ export class CheckoutService {
         if (d) potentialSavings += this.round(d.savingsUSD * item.quantity);
       }
       if (potentialSavings > 0) {
-        const store = await this.databaseService.repositories.storeModel
-          .findById(sid)
-          .select('name slug')
-          .lean();
+        const store = storeDocById.get(String(sid)) ?? null;
         subscriptionSavingsHints.push({
           storeId: sid,
           storeName: (store as any)?.name ?? 'this store',
@@ -637,12 +636,10 @@ export class CheckoutService {
       ...new Set(checkoutItems.filter((i) => i.type === 'physical').map((i) => i.storeId)),
     ];
     const codEligible = hasPhysical
-      ? (
-          await this.databaseService.repositories.storeModel
-            .find({ _id: { $in: physicalStoreIds } })
-            .select('codEnabled')
-            .lean()
-        ).every((s: any) => s.codEnabled !== false)
+      ? physicalStoreIds
+          .map((id) => storeDocById.get(String(id)))
+          .filter(Boolean)
+          .every((s: any) => s.codEnabled !== false)
       : true;
 
     // Manual bank-transfer (Pakistan track — pay into the platform's own
@@ -652,7 +649,7 @@ export class CheckoutService {
     // can be turned off platform-wide without a deploy.
     // Offered when this store's seller has set up their own bank / wallet details —
     // the money goes straight to them, the platform is not involved.
-    const payStore = await this.databaseService.repositories.storeModel.findById(storeId).select('directPayment').lean<{ directPayment?: DirectPaymentDetails | null }>();
+    const payStore = (storeDocById.get(String(storeId)) ?? null) as { directPayment?: DirectPaymentDetails | null } | null;
     const manualTransferEnabled = hasDirectPayment(payStore?.directPayment);
     const withManualTransfer = (methods: string[]) =>
       manualTransferEnabled ? [...methods, 'manual_bank_transfer'] : methods;
@@ -667,10 +664,16 @@ export class CheckoutService {
       if (typeof body.shippingZoneId !== 'string' || !isValidObjectId(body.shippingZoneId)) {
         throw new BadRequestException('Invalid shippingZoneId');
       }
-      const added = await this.addShippingInCheckout(userId, { checkoutId: checkout._id.toString(), shippingZoneId: body.shippingZoneId });
+      const added = await this.addShippingInCheckout(
+        userId,
+        { checkoutId: checkout._id.toString(), shippingZoneId: body.shippingZoneId },
+        { checkout, benefitsByStore: benefitsCache },
+      );
       shippingFee = added.data.shippingFee;
       finalTotal = added.data.totalAmount;
-      finalCheckout = (await checkoutModel.findById(checkout._id)) ?? checkout;
+      // Reuse the document we just created instead of re-reading it.
+      checkout.set({ shippingZoneId: body.shippingZoneId, shippingFee, totalAmount: finalTotal });
+      finalCheckout = checkout;
     }
 
     return {
@@ -684,9 +687,13 @@ export class CheckoutService {
         // 'stripe' and 'cash_on_delivery' as before — unless COD isn't
         // eligible (see codEligible above), in which case 'stripe' (pay
         // everything online) is always the safe fallback.
-        allowedPaymentMethods: hasDigital
-          ? withManualTransfer(hasPhysical && codEligible ? ['stripe', 'split'] : ['stripe'])
-          : withManualTransfer(codEligible ? ['stripe', 'cash_on_delivery'] : ['stripe']),
+        allowedPaymentMethods: [
+          ...(hasDigital
+            ? withManualTransfer(hasPhysical && codEligible ? ['stripe', 'split'] : ['stripe'])
+            : withManualTransfer(codEligible ? ['stripe', 'cash_on_delivery'] : ['stripe'])),
+          // JazzCash / Easypaisa: only when configured via env AND the checkout is PKR.
+          ...configuredHostedProviderIds(checkoutCurrency),
+        ],
         summary: {
           subtotal,
           shippingFee,
@@ -703,7 +710,11 @@ export class CheckoutService {
     };
   }
 
-  async addShippingInCheckout(userId: string, body: any) {
+  async addShippingInCheckout(
+    userId: string,
+    body: any,
+    preloaded?: { checkout: any; benefitsByStore?: Map<string, { benefits: any[]; planName: string } | null> },
+  ) {
     const { checkoutId, shippingZoneId } = body;
 
     if (!checkoutId) throw new BadRequestException('checkoutId is required');
@@ -713,11 +724,13 @@ export class CheckoutService {
     const { checkoutModel, shippingZoneModel } =
       this.databaseService.repositories;
 
-    const checkout = await checkoutModel.findOne({
-      _id: checkoutId,
-      userId,
-      isDelete: false,
-    });
+    const checkout =
+      preloaded?.checkout ??
+      (await checkoutModel.findOne({
+        _id: checkoutId,
+        userId,
+        isDelete: false,
+      }));
     if (!checkout) throw new NotFoundException('Checkout not found');
     if (checkout.status === 'payment_pending')
       throw new BadRequestException('Payment has already been started for this checkout — start a new checkout to change it');
@@ -757,10 +770,12 @@ export class CheckoutService {
       ...new Set((checkout.items as any[]).map((i) => i.storeId)),
     ];
     if (storeIdsInCheckout.length === 1) {
-      const benefitsEntry = await this.subscriptionBenefits.getActiveBenefits(
-        userId,
-        storeIdsInCheckout[0],
-      );
+      const benefitsEntry = preloaded?.benefitsByStore?.has(storeIdsInCheckout[0])
+        ? preloaded.benefitsByStore.get(storeIdsInCheckout[0])
+        : await this.subscriptionBenefits.getActiveBenefits(
+            userId,
+            storeIdsInCheckout[0],
+          );
       if (benefitsEntry) {
         const shippingBenefit =
           this.subscriptionBenefits.resolveShippingBenefit(
@@ -857,6 +872,36 @@ export class CheckoutService {
       .sort({ country: 1, province: 1, city: 1 })
       .lean();
     return { success: true, data };
+  }
+
+  /** Buyer: adds / changes the gift note and gift wrap on a checkout that still has physical items. */
+  async setGiftOptions(userId: string, body: any) {
+    const checkoutId = body?.checkoutId;
+    if (!checkoutId || !isValidObjectId(checkoutId)) throw new BadRequestException('checkoutId is required');
+    let opts;
+    try {
+      opts = sanitizeGiftOptions(body);
+    } catch (e: any) {
+      throw new BadRequestException(e?.message ?? 'Invalid gift options');
+    }
+    const { checkoutModel } = this.databaseService.repositories;
+    const checkout: any = await checkoutModel.findOne({ _id: checkoutId, userId, isDelete: false }).select('status items').lean();
+    if (!checkout) throw new NotFoundException('Checkout not found');
+    if (!['pending', 'payment_pending'].includes(checkout.status)) throw new BadRequestException('This checkout can no longer be changed');
+    if (!(checkout.items ?? []).some((i: any) => i.type === 'physical')) throw new BadRequestException('Gift options are only for physical items');
+    await checkoutModel.updateOne({ _id: checkoutId, userId }, { $set: opts });
+    return { success: true, message: 'Gift options saved', data: opts };
+  }
+
+  /** Admin action: adds the starter Pakistani zones that do not exist yet. Idempotent; never edits or deletes existing zones. */
+  async adminSeedDefaultShippingZones() {
+    const { shippingZoneModel } = this.databaseService.repositories;
+    const existing = await shippingZoneModel.find({ isDelete: false }).select('country province city').lean();
+    const toAdd = missingDefaultZones(existing as any[]);
+    if (toAdd.length > 0) {
+      await shippingZoneModel.insertMany(toAdd.map((z) => ({ country: 'Pakistan', ...z, status: 'active', isDelete: false })));
+    }
+    return { success: true, message: toAdd.length ? `Added ${toAdd.length} delivery zone(s)` : 'All default zones already exist', data: { added: toAdd.length, skipped: DEFAULT_PK_ZONES.length - toAdd.length } };
   }
 
   async adminCreateShippingZone(body: any) {
