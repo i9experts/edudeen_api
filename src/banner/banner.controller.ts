@@ -24,6 +24,7 @@ import { CreateBannerDto } from './dto/create-banner.dto';
 import { UpdateBannerDto } from './dto/update-banner.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { AdminReauthGuard } from '../admin-reauth/admin-reauth.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { PromotionPlacement } from '../common/promotion-placements.const';
 
@@ -64,7 +65,7 @@ export class BannersController {
   }
 
   // POST via JSON URL — admin only
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @ApiBearerAuth()
   @Post()
@@ -74,7 +75,7 @@ export class BannersController {
   }
 
   // POST via file upload — admin only
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @ApiBearerAuth()
   @Post('upload')
@@ -102,7 +103,7 @@ export class BannersController {
   }
 
   // PATCH edit banner — admin only
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @ApiBearerAuth()
   @Patch(':id')
@@ -111,7 +112,7 @@ export class BannersController {
   }
 
   // PATCH pause banner — admin only
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @ApiBearerAuth()
   @Patch(':id/pause')
@@ -120,7 +121,7 @@ export class BannersController {
   }
 
   // PATCH resume banner — admin only
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @ApiBearerAuth()
   @Patch(':id/resume')
@@ -129,7 +130,7 @@ export class BannersController {
   }
 
   // DELETE banner — admin only
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @ApiBearerAuth()
   @Delete(':id')

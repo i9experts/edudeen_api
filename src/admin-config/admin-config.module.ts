@@ -1,3 +1,4 @@
+import { AdminReauthModule } from '../admin-reauth/admin-reauth.module';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { RedisModule } from '../redis/redis.module';
@@ -7,7 +8,7 @@ import { AdminConfigService } from './admin-config.service';
 import { FeatureFlagGuard } from './guards/feature-flag.guard';
 
 @Module({
-  imports: [AuthModule, RedisModule],
+  imports: [AdminReauthModule, AuthModule, RedisModule],
   controllers: [AdminConfigController, PublicPlatformConfigController],
   providers: [AdminConfigService, FeatureFlagGuard],
   exports: [AdminConfigService, FeatureFlagGuard],

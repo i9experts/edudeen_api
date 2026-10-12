@@ -125,7 +125,7 @@ async function bootstrap() {
     },
     credentials: true,
     methods: ['GET','HEAD','PUT','PATCH','POST','DELETE','OPTIONS'],
-    allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Accept','Origin','Idempotency-Key','X-Request-Id'],
+    allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Accept','Origin','Idempotency-Key','X-Request-Id','X-Inline-Edit','X-Admin-Reauth'],
     exposedHeaders: ['Content-Length','X-Request-Id'],
   });
 
