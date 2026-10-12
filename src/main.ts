@@ -7,7 +7,21 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
 import { GLOBAL_VALIDATION_OPTIONS } from './common/validation.config';
 
+// Optional Sentry: only when SENTRY_DSN is set AND @sentry/node is installed (npm i @sentry/node). Never blocks boot.
+async function initSentry() {
+  const dsn = process.env.SENTRY_DSN;
+  if (!dsn) return;
+  try {
+    const pkg = '@sentry/node';
+    const Sentry: any = await import(pkg);
+    Sentry.init({ dsn, environment: process.env.NODE_ENV, tracesSampleRate: 0 });
+  } catch {
+    console.warn('SENTRY_DSN is set but @sentry/node is not installed; error reporting disabled');
+  }
+}
+
 async function bootstrap() {
+  await initSentry();
   // rawBody: Stripe webhook signature verification (payment + subscriptions
   // webhook controllers) needs the exact unparsed request bytes on
   // `req.rawBody` — without it every webhook is rejected with a 400.

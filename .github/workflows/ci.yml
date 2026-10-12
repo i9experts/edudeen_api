@@ -1,0 +1,22 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit -p tsconfig.json
+      - run: npx nest build
+      # Unit specs: non-blocking until verified in CI (some specs need mongodb-memory-server binaries / replica set).
+      - run: npx jest --runInBand --testPathIgnorePatterns integration replica
+        continue-on-error: true
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
