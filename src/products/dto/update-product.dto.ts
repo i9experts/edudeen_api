@@ -9,6 +9,7 @@ import {
   IsArray,
   IsUrl,
   IsBoolean,
+  ArrayMaxSize,
 } from 'class-validator';
 
 export class UpdateProductDto {
@@ -105,4 +106,15 @@ export class UpdateProductDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiProperty({
+    required: false,
+    type: [String],
+    description: 'Admin campaigns (sales) this product joins. Max 10; unknown/ended ones are dropped by the service.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsMongoId({ each: true })
+  campaignIds?: string[];
 }

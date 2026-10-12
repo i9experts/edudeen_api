@@ -40,13 +40,14 @@ export function computeCampaignDiscountAmount(campaign: ActiveCampaignForStore, 
  *  soonest-ending, so the more "urgent" sale wins the display too. */
 export function pickBestCampaign(
   campaigns: ActiveCampaignForStore[],
-  subtotal: number,
+  subtotal: number | ((campaignId: string) => number),
 ): { campaign: ActiveCampaignForStore; discountAmount: number } | null {
   if (campaigns.length === 0) return null;
 
   let best: { campaign: ActiveCampaignForStore; discountAmount: number } | null = null;
   for (const campaign of campaigns) {
-    const discountAmount = computeCampaignDiscountAmount(campaign, subtotal);
+    // a function lets each campaign be valued on its own set of eligible items (per-product participation)
+    const discountAmount = computeCampaignDiscountAmount(campaign, typeof subtotal === 'function' ? subtotal(campaign.campaignId) : subtotal);
     if (
       !best ||
       discountAmount > best.discountAmount ||
@@ -83,6 +84,8 @@ export async function resolveCartCampaignDiscount(
   subtotal: number,
   cartCurrency: string,
   convert?: (amount: number, from: string, to: string) => Promise<number>,
+  /** per-product participation: the subtotal of the lines that are IN a given campaign (default: the whole subtotal) */
+  subtotalFor?: (campaignId: string) => number,
 ): Promise<CartCampaignDiscount | null> {
   const candidates: Array<ActiveCampaignForStore & { origValue: number | null; valueCurrency: string | null }> = [];
   for (const c of rawCampaigns) {
@@ -98,7 +101,7 @@ export async function resolveCartCampaignDiscount(
       origValue: c.discountValue ?? null, valueCurrency,
     });
   }
-  const best = pickBestCampaign(candidates, subtotal);
+  const best = pickBestCampaign(candidates, subtotalFor ?? subtotal);
   const chosen = best ? candidates.find((c) => c.campaignId === best.campaign.campaignId) : null;
   if (!best || !chosen || best.discountAmount <= 0) return null;
   return {

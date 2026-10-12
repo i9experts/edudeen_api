@@ -69,6 +69,10 @@ export class Campaign {
   @Prop({ type: [String], default: [] })
   participatingStoreIds: string[];
 
+  // Set once sellers were asked whether to keep their own sale running after this campaign ended.
+  @Prop({ type: Date, default: null })
+  endNotifiedAt: Date | null;
+
   // Controls rotation order in the buyer-facing DealsBanner when multiple
   // campaigns are active at once (0 = shown first) — same convention as
   // Banner.order. Admin-set, independent of endDate/createdAt.

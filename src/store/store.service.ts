@@ -26,6 +26,7 @@ import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 import { RedisService } from 'src/redis/redis.service';
 import { MarketingService } from 'src/marketing/marketing.service';
 import { pickPrimaryCampaignForBadge } from 'src/marketing/campaign-pricing.util';
+import { campaignsForProduct, loadCampaignContext } from 'src/marketing/campaign-eligibility.util';
 import { AdminConfigService } from 'src/admin-config/admin-config.service';
 import { StoreThemeService } from '../store-theme/store-theme.service';
 import { StorePagesService } from '../store-pages/store-pages.service';
@@ -1439,28 +1440,40 @@ export class StoreService {
     // lookup for the whole page, not per-product — same active-campaign
     // resolution checkout pricing uses.
     const storeCampaigns = await this.marketingService.getActiveCampaignsForStore(storeId);
-    const primaryCampaign = pickPrimaryCampaignForBadge(storeCampaigns);
-    const activeCampaignBadge = primaryCampaign ? {
-      campaignId: primaryCampaign.campaignId,
-      name: primaryCampaign.name,
-      discountType: primaryCampaign.discountType,
-      discountValue: primaryCampaign.discountValue,
-      currency: primaryCampaign.currency,
-      endDate: primaryCampaign.endDate,
-    } : null;
+    // Per-product participation (marketing/campaign-eligibility.util.ts): only products in the campaign carry it.
+    const campaignCtx = await loadCampaignContext(
+      this.databaseService.repositories.productModel, [storeId],
+      storeCampaigns.map((c) => c.campaignId), [],
+    );
 
     const enrichedProducts = products.map((p: any) => {
       const variant = cheapestByProduct.get(p._id.toString());
+      const primaryCampaign = pickPrimaryCampaignForBadge(
+        campaignsForProduct(storeCampaigns, String(storeId), p.campaignIds ?? [], campaignCtx.selection),
+      );
+      const activeCampaignBadge = primaryCampaign ? {
+        campaignId: primaryCampaign.campaignId,
+        name: primaryCampaign.name,
+        discountType: primaryCampaign.discountType,
+        discountValue: primaryCampaign.discountValue,
+        currency: primaryCampaign.currency,
+        endDate: primaryCampaign.endDate,
+      } : null;
+      // While the campaign's sale runs on this product, the seller's own markdown is hidden.
+      const hideMarkdown = !!primaryCampaign && primaryCampaign.discountType != null && primaryCampaign.discountValue != null;
+      const productVariants = (variantsByProduct.get(p._id.toString()) ?? [])
+        .map((v: any) => (hideMarkdown ? { ...v, compareAtPrice: null } : v));
+      const { campaignIds: _own, ...pubProduct } = p;
       const base: any = {
-        ...p,
-        variants:            variantsByProduct.get(p._id.toString()) ?? [],
+        ...pubProduct,
+        variants:            productVariants,
         sellerName:          seller ? seller.name : null,
         storeName:           (store as any).name ?? null,
         sellerVerified:      seller ? !!seller.isVerified : false,
         defaultVariantPrice: variant?.price ?? null,
         variantId:           variant?._id ?? null,
         stock:               variant?.stock ?? null,
-        compareAtPrice:      variant?.compareAtPrice ?? null,
+        compareAtPrice:      hideMarkdown ? null : (variant?.compareAtPrice ?? null),
         activeCampaign:      activeCampaignBadge,
       };
       if (variant && benefits) {

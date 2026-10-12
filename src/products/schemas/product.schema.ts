@@ -284,6 +284,12 @@ export class Product {
   @Prop({ default: false })
   isListedOnEdudeen: boolean;
 
+  // Admin campaigns (sales) the seller chose for THIS product. See
+  // marketing/campaign-eligibility.util.ts for the rule (a store that never picked any product for a campaign
+  // keeps the old whole-store behaviour).
+  @Prop({ type: [String], default: [] })
+  campaignIds: string[];
+
   // admin marketplace-management toggle — highlights the listing on the
   // marketplace homepage, separate from seller-controlled fields above
   @Prop({ default: false })
@@ -332,6 +338,7 @@ export const ProductSchema = SchemaFactory.createForClass(Product);
 
 ProductSchema.index({ curricula: 1 });
 ProductSchema.index({ sellerId: 1 });
+ProductSchema.index({ storeId: 1, campaignIds: 1 });
 ProductSchema.index({ storeId: 1 });
 ProductSchema.index({ name: 1 });
 ProductSchema.index({ categoryId: 1 });

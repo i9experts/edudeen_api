@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { resolveCartCampaignDiscount } from '../marketing/campaign-pricing.util';
+import { isProductInCampaign, loadCampaignContext } from '../marketing/campaign-eligibility.util';
 import { isValidObjectId } from 'mongoose';
 import { sanitizeDigitalForPublicView } from 'src/products/product-public-view.util';
 import { Injectable, BadRequestException, ForbiddenException, Optional } from '@nestjs/common';
@@ -303,10 +304,23 @@ export class CartService {
         })
         .select('name endDate discountType discountValue currency sponsorType')
         .lean();
+      // Per-product participation (campaign-eligibility.util.ts): the sale covers only the lines whose product is in
+      // the campaign, so each campaign is valued on its own eligible lines.
+      const { selection, campaignIdsByProduct } = await loadCampaignContext(
+        this.databaseService.repositories.productModel, [storeId],
+        (rawCampaigns as any[]).map((c) => String(c._id)), productIds as string[],
+      );
+      const inCampaign = (campaignId: string, productId: string) =>
+        isProductInCampaign(campaignId, storeId, campaignIdsByProduct.get(productId), selection);
       const campaignDiscount = await resolveCartCampaignDiscount(
         rawCampaigns as any[], totalPrice, cartCurrency,
         this.exchangeRate ? (amount, from, to) => this.exchangeRate!.convert(amount, from, to) : undefined,
+        (campaignId) => items.filter((i) => inCampaign(campaignId, i.productId)).reduce((s, i) => s + i.itemTotal, 0),
       );
+      const itemsWithFlag = items.map((i) => ({
+        ...i,
+        onCampaign: !!campaignDiscount && inCampaign(campaignDiscount.campaignId, i.productId),
+      }));
 
       // Final response
       return {
@@ -314,7 +328,7 @@ export class CartService {
         data: {
           userId,
           storeId,
-          items,
+          items: itemsWithFlag,
           totalItems,
           totalPrice,
           currency: cartCurrency,

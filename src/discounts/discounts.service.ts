@@ -127,8 +127,10 @@ export class DiscountsService {
     const map = new Map<string, any[]>();
     if (storeIds.length === 0) return map;
 
-    const uniqueIds = [...new Set(storeIds)];
     const now = new Date();
+    // The seller's own sale is paused PER ITEM, not per store: checkout skips lines that already got a campaign
+    // discount (pass 3.5 'nonSaleItems', which also covers bundles), so products outside the campaign keep it.
+    const uniqueIds = [...new Set(storeIds)];
     const discounts = await this.r.automaticDiscountModel
       .find({
         storeId: { $in: uniqueIds },

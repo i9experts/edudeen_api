@@ -11,7 +11,7 @@ import { licenseFromVariant } from 'src/products/product-input.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-benefits.service';
 import { MarketingService } from 'src/marketing/marketing.service';
-import { pickBestCampaign } from 'src/marketing/campaign-pricing.util';
+import { loadCampaignContext, pickBestCampaignForItems } from 'src/marketing/campaign-eligibility.util';
 import { AdminConfigService } from 'src/admin-config/admin-config.service';
 import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import { SUPPORTED_CURRENCIES, FxSnapshot } from 'src/exchange-rate/schemas/exchange-rate.schema';
@@ -373,16 +373,29 @@ export class CheckoutService {
     const activeCampaignsByStore =
       await this.marketingService.getActiveCampaignsForStores(cartStoreIds);
 
+    // Per-product participation (campaign-eligibility.util.ts): each campaign is valued on ITS eligible lines only and
+    // the discount is spread over those lines; other lines keep full price and stay open to the seller's own sale.
+    const campaignCtx = await loadCampaignContext(
+      productModel,
+      cartStoreIds,
+      [...new Set([...activeCampaignsByStore.values()].flat().map((c) => c.campaignId))],
+      [...new Set(checkoutItems.map((i) => i.productId))],
+    );
+
     for (const storeId of cartStoreIds) {
       const campaigns = activeCampaignsByStore.get(storeId);
       if (!campaigns || campaigns.length === 0) continue;
 
-      const storeItems = checkoutItems.filter((i) => i.storeId === storeId);
-      const storeSubtotal = this.round(
-        storeItems.reduce((s, i) => s + i.totalPrice, 0),
+      const allStoreItems = checkoutItems.filter((i) => i.storeId === storeId);
+      const best = pickBestCampaignForItems(
+        campaigns,
+        storeId,
+        allStoreItems.map((i) => ({ productId: i.productId, amount: i.totalPrice })),
+        campaignCtx.campaignIdsByProduct,
+        campaignCtx.selection,
       );
-      const best = pickBestCampaign(campaigns, storeSubtotal);
       if (!best || best.discountAmount <= 0) continue;
+      const storeItems = allStoreItems.filter((i) => best.productIds.includes(i.productId));
 
       this.distributeCampaignDiscount(
         storeItems,

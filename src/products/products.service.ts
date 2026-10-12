@@ -16,6 +16,7 @@ import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-bene
 import { EntitlementsService } from 'src/platform-plans/entitlements.service';
 import { MarketingService } from 'src/marketing/marketing.service';
 import { pickPrimaryCampaignForBadge } from 'src/marketing/campaign-pricing.util';
+import { campaignsForProduct, loadCampaignContext, parseCampaignIdsInput } from 'src/marketing/campaign-eligibility.util';
 import { EducationLevel, LICENSE_OPTION_LABEL, LICENSE_OPTION_NAME } from './schemas/product.schema';
 import { EducationLevelService } from './education-level.service';
 import { UploadService } from 'src/upload/upload.service';
@@ -78,9 +79,29 @@ export class ProductsService {
       ? await this.marketingService.getActiveCampaignsForStores(storeIds)
       : new Map();
 
-    return products.map((p) => {
-      const campaigns = p.storeId ? campaignsByStore.get(p.storeId) : undefined;
-      const primary = campaigns ? pickPrimaryCampaignForBadge(campaigns) : null;
+    // Per-product participation (marketing/campaign-eligibility.util.ts): a product only carries the sale when it is
+    // in the campaign. Two batched queries for the page, none when no store is in a campaign.
+    const campaignIds = [...new Set([...campaignsByStore.values()].flat().map((c: any) => c.campaignId))] as string[];
+    const missingIds = products
+      .filter((p: any) => p._id && !Array.isArray(p.campaignIds))
+      .map((p: any) => String(p._id));
+    const ctx = await loadCampaignContext(this.databaseService.repositories.productModel, storeIds, campaignIds, missingIds);
+    const ownIds = (p: any): string[] | undefined => (Array.isArray(p.campaignIds) ? p.campaignIds : ctx.campaignIdsByProduct.get(String(p._id)));
+
+    return products.map((raw) => {
+      const { campaignIds: _own, ...p } = raw as any;
+      const campaigns = campaignsForProduct(
+        raw.storeId ? campaignsByStore.get(raw.storeId) : undefined,
+        raw.storeId as string,
+        ownIds(raw),
+        ctx.selection,
+      );
+      const primary = campaigns.length ? pickPrimaryCampaignForBadge(campaigns) : null;
+      // While the campaign's sale runs on this product, the seller's own markdown is hidden (it returns after).
+      if (primary && primary.discountType != null && primary.discountValue != null) {
+        if (Array.isArray(p.variants)) p.variants = p.variants.map((v: any) => ({ ...v, compareAtPrice: null }));
+        if (p.compareAtPrice != null) p.compareAtPrice = null;
+      }
       return {
         ...p,
         activeCampaign: primary
@@ -1157,11 +1178,16 @@ export class ProductsService {
       customerId,
       product.storeId,
     );
-    const variants = this.applySubscriberPricing(
+    let variants = this.applySubscriberPricing(
       rawVariants,
       product,
       benefitsEntry ?? undefined,
     );
+    // Same rule as the listings: while the campaign's sale runs on this product the seller's own markdown is hidden.
+    const badge: any = (productWithSeller as any)?.activeCampaign;
+    if (badge && badge.discountType != null && badge.discountValue != null) {
+      variants = variants.map((v: any) => ({ ...v, compareAtPrice: null }));
+    }
 
     const defaultVariant =
       variants.length > 0
@@ -1344,6 +1370,7 @@ export class ProductsService {
     if (!categoryId)
       throw new BadRequestException('Your store has no category selected');
 
+    const campaignIds = body.campaignIds === undefined ? [] : await this.marketingService.resolveProductCampaignIds(String(store._id), body.campaignIds);
     const slug = await generateUniqueSlug(productModel, name);
 
     const product = await productModel.create({
@@ -1351,6 +1378,7 @@ export class ProductsService {
       storeId: store._id.toString(),
       name,
       slug,
+      campaignIds,
       description: description ?? null,
       productType: 'physical',
       type: 'physical',
@@ -1394,7 +1422,8 @@ export class ProductsService {
     return {
       success: true,
       message: 'Physical product created successfully',
-      data: { product, variants: createdVariants },
+      // `defaultVariant` mirrors the digital create response; the seller UI caches it to open the edit form.
+      data: { product, variants: createdVariants, defaultVariant: createdVariants.find((v: any) => v.isDefault) ?? createdVariants[0] ?? null },
     };
   }
 
@@ -1519,6 +1548,7 @@ export class ProductsService {
     const delivery = cleanDeliveryFormat(body, null);
     await this.assertCourseReady(null, delivery.deliveryFormat, status ? resolveSellerPublishStatus(status, null) : 'draft');
 
+    const campaignIds = body.campaignIds === undefined ? [] : await this.marketingService.resolveProductCampaignIds(String(store._id), body.campaignIds);
     const slug = await generateUniqueSlug(productModel, name);
 
     const product = await productModel.create({
@@ -1526,6 +1556,7 @@ export class ProductsService {
       storeId: store._id.toString(),
       name,
       slug,
+      campaignIds,
       description: description ?? null,
       productType: finalProductType,
       type: 'digital',
@@ -1719,6 +1750,8 @@ export class ProductsService {
     if (tags !== undefined) productUpdate.tags = assertStringArray(tags, 'tags', { maxItems: 30, maxLength: 60 });
     if (isListedOnEdudeen !== undefined)
       productUpdate.isListedOnEdudeen = isListedOnEdudeen;
+    if (body.campaignIds !== undefined)
+      productUpdate.campaignIds = await this.marketingService.resolveProductCampaignIds(product.storeId, body.campaignIds);
     if (status !== undefined) {
       assertSellerStatus(status);
       productUpdate.status = resolveSellerPublishStatus(status, product);

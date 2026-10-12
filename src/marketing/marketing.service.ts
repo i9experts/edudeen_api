@@ -5,6 +5,7 @@ import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { CreateCouponDto } from './dto/create-coupon.dto';
 import { UpdateCouponDto } from './dto/update-coupon.dto';
 import { ActiveCampaignForStore } from './campaign-pricing.util';
+import { parseCampaignIdsInput } from './campaign-eligibility.util';
 import { generateUniqueSlug } from 'src/common/slug.util';
 
 import { clampInt } from 'src/common/query-safety.util';
@@ -172,11 +173,46 @@ export class MarketingService {
       .sort({ startDate: 1 })
       .lean();
 
+    // How many of this store's products ticked each campaign (0 = the store never chose per product, so the whole
+    // store is in - see campaign-eligibility.util.ts).
+    const counts = campaigns.length
+      ? await this.r.productModel.aggregate([
+          { $match: { storeId, isDelete: false, campaignIds: { $in: campaigns.map((c) => String(c._id)) } } },
+          { $unwind: '$campaignIds' },
+          { $group: { _id: '$campaignIds', n: { $sum: 1 } } },
+        ])
+      : [];
+    const countById = new Map<string, number>((counts as any[]).map((x) => [String(x._id), x.n]));
+
     const data = campaigns.map((c) => ({
-      ...c,
+      // participatingStoreIds is every store's business - sellers only get their own membership flag
+      ...Object.fromEntries(Object.entries(c).filter(([k]) => k !== 'participatingStoreIds')),
       isJoined: c.sponsorType === 'platform' ? true : (c.participatingStoreIds ?? []).includes(storeId),
+      selectedProductCount: countById.get(String(c._id)) ?? 0,
     }));
     return { success: true, data };
+  }
+
+  /**
+   * Validates the campaigns a seller ticked on a product. Not an array / more than 10 / malformed ids -> 400.
+   * Otherwise unknown, deleted, ended or not-active campaigns are dropped silently. Ticking a seller-sponsored campaign
+   * the store has not joined yet joins the store (the tick is the opt-in); platform-sponsored ones need no joining.
+   */
+  async resolveProductCampaignIds(storeId: string, raw: unknown): Promise<string[]> {
+    if (raw === null) return [];
+    const ids = parseCampaignIdsInput(raw);
+    if (ids === null) throw new BadRequestException('campaignIds must be a list of at most 10 campaign ids');
+    if (ids.length === 0) return [];
+    const campaigns = await this.r.campaignModel
+      .find({ _id: { $in: ids }, isDelete: false, status: 'active', endDate: { $gte: new Date() } })
+      .select('sponsorType participatingStoreIds')
+      .lean();
+    const notJoined = (campaigns as any[]).filter((c) => c.sponsorType !== 'platform' && !(c.participatingStoreIds ?? []).includes(storeId));
+    if (notJoined.length) {
+      await this.r.campaignModel.updateMany({ _id: { $in: notJoined.map((c) => c._id) } }, { $addToSet: { participatingStoreIds: storeId } });
+    }
+    const valid = new Set((campaigns as any[]).map((c) => String(c._id)));
+    return ids.filter((id) => valid.has(id));
   }
 
   async joinCampaign(sellerId: string, storeId: string, campaignId: string, ip?: string, userAgent?: string) {
@@ -218,6 +254,9 @@ export class MarketingService {
     }
 
     await this.r.campaignModel.findByIdAndUpdate(campaignId, { $pull: { participatingStoreIds: storeId } });
+    // The store is out, so its products' ticks for this campaign go too (otherwise re-joining later would
+    // silently bring a stale per-product selection back).
+    await this.r.productModel.updateMany({ storeId, campaignIds: campaignId }, { $pull: { campaignIds: campaignId } });
 
     this.activityLogService.log({
       storeId,

@@ -109,14 +109,18 @@ export class AdminMarketplaceService {
         { targetId: 1 },
       ),
       this.r.productVariantModel.aggregate([
-        { $match: { productId: { $in: productIds } } },
-        { $group: { _id: '$productId', minPrice: { $min: '$price' } } },
+        // The price the seller set = the DEFAULT variant (not the minimum over every variant, which also picked up
+        // deleted variants and license-tier variants and could show 0).
+        { $match: { productId: { $in: productIds }, isDelete: { $ne: true } } },
+        { $sort: { isDefault: -1, price: 1 } },
+        { $group: { _id: '$productId', minPrice: { $first: '$price' }, currency: { $first: '$currency' } } },
       ]),
     ]);
     const sellerNameById = new Map(sellers.map((s) => [String(s._id), s.name]));
     const badgesByStoreId = new Map(stores.map((s) => [String(s._id), s.badges ?? []]));
     const flaggedIdSet = new Set(openReports.map((r) => r.targetId));
     const priceByProductId = new Map(priceRows.map((row) => [row._id, row.minPrice]));
+    const currencyByProductId = new Map(priceRows.map((row) => [row._id, row.currency ?? 'PKR']));
 
     const items = products.map((p) => ({
       id: p._id,
@@ -127,6 +131,7 @@ export class AdminMarketplaceService {
       storeBadges: badgesByStoreId.get(p.storeId) ?? [],
       categoryId: p.categoryId,
       price: priceByProductId.get(String(p._id)) ?? null,
+      currency: currencyByProductId.get(String(p._id)) ?? 'PKR',
       purchaseCount: p.purchaseCount,
       status: flaggedIdSet.has(String(p._id)) ? 'flagged' : p.status,
       isFeatured: p.isFeatured,

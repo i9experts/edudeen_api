@@ -27,6 +27,61 @@ export class AdminMarketingService {
     @Optional() private readonly notificationsService?: NotificationsService,
   ) {}
 
+  /** The seller's own sale (automatic discounts, bundles, or a compare-at price on a product) was hidden while the
+   *  campaign ran. Now that it ended it shows again, so each store that HAS such a sale gets a notification asking
+   *  whether to continue it. Once per campaign (endNotifiedAt); background, never blocks the expiry job. */
+  private announceCampaignEnded(campaign: { _id: unknown; name: string; sponsorType?: string; participatingStoreIds?: string[]; endNotifiedAt?: Date | null; discountType?: string | null; discountValue?: number | null; startDate?: Date }) {
+    if (!this.notificationsService || campaign.endNotifiedAt) return;
+    // A badge-only campaign (no discount) or one that never started never hid anyone's own sale.
+    if (!campaign.discountType || campaign.discountValue == null) return;
+    if (campaign.startDate && new Date(campaign.startDate) > new Date()) return;
+    const notifications = this.notificationsService;
+    void (async () => {
+      try {
+        // Claim first so overlapping runs never notify twice.
+        const claimed = await this.r.campaignModel.updateOne({ _id: campaign._id as any, endNotifiedAt: null }, { $set: { endNotifiedAt: new Date() } });
+        if (!claimed.modifiedCount) return;
+        const candidateFilter: Record<string, unknown> = { status: 'active', isDelete: false };
+        if (campaign.sponsorType !== 'platform') candidateFilter._id = { $in: campaign.participatingStoreIds ?? [] };
+        const stores = await this.r.storeModel.find(candidateFilter).select('_id sellerId name').lean();
+        const ids = (stores as any[]).map((s) => String(s._id));
+        if (ids.length === 0) return;
+        const cid = String(campaign._id);
+        const [autos, bundles, markdownVariants, selectedStores] = await Promise.all([
+          this.r.automaticDiscountModel.distinct('storeId', { storeId: { $in: ids }, isActive: true, isDelete: false }),
+          this.r.bundleModel.distinct('storeId', { storeId: { $in: ids }, isActive: true, isDelete: false }),
+          this.r.productVariantModel.find({ compareAtPrice: { $gt: 0 }, isDelete: false }).select('productId price compareAtPrice').limit(20000).lean(),
+          // stores that picked products for this campaign: only those products took part (others never did)
+          this.r.productModel.distinct('storeId', { storeId: { $in: ids }, isDelete: false, campaignIds: cid }),
+        ]);
+        const selectedSet = new Set<string>((selectedStores as any[]).map(String));
+        const markdownProductIds = (markdownVariants as any[]).filter((v) => v.compareAtPrice > v.price).map((v) => v.productId);
+        const markdownProducts = markdownProductIds.length
+          ? await this.r.productModel.find({ _id: { $in: markdownProductIds }, storeId: { $in: ids }, isDelete: false }).select('storeId campaignIds').lean()
+          : [];
+        // a markdown only counts when its product was in the campaign (picked it, or the store never picked any)
+        const markdownStores = (markdownProducts as any[])
+          .filter((p) => !selectedSet.has(String(p.storeId)) || (p.campaignIds ?? []).includes(cid))
+          .map((p) => p.storeId);
+        const withOwnSale = new Set<string>([...autos, ...bundles, ...markdownStores].map(String));
+        const BATCH = 25;
+        const targets = (stores as any[]).filter((s) => withOwnSale.has(String(s._id)));
+        for (let i = 0; i < targets.length; i += BATCH) {
+          await Promise.all(targets.slice(i, i + BATCH).map((s: any) => notifications.notify({
+            recipientId: String(s.sellerId),
+            recipientRole: 'seller',
+            type: NOTIFICATION_TYPES.PLATFORM_CAMPAIGN_LIVE,
+            title: `${campaign.name} has ended — your own sale is showing again`,
+            body: 'Your own discounts and sale prices on the products that were in this campaign were hidden while it ran. They are visible again now. Do you want to continue your sale? Open Marketing to keep, change or end it.',
+            data: { campaignId: String(campaign._id), storeId: String(s._id), link: `/store/${String(s._id)}/marketing?tab=discounts` },
+          })));
+        }
+      } catch (err: any) {
+        this.logger.error(`announceCampaignEnded failed: ${err?.message}`);
+      }
+    })();
+  }
+
   /** Tells every seller with an active store that a sale campaign just went
    *  live, so they can join it (seller-sponsored) or know their products are
    *  already discounted (platform-sponsored). Runs in the background — the
@@ -197,6 +252,7 @@ export class AdminMarketingService {
     await this.r.campaignModel.findByIdAndUpdate(id, { $set: dto.status === 'ended' ? { status: 'ended', order: 0 } : { status: dto.status } });
     this.log('campaign_status_changed', `Campaign "${campaign.name}" set to ${dto.status}`, meta, id);
     if (dto.status === 'active' && campaign.status !== 'active') this.announceCampaignLive(campaign as any);
+    if (dto.status === 'ended' && campaign.status === 'active') this.announceCampaignEnded(campaign as any);
     return { success: true, message: `Campaign set to ${dto.status}` };
   }
 
@@ -218,7 +274,7 @@ export class AdminMarketingService {
     const now = new Date();
     const expiring = await this.r.campaignModel
       .find({ isDelete: false, status: 'active', endDate: { $lt: now } })
-      .select('_id')
+      .select('_id name sponsorType participatingStoreIds endNotifiedAt discountType discountValue startDate')
       .lean();
     if (expiring.length === 0) return { expired: 0 };
 
@@ -226,6 +282,8 @@ export class AdminMarketingService {
       { _id: { $in: expiring.map((c) => c._id) } },
       { $set: { status: 'ended', order: 0 } },
     );
+    // A seller's own sale was paused while the campaign ran — it is visible again now, so ask them whether to keep it.
+    for (const c of expiring as any[]) this.announceCampaignEnded(c);
 
     const stillActive = await this.r.campaignModel
       .find({ isDelete: false, status: 'active' })
