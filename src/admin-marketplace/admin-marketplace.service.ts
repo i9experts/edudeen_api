@@ -103,7 +103,7 @@ export class AdminMarketplaceService {
     const storeIds = [...new Set(products.map((p) => p.storeId).filter(Boolean))];
     const [sellers, stores, openReports, priceRows] = await Promise.all([
       this.r.sellerModel.find({ _id: { $in: sellerIds } }, { name: 1 }),
-      this.r.storeModel.find({ _id: { $in: storeIds } }, { badges: 1 }),
+      this.r.storeModel.find({ _id: { $in: storeIds } }, { badges: 1, fulfillmentMode: 1 }),
       this.r.reportModel.find(
         { targetType: 'listing', status: { $ne: 'resolved' }, targetId: { $in: productIds } },
         { targetId: 1 },
@@ -118,6 +118,7 @@ export class AdminMarketplaceService {
     ]);
     const sellerNameById = new Map(sellers.map((s) => [String(s._id), s.name]));
     const badgesByStoreId = new Map(stores.map((s) => [String(s._id), s.badges ?? []]));
+    const fulfillmentByStoreId = new Map(stores.map((s: any) => [String(s._id), s.fulfillmentMode ?? 'seller']));
     const flaggedIdSet = new Set(openReports.map((r) => r.targetId));
     const priceByProductId = new Map(priceRows.map((row) => [row._id, row.minPrice]));
     const currencyByProductId = new Map(priceRows.map((row) => [row._id, row.currency ?? 'PKR']));
@@ -129,6 +130,7 @@ export class AdminMarketplaceService {
       sellerName: sellerNameById.get(p.sellerId) ?? 'Unknown',
       storeId: p.storeId,
       storeBadges: badgesByStoreId.get(p.storeId) ?? [],
+      storeFulfillmentMode: fulfillmentByStoreId.get(p.storeId) ?? 'seller',
       categoryId: p.categoryId,
       price: priceByProductId.get(String(p._id)) ?? null,
       currency: currencyByProductId.get(String(p._id)) ?? 'PKR',
