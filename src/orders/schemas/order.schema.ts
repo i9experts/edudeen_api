@@ -210,6 +210,23 @@ export class SellerOrder {
   })
   fulfillmentType: string;
 
+  // Who ships this sub-order's physical items, snapshotted from the store at
+  // order creation. null/absent = 'seller' (every order placed before the
+  // setting existed). 'platform' = the platform collects COD cash and handles
+  // delivery, so the seller is credited the sale (see isSellerCollectedCod).
+  @Prop({ type: String, enum: ['seller', 'platform', null], default: null })
+  fulfillmentMode: string | null;
+
+  // This store's own shipping line (sellers ship separately), in the ORDER's
+  // currency, and the same amount in the seller's settlement currency. The
+  // physical Order.shippingFee is the sum over its sellerOrders. 0 on digital
+  // sub-orders and on orders placed before per-store shipping existed.
+  @Prop({ type: Number, default: 0 })
+  shippingFee: number;
+
+  @Prop({ type: Number, default: 0 })
+  settlementShippingFee: number;
+
   @Prop({ type: [OrderItemSchema], required: true })
   items: OrderItem[];
 
@@ -436,7 +453,7 @@ export class Order {
   @Prop({ required: true })
   totalAmount: number;
 
-  @Prop({ enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer', 'jazzcash', 'easypaisa'], required: true })
+  @Prop({ enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer', 'jazzcash', 'easypaisa', 'free'], required: true })
   paymentType: string;
 
   // 'pending_verification' — manual bank-transfer order awaiting an admin to

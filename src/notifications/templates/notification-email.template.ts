@@ -35,7 +35,9 @@ export function orderPlacedEmail(order: {
     )
     .join('');
   const hasDigital = items.some((i) => i.type === 'digital');
-  const paymentNote = order.isPaid
+  const paymentNote = order.paymentType === 'free'
+    ? 'This order was free — no payment was needed.'
+    : order.isPaid
     ? 'Your payment has been received.'
     : order.paymentType === 'cash_on_delivery'
       ? 'Please keep the amount ready — you pay on delivery.'

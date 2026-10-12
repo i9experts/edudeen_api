@@ -7,11 +7,12 @@ import {
 } from '@nestjs/common';
 import { Readable } from 'stream';
 import { isValidObjectId } from 'mongoose';
+import { isVerifiedPurchaseLine } from 'src/rating/verified-purchase.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { UploadService } from 'src/upload/upload.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { FinanceService } from 'src/finance/finance.service';
+import { FinanceService, shippingCreditFor } from 'src/finance/finance.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { LoyaltyService } from 'src/loyalty/loyalty.service';
 import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-benefits.service';
@@ -83,28 +84,10 @@ export class OrdersService {
     );
   }
 
-  async getOrdersByUserId(userId: string, query: any) {
-    const { orderModel, sellerModel } = this.databaseService.repositories;
-
-    const page = clampInt(query.page, 1, 1, 100000);
-    const limit = clampInt(query.limit, 10, 1, 100);
-    const skip = (page - 1) * limit;
-
-    const filter: any = { userId, isDelete: false };
-
-    if (query.status && query.status !== 'all') {
-      filter.orderStatus = query.status;
-    }
-
-    const total = await orderModel.countDocuments(filter);
-    const totalPages = Math.ceil(total / limit);
-
-    const orders = await orderModel
-      .find(filter)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
+  /** The buyer-facing shape of a page of Orders (my-orders, orders-by-checkout) — one batched seller lookup
+   *  for the whole page. */
+  private async toBuyerOrderViews(orders: any[]) {
+    const { sellerModel } = this.databaseService.repositories;
 
     // Batch-resolve seller name + verification badge across every distinct
     // seller in this page — same one-query-instead-of-N pattern used on the
@@ -147,6 +130,11 @@ export class OrdersService {
           sellerName: seller ? seller.name : null,
           sellerVerified: seller ? !!seller.isVerified : false,
           fulfillmentType: so.fulfillmentType,
+          // Who ships this sub-order (snapshotted at order creation); orders placed before the
+          // setting existed carry none and were seller-fulfilled.
+          fulfillmentMode: so.fulfillmentMode ?? 'seller',
+          // This store's own shipping line, in the order's currency (0 on digital sub-orders).
+          shippingFee: so.shippingFee ?? 0,
           status: so.status,
           subtotal: so.subtotal,
           itemCount: (so.items ?? []).length,
@@ -164,6 +152,10 @@ export class OrdersService {
             originalPrice: item.originalPrice ?? null,
             subscriberDiscountUSD: item.subscriberDiscountUSD ?? 0,
             status: item.status,
+            // Would a review of this line be accepted? Same rule as RatingService.addReview (paid +
+            // delivered, or paid + not refunded for digital). Computed from the data already loaded here,
+            // so it costs no extra query.
+            canReview: isVerifiedPurchaseLine(order, item),
           })),
           tracking: so.tracking,
           trackingEvents: so.trackingEvents ?? [],
@@ -174,6 +166,33 @@ export class OrdersService {
       createdAt: order.createdAt,
       paidAt: order.paidAt,
     }));
+    return list;
+  }
+
+  async getOrdersByUserId(userId: string, query: any) {
+    const { orderModel } = this.databaseService.repositories;
+
+    const page = clampInt(query.page, 1, 1, 100000);
+    const limit = clampInt(query.limit, 10, 1, 100);
+    const skip = (page - 1) * limit;
+
+    const filter: any = { userId, isDelete: false };
+
+    if (query.status && query.status !== 'all') {
+      filter.orderStatus = query.status;
+    }
+
+    const total = await orderModel.countDocuments(filter);
+    const totalPages = Math.ceil(total / limit);
+
+    const orders = await orderModel
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    const list = await this.toBuyerOrderViews(orders);
 
     return {
       success: true,
@@ -254,6 +273,22 @@ export class OrdersService {
     return { success: true, data: { items } };
   }
 
+  /** Every Order a checkout produced (a checkout yields up to two: digital + physical), in the same shape as
+   *  my-orders. Buyer-owned only: another user's checkout is indistinguishable from a missing one (404). */
+  async getOrdersByCheckout(userId: string, checkoutId: string) {
+    if (typeof checkoutId !== 'string' || !isValidObjectId(checkoutId)) throw new NotFoundException('Checkout not found');
+    const orders = await this.databaseService.repositories.orderModel
+      .find({ checkoutId, userId, isDelete: false })
+      .sort({ createdAt: 1 })
+      .lean();
+    if (orders.length === 0) throw new NotFoundException('Checkout not found');
+    const list = await this.toBuyerOrderViews(orders);
+    return {
+      success: true,
+      data: { pagination: { page: 1, limit: list.length, totalPages: 1, total: list.length }, orders: list },
+    };
+  }
+
   async getOrderById(userId: string, orderId: string) {
     const { orderModel, sellerModel } = this.databaseService.repositories;
 
@@ -289,6 +324,9 @@ export class OrdersService {
         const store: any = storeMap.get(String(so.storeId));
         return {
           ...so,
+          items: (so.items ?? []).map((item: any) => ({ ...item, canReview: isVerifiedPurchaseLine(order as any, item) })),
+          fulfillmentMode: so.fulfillmentMode ?? 'seller',
+          shippingFee: so.shippingFee ?? 0,
           sellerName: seller ? seller.name : null,
           sellerVerified: seller ? !!seller.isVerified : false,
           storeName: store?.name ?? null,
@@ -446,6 +484,9 @@ export class OrdersService {
           },
           product: firstItem?.name || '',
           type: so.fulfillmentType,
+          // Who ships this sub-order, so the seller app can hide status controls on Edudeen-fulfilled
+          // rows instead of discovering it from a 403 (missing = seller-fulfilled).
+          fulfillmentMode: so.fulfillmentMode ?? 'seller',
           productType: firstItem?.productType ?? null,
           date: order.createdAt,
           amount: so.subtotal,
@@ -557,8 +598,10 @@ export class OrdersService {
     body: any,
     ip?: string,
     userAgent?: string,
+    actorRole: string = 'seller',
   ) {
     const { orderId, storeId, status, tracking } = body;
+    const isAdmin = actorRole === 'admin';
 
     if (!orderId) throw new BadRequestException('orderId is required');
     if (!storeId) throw new BadRequestException('storeId is required');
@@ -573,10 +616,10 @@ export class OrdersService {
 
     const { orderModel, storeModel } = this.databaseService.repositories;
 
-    // store ownership check
+    // store ownership check (an admin acts on any store, but only where the platform fulfills — see below)
     const store = await storeModel.findOne({
       _id: storeId,
-      sellerId,
+      ...(isAdmin ? {} : { sellerId }),
       isDelete: false,
     });
     if (!store) throw new ForbiddenException('Store not found or unauthorized');
@@ -585,9 +628,22 @@ export class OrdersService {
     if (!order) throw new NotFoundException('Order not found');
 
     const sellerOrderIndex = order.sellerOrders.findIndex(
-      (so: any) => so.storeId === storeId && so.sellerId === sellerId,
+      (so: any) => so.storeId === storeId && (isAdmin || so.sellerId === sellerId),
     );
     if (sellerOrderIndex === -1) throw new ForbiddenException('Unauthorized');
+
+    // Who may move a sub-order through shipped/delivered is fixed by the mode
+    // snapshotted on it at order creation: the seller where the seller ships
+    // (every pre-existing order), an admin only where the platform ships.
+    // Digital sub-orders ship nothing and stay seller-managed.
+    const target = order.sellerOrders[sellerOrderIndex] as any;
+    const platformFulfilled = target.fulfillmentType === 'physical' && target.fulfillmentMode === 'platform';
+    if (isAdmin && !platformFulfilled) {
+      throw new ForbiddenException('This sub-order is fulfilled by the seller — only the seller can update its status');
+    }
+    if (!isAdmin && platformFulfilled) {
+      throw new ForbiddenException('This sub-order is fulfilled by Edudeen — its shipping status and tracking are handled by the Edudeen team');
+    }
 
     // Guards against double-crediting the finance ledger if this sellerOrder was already
     // completed before this call (duplicate/retried request, double-click, etc.) — mirrors
@@ -681,6 +737,8 @@ export class OrdersService {
             sponsoredCampaignId,
             sellerPayoutCurrency(so, order),
             order.paymentType,
+            so.fulfillmentMode,
+            shippingCreditFor(order, so),
           );
         } catch (e) {
           console.error('Finance recordSale failed:', e?.message);
@@ -704,7 +762,7 @@ export class OrdersService {
         ? `Order #${orderId} — shipped via ${tracking.carrier ?? tracking}`
         : `Order #${orderId} — status changed to ${status}`,
       actorId: sellerId,
-      actorRole: 'seller',
+      actorRole: isAdmin ? 'admin' : 'seller',
       targetId: orderId,
       targetType: 'order',
       ip,
@@ -757,6 +815,12 @@ export class OrdersService {
     // own sub-orders — marking paid credits every seller in the order's
     // ledger, so one seller must never be able to do it for another's sale.
     // A multi-store order has to be confirmed by an admin.
+    // Cash collected by Edudeen's own couriers (fulfillmentMode 'platform') is
+    // confirmed by the Edudeen team only — a seller must never be able to book
+    // a credit for money the platform has not yet received.
+    if (actor.role !== 'admin' && order.sellerOrders.some((so: any) => so.fulfillmentMode === 'platform')) {
+      throw new ForbiddenException('Payment on Edudeen-fulfilled orders is confirmed by the Edudeen team');
+    }
     if (actor.role !== 'admin') {
       const ownsAll =
         order.sellerOrders.length > 0 &&
@@ -821,6 +885,8 @@ export class OrdersService {
           sponsoredCampaignId,
           sellerPayoutCurrency(so, order),
           order.paymentType,
+          so.fulfillmentMode,
+          shippingCreditFor(order, so),
         );
       } catch (e) {
         console.error('Finance recordSale failed:', e?.message);
@@ -931,9 +997,23 @@ export class OrdersService {
     let refundedViaStripe = false;
     let manualRefundNeeded = false;
     if (order.isPaid) {
+      // Each store ships (and is charged for shipping) separately, so a store's shipping line is
+      // refunded exactly when this cancel removes the LAST live item of that store's sub-order.
+      // Orders placed before per-store shipping existed have no line on their sub-orders: the old
+      // whole-order rule applies to them.
+      const hasShippingLines = order.sellerOrders.some((so: any) => (so.shippingFee ?? 0) > 0);
+      let shippingRefund = 0;
+      if (hasShippingLines) {
+        order.sellerOrders.forEach((so: any, soIndex: number) => {
+          const live = so.items.filter((i: any) => i.status !== 'cancelled').length;
+          const cancelling = targetItems.filter((t) => t.soIndex === soIndex).length;
+          if (live > 0 && cancelling === live) shippingRefund += so.shippingFee ?? 0;
+        });
+      } else if (cancelsWholeOrder) {
+        shippingRefund = order.shippingFee ?? 0;
+      }
       const refundAmount = round(
-        targetItems.reduce((s, { item }) => s + (item.totalPrice ?? 0), 0) +
-          (cancelsWholeOrder ? (order.shippingFee ?? 0) : 0),
+        targetItems.reduce((s, { item }) => s + (item.totalPrice ?? 0), 0) + shippingRefund,
       );
       if (order.paymentType === 'stripe') {
         const { paymentTransactionModel } = this.databaseService.repositories;
@@ -956,8 +1036,9 @@ export class OrdersService {
           if (!refund) throw new BadRequestException('Online refunds are not available right now — please contact support');
         }
         refundedViaStripe = true;
-      } else {
-        // Bank transfer: there's no API to send the money back — flag it.
+      } else if (refundAmount > 0) {
+        // Bank transfer / COD: there's no API to send the money back — flag it. (A free order
+        // refunds 0: nothing to send, only the items are cancelled.)
         manualRefundNeeded = true;
       }
     }
@@ -1016,6 +1097,18 @@ export class OrdersService {
     }
 
     await orderModel.findByIdAndUpdate(orderId, { $set: updateData });
+
+    // Items paid (partly) with a gift card: that part goes back on the card — the buyer's money refund
+    // above only covers what they paid otherwise. Idempotent per cancel request.
+    const cancelRefKey = `cancel-${orderId}-${targetItems.map(({ item }) => item._id.toString()).sort().join(',')}`;
+    for (const soIndex of new Set(targetItems.map((t) => t.soIndex))) {
+      await this.paymentService.restoreGiftCardForItems(
+        order,
+        order.sellerOrders[soIndex],
+        targetItems.filter((t) => t.soIndex === soIndex).map((t) => t.item),
+        cancelRefKey,
+      );
+    }
 
     if (manualRefundNeeded) {
       this.activityLogService.log({
@@ -1503,6 +1596,16 @@ export class OrdersService {
       }
     }
 
+    // Gift-card value that paid for the returned items goes back on the card (idempotent per return).
+    if (action === 'approve') {
+      await this.paymentService.restoreGiftCardForItems(
+        order,
+        sellerOrder,
+        targetItems.map((t) => t.item),
+        `return-${orderId}-${targetItems.map((t) => t.item._id.toString()).sort().join(',')}`,
+      );
+    }
+
     if (manualRefundNeeded) {
       this.activityLogService.log({
         storeId,
@@ -1534,15 +1637,19 @@ export class OrdersService {
           const sellerDebit = this.exchangeRateService.convertWithSnapshots(
             refundAmount, buyerCurrency, settlementCurrency, (order.fxSnapshots as any) ?? [],
           );
-          await this.financeService.recordRefund(
-            storeId,
-            sellerId,
-            orderId,
-            sellerDebit,
-            sellerId,
-            'seller',
-            { currency: settlementCurrency, description: `Approved return — Order #${order.orderNumber ?? orderId}` },
-          );
+          // Seller-collected COD settled by a commission debit: the seller hands
+          // the cash back by hand and the commission is credited back instead of
+          // debiting the refund (see FinanceService.recordRefundForSellerOrder).
+          await this.financeService.recordRefundForSellerOrder({
+            order, sellerOrder, storeId, sellerId, orderId,
+            refundedBuyerAmount: refundAmount,
+            sellerOrderTotal: round((sellerOrder.items as any[]).reduce((sum: number, i: any) => sum + (i.totalPrice || 0), 0)),
+            sellerDebitAmount: sellerDebit,
+            refKey: `return-${orderId}-${targetItems.map((t) => t.item._id.toString()).sort().join(',')}`,
+            currency: settlementCurrency,
+            description: `Approved return — Order #${order.orderNumber ?? orderId}`,
+            actorId: sellerId, actorRole: 'seller',
+          });
           refundProcessed = true;
         } catch (e) {
           // The buyer has already been (or must be) refunded — a failed ledger

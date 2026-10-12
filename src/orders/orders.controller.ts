@@ -45,6 +45,15 @@ export class OrdersController {
     return this.ordersService.getMyLibrary(req.user.userId);
   }
 
+  // Every Order (digital + physical) a checkout produced — same shape as my-orders. Static prefix, declared before the catch-all `:orderId` route.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('user')
+  @Get('by-checkout/:checkoutId')
+  async getOrdersByCheckout(@Req() req: any, @Param('checkoutId') checkoutId: string) {
+    const { userId } = req.user;
+    return this.ordersService.getOrdersByCheckout(userId, checkoutId);
+  }
+
   // signed URLs (non-stamped) + stamped stream URLs list
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('user')
@@ -70,12 +79,13 @@ export class OrdersController {
   @Roles('seller', 'admin')
   @Put('update-status')
   async updateSellerOrderStatus(@Req() req: any, @Body() body: any) {
-    const { userId } = req.user;
+    const { userId, role } = req.user;
     return this.ordersService.updateSellerOrderStatus(
       userId,
       body,
       req.ip,
       req.headers['user-agent'],
+      role,
     );
   }
 

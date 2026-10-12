@@ -65,6 +65,11 @@ export class GiftCard {
   @Prop({ type: [String], default: [] })
   redeemedCheckoutIds: string[];
 
+  // Idempotency keys of balance restores (cancel / refund / return of an order paid with this
+  // card) — a key is applied at most once, so a retried request can't credit the card twice.
+  @Prop({ type: [String], default: [] })
+  restoredRefKeys: string[];
+
   @Prop({ type: Boolean, default: false })
   isDelete: boolean;
 }

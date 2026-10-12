@@ -51,7 +51,7 @@ function makeCart(over: any = {}) {
       find: jest.fn(),
     },
   };
-  return { svc: new CartService({ repositories: repos } as any), repos };
+  return { svc: new CartService({ repositories: repos } as any, {} as any), repos };
 }
 
 describe('wishlist', () => {
@@ -179,7 +179,7 @@ describe('cart add', () => {
         },
         cartModel: { findOne: jest.fn() },
       };
-      return new CartService({ repositories: repos } as any);
+      return new CartService({ repositories: repos } as any, {} as any);
     };
     await expect(
       mk({ storeLive: false }).addToCart('u1', undefined, {

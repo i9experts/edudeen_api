@@ -32,6 +32,20 @@ export class CartController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Get('unified')
+  async getUnifiedCart(@Req() req: any, @Query('currency') currency?: string) {
+    const { userId } = req.user;
+    return this.cartService.getUnifiedCart(userId, typeof currency === 'string' ? currency : undefined);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('clear-all')
+  async clearAllCarts(@Req() req: any) {
+    const { userId } = req.user;
+    return this.cartService.clearAllCarts(userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get('get-cart')
   async getCart(@Req() req: any, @Query('storeId') storeId: string) {
     const { userId } = req.user;

@@ -43,9 +43,24 @@ d('FinanceService — concurrency on a real replica set', () => {
   const bal = async (storeId = 's1') => (await Balance.findOne({ storeId, currency: 'USD' }).lean()) as any;
 
   it('recordSale: 5 concurrent calls for one order credit the seller exactly once', async () => {
-    await settle(Array.from({ length: 5 }, () => service.recordSale('s1', 'seller1', 'order-1', 100, 'Sale', 0, null, 'USD', 'cash_on_delivery')));
+    await settle(Array.from({ length: 5 }, () => service.recordSale('s1', 'seller1', 'order-1', 100, 'Sale', 0, null, 'USD', 'cash_on_delivery', 'platform')));
     expect(await Tx.countDocuments({ storeId: 's1', type: 'sale', referenceId: 'order-1' })).toBe(1);
     expect((await bal()).pendingBalance).toBe(90); // 100 - 10% commission, once
+  });
+
+  it('recordSale, seller-collected COD: 5 concurrent markPaid/completed calls debit the commission exactly once', async () => {
+    // 'seller' / undefined fulfillment = the seller's courier collected the cash, so the sale is NOT credited.
+    await settle(
+      Array.from({ length: 5 }, (_, i) =>
+        service.recordSale('s1', 'seller1', 'order-cod-1', 100, 'Sale', 0, null, 'USD', 'cash_on_delivery', i % 2 ? 'seller' : undefined),
+      ),
+    );
+    expect(await Tx.countDocuments({ storeId: 's1', type: 'sale', referenceId: 'order-cod-1' })).toBe(0);
+    expect(await Tx.countDocuments({ storeId: 's1', type: 'fee', referenceId: 'order-cod-1' })).toBe(1);
+    const b = await bal();
+    expect(b.availableBalance).toBe(-10); // 10% commission, debited once — not -50
+    expect(b.pendingBalance).toBe(0);
+    expect(b.totalFees).toBe(10);
   });
 
   it('adminRejectPayout: 5 concurrent rejects refund the seller exactly once', async () => {

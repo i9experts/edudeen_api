@@ -883,7 +883,7 @@ export class StoreService {
   // body would let a seller un-suspend their own store (see
   // usersService.deleteSellerAccount, which suspends stores on delete).
   async updateStore(sellerId: string, storeId: string, body: any) {
-    const { name, logo, coverImage, description, tagline, contactEmail, contactPhone, sellerType, productTypes, codEnabled } = body;
+    const { name, logo, coverImage, description, tagline, contactEmail, contactPhone, sellerType, productTypes, codEnabled, fulfillmentMode } = body;
 
     if (!storeId) throw new BadRequestException('storeId is required');
 
@@ -958,6 +958,21 @@ export class StoreService {
     if (contactPhone !== undefined) updateData.contactPhone = contactPhone;
     if (sellerType !== undefined) updateData.sellerType = sellerType;
     if (codEnabled !== undefined) updateData.codEnabled = !!codEnabled;
+    if (fulfillmentMode !== undefined) {
+      if (fulfillmentMode !== 'seller' && fulfillmentMode !== 'platform') {
+        throw new BadRequestException("fulfillmentMode must be 'seller' or 'platform'");
+      }
+      // A seller can only ever choose to ship their own orders. Edudeen-fulfilled ('platform') is granted by
+      // an admin (PATCH /api/admin/marketplace/stores/:id/fulfillment-mode) because it makes the platform
+      // responsible for delivery and for collecting COD cash. Re-sending the store's current value (a form
+      // that submits every field) is not a change and is allowed.
+      if (fulfillmentMode === 'platform' && store.fulfillmentMode !== 'platform') {
+        throw new BadRequestException(
+          'Edudeen-fulfilled shipping can only be enabled by the Edudeen team. Contact support to request it.',
+        );
+      }
+      updateData.fulfillmentMode = fulfillmentMode; // affects NEW orders only (snapshotted per order)
+    }
 
     // Teacher profile shown on the store page and product pages.
     if (body.educatorProfile !== undefined) {

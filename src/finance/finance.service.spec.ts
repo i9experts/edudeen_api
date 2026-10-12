@@ -156,13 +156,11 @@ describe('FinanceService', () => {
       expect(balance.totalRevenue).toBe(100);
       expect(balance.totalFees).toBe(5);
       expect(balance.isFlaggedForReview).toBe(true);
-      const saleTx = txModel.created.find((t: any) => t.referenceId === 'order-cod' && t.type === 'sale');
-      expect(saleTx.metadata.collectedBy).toBe('seller');
-      expect(saleTx.status).toBe('completed');
+      expect(txModel.created.find((t: any) => t.referenceId === 'order-cod' && t.type === 'sale')).toBeUndefined(); // cash order: no sale credit row
       const feeTx = txModel.created.find((t: any) => t.referenceId === 'order-cod' && t.type === 'fee');
       expect(feeTx.amount).toBe(-5);
       expect(feeTx.metadata.processingFee).toBe(0);
-      expect(feeTx.description).toContain('Platform commission owed on cash order');
+      expect(feeTx.description).toContain('COD commission');
     });
 
     it('does not charge a card-processing fee for a manual bank-transfer sale either', async () => {

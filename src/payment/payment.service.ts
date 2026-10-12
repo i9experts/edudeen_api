@@ -22,6 +22,28 @@ import { orderPlacedEmail } from 'src/notifications/templates/notification-email
 import { getHostedProvider } from './providers/hosted-providers.registry';
 import type { HostedRedirect, VerifiedCallback } from './providers/payment-provider.types';
 
+/** Cash on Delivery is collected and confirmed per seller, so it only works when all of the
+ *  checkout's physical items come from ONE store. Enforced here as well as hidden in the
+ *  offered payment methods (CheckoutService.createCheckout) — the client is never trusted. */
+function assertSingleStoreForCod(physicalStoreIds: unknown[]) {
+  if (physicalStoreIds.length > 1) {
+    throw new BadRequestException(
+      'Cash on Delivery is only available when all physical items are from one store — please pay online, or check out one store at a time.',
+    );
+  }
+}
+
+/** The id of the Order that actually holds this store's items (a checkout yields up to two Orders —
+ *  digital and physical — and a gift card / reward voucher belongs to ONE store). Falls back to the
+ *  first Order only if no sub-order matches. */
+export function orderIdForStore(createdOrders: any[], storeId: string | null | undefined): string {
+  const match = storeId ? createdOrders.find((o: any) => (o.sellerOrders ?? []).some((so: any) => so.storeId === storeId)) : null;
+  return String((match ?? createdOrders[0])?._id ?? '');
+}
+
+/** Default cap on free orders one buyer may place in a rolling 24h (env FREE_ORDERS_PER_USER_PER_DAY overrides it). */
+export const DEFAULT_FREE_ORDERS_PER_USER_PER_DAY = 20;
+
 @Injectable()
 export class PaymentService {
   private stripe: InstanceType<typeof Stripe> | undefined;
@@ -216,6 +238,8 @@ export class PaymentService {
       }
     }
 
+    await this.assertStoresStillActive(checkout);
+
     // A mixed cart (physical + digital together) charges only the
     // digital-items subtotal online when the buyer picked 'split' — the
     // physical portion is then settled via COD once this payment succeeds
@@ -231,6 +255,7 @@ export class PaymentService {
     // this endpoint doesn't trust that client-side state alone.
     if (useSplit) {
       const physicalStoreIds = [...new Set(physicalItems.map((i: any) => i.storeId))];
+      assertSingleStoreForCod(physicalStoreIds);
       const codDisabledStores = await this.databaseService.repositories.storeModel
         .find({ _id: { $in: physicalStoreIds }, codEnabled: false })
         .select('name')
@@ -247,6 +272,14 @@ export class PaymentService {
     // summing, same rule as CheckoutService.convertedSubtotal, using this
     // checkout's own frozen fxSnapshots rather than a fresh rate.
     const chargeAmount = this.computeChargeAmount(checkout, useSplit ? 'digital_only' : 'full');
+    // Nothing to charge: Stripe rejects a 0 amount. A fully-free checkout has its own confirmation endpoint.
+    if (!(chargeAmount > 0)) {
+      throw new BadRequestException(
+        checkout.totalAmount === 0
+          ? 'This order is free — confirm it without a payment (free checkout).'
+          : 'There is nothing to pay online for this order — choose another payment option.',
+      );
+    }
     await this.assertGiftCardStillCovers(checkout);
     const paymentScope = useSplit ? 'digital_only' : 'full';
 
@@ -325,7 +358,13 @@ export class PaymentService {
       connectAccountId = await this.stripeConnectService.getEligibleConnectAccountForStore(checkoutStoreIds[0]);
       if (connectAccountId) {
         const { rate } = await this.commissionRulesService.resolveRate(checkoutStoreIds[0]);
-        applicationFeeAmountCents = Math.round(amountCents * rate);
+        // Commission is on the sale only — never on shipping. A seller-fulfilled store keeps
+        // the shipping line (no fee on it); on a platform-fulfilled store the platform keeps it
+        // (the whole shipping amount goes in the application fee).
+        const shippingCents = Math.min(amountCents, Math.round((checkout.shippingFee || 0) * 100));
+        const storeDoc: any = await this.databaseService.repositories.storeModel.findById(checkoutStoreIds[0]).select('fulfillmentMode').lean();
+        applicationFeeAmountCents =
+          Math.round((amountCents - shippingCents) * rate) + (storeDoc?.fulfillmentMode === 'platform' ? shippingCents : 0);
       }
     }
 
@@ -1073,28 +1112,60 @@ export class PaymentService {
     return { success: true, data: { status: 'pending', orders: [] } };
   }
 
+  /** Gift-card balance that paid for `items` (cancelled / refunded / returned from one sub-order) goes
+   *  back on the card: the buyer's refund covers only what they paid otherwise, so without this the
+   *  card's value would simply vanish. Idempotent per `refKey`; never throws (the buyer's money has
+   *  already moved by now) — a failure is logged for follow-up. */
+  async restoreGiftCardForItems(order: any, sellerOrder: any, items: any[], refKey: string) {
+    try {
+      if (!order.giftCardCode) return;
+      const share = this.round(items.reduce((sum: number, i: any) => sum + (i.giftCardDiscountUSD || 0), 0));
+      if (!(share > 0)) return;
+      // Item discounts are stored in the ORDER currency; the card is in its store's currency.
+      const cardCurrency = sellerOrder.settlementCurrency ?? order.currency;
+      const amount = this.exchangeRateService.convertWithSnapshots(share, order.currency, cardCurrency, (order.fxSnapshots as any) ?? []);
+      await this.giftCardsService.restoreBalance(sellerOrder.storeId, order.giftCardCode, amount, order.checkoutId, String(order._id), refKey);
+    } catch (err: any) {
+      await this.activityLogService
+        .log({
+          storeId: sellerOrder?.storeId ?? 'platform',
+          category: 'marketing',
+          action: 'gift_card_restore_failed',
+          description: `Could not restore gift card ${order.giftCardCode} for order ${order._id} (${refKey}): ${err?.message}`,
+          actorId: 'system',
+          actorRole: 'system',
+          isSecurityAlert: true,
+          targetId: String(order._id),
+          targetType: 'order',
+        })
+        .catch(() => undefined);
+    }
+  }
+
   // Remove ONLY the lines that were part of this checkout — a checkout created
   // from selected cart items must leave the unselected lines in the cart.
+  // Carts are one document per (user, store) and a checkout can span several
+  // stores, so the purchased lines are grouped by their own storeId and pulled
+  // from EACH store's cart. Idempotent ($pull of lines already gone is a no-op),
+  // so a webhook replay or retry cannot over-clean.
   private async removeCheckedOutItemsFromCart(
     userId: string,
     checkout: any,
     cartModel: any,
   ) {
-    const purchasedLines = (checkout.items as any[]).map((i: any) => ({
-      productId: i.productId,
-      productVariantId: i.variantId,
-    }));
-    if (purchasedLines.length === 0) return;
-
-    // Cart is store-scoped — pull the storeId off the checkout's own items
-    // (already carried per-item on CheckoutItem) rather than needing a new
-    // field, since every item in a checkout now belongs to one store.
-    const storeId = (checkout.items as any[])[0]?.storeId;
-
-    await cartModel.findOneAndUpdate(
-      { userId, storeId, status: 'active', isDelete: false },
-      { $pull: { items: { $or: purchasedLines } } },
-    );
+    const linesByStore = new Map<string, { productId: string; productVariantId: string }[]>();
+    for (const i of checkout.items as any[]) {
+      if (!i.storeId) continue;
+      const lines = linesByStore.get(i.storeId) ?? [];
+      lines.push({ productId: i.productId, productVariantId: i.variantId });
+      linesByStore.set(i.storeId, lines);
+    }
+    for (const [storeId, purchasedLines] of linesByStore) {
+      await cartModel.updateOne(
+        { userId, storeId, status: 'active', isDelete: false },
+        { $pull: { items: { $or: purchasedLines } } },
+      );
+    }
   }
 
   /** A gift card discount was computed when the code was applied; before we
@@ -1132,6 +1203,130 @@ export class PaymentService {
       { _id: checkoutId, status: { $ne: 'completed' } },
       { $set: { orderPlacementStartedAt: null } },
     );
+  }
+
+  /** A store can be suspended after a checkout was created. Every path that places an order or takes
+   *  money re-checks, so an order is never created for a store that is no longer live. */
+  private async assertStoresStillActive(checkout: any) {
+    const storeIds = [...new Set((checkout.items as any[]).map((i: any) => i.storeId))];
+    const live = await this.databaseService.repositories.storeModel
+      .find({ _id: { $in: storeIds }, status: 'active', isDelete: false })
+      .select('_id')
+      .lean();
+    const liveIds = new Set((live as any[]).map((s: any) => String(s._id)));
+    const gone = (checkout.items as any[]).find((i: any) => !liveIds.has(String(i.storeId)));
+    if (gone) {
+      throw new BadRequestException(
+        `"${gone.name}" is no longer available because the seller's store is not active — please remove it from your cart and start a new checkout.`,
+      );
+    }
+  }
+
+  /** The checkout's grand total recomputed from its own server-priced lines (each converted from its native
+   *  currency with the checkout's frozen FX snapshots) plus shipping — never read from the client. */
+  private recomputeCheckoutTotal(checkout: any): number {
+    const subtotal = (checkout.items as any[]).reduce(
+      (sum: number, i: any) =>
+        sum +
+        this.exchangeRateService.convertWithSnapshots(i.totalPrice, i.currency ?? checkout.currency, checkout.currency, (checkout.fxSnapshots as any) ?? []),
+      0,
+    );
+    return this.round(subtotal + (checkout.shippingFee || 0));
+  }
+
+  /**
+   * "Free" checkout: the grand total is exactly 0 after every discount (free resources, or a coupon / gift card /
+   * subsidy that covers everything) — no payment provider is involved. The server decides eligibility: the total is
+   * recomputed here from the checkout's own priced lines and must be 0; the request carries nothing but the id.
+   * Orders are created already paid (digital access is granted exactly as for a paid order), then the same
+   * bookkeeping as every other path runs: coupon / voucher usage, gift-card redemption, stock, cart cleanup.
+   * Guarded by an atomic per-checkout claim (a replay or double-tap places one order set) and a per-user daily cap.
+   */
+  async freeCheckout(userId: string, body: any) {
+    const { checkoutId } = body ?? {};
+    if (!checkoutId) throw new BadRequestException('checkoutId is required');
+
+    const { checkoutModel, paymentTransactionModel, orderModel, addressModel, productVariantModel, cartModel } =
+      this.databaseService.repositories;
+
+    const checkout = await checkoutModel.findOne({ _id: checkoutId, userId, isDelete: false });
+    if (!checkout) throw new NotFoundException('Checkout not found');
+    if (checkout.status === 'completed') throw new BadRequestException('Checkout already completed');
+    if (checkout.status === 'cancelled') throw new BadRequestException('Checkout is cancelled');
+    if (checkout.status === 'expired') throw new BadRequestException('Checkout has expired');
+    if (checkout.expiredAt && checkout.expiredAt < new Date()) {
+      await checkoutModel.findByIdAndUpdate(checkout._id, { status: 'expired' });
+      throw new BadRequestException('Checkout has expired');
+    }
+
+    // Eligibility is the server's call: both the stored total and a fresh recomputation from the lines must be 0.
+    if (!(Math.round(this.recomputeCheckoutTotal(checkout) * 100) === 0) || !(Math.round((checkout.totalAmount ?? 0) * 100) === 0)) {
+      throw new BadRequestException('This order is not free — please choose a payment method.');
+    }
+
+    await this.assertStoresStillActive(checkout);
+
+    // Re-price against the live catalogue: a seller who raised a price after this checkout was created
+    // must not hand the buyer the item at the old (free) price.
+    for (const item of checkout.items as any[]) {
+      const variant = await productVariantModel.findOne({ _id: item.variantId, isDelete: false });
+      if (!variant) throw new BadRequestException(`Item not available: ${item.name}`);
+      const listPrice = item.originalPrice ?? item.price;
+      if (variant.price > listPrice) {
+        throw new BadRequestException(`The price of "${item.name}" has changed — please start a new checkout.`);
+      }
+      if (item.type === 'physical' && !variant.unlimitedStock && variant.stock < item.quantity) {
+        throw new BadRequestException(`Insufficient stock for ${item.name}. Available: ${variant.stock}, required: ${item.quantity}`);
+      }
+    }
+    await this.assertGiftCardStillCovers(checkout);
+
+    // Abuse limit: free orders per buyer per rolling 24h. Counted on completed free transactions.
+    const dailyCap = Number(this.configService.get<string>('FREE_ORDERS_PER_USER_PER_DAY')) || DEFAULT_FREE_ORDERS_PER_USER_PER_DAY;
+    const placedToday = await paymentTransactionModel.countDocuments({
+      userId,
+      paymentType: 'free',
+      createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      isDelete: false,
+    });
+    if (placedToday >= dailyCap) {
+      throw new BadRequestException(`You have reached today's limit of ${dailyCap} free orders — please try again tomorrow.`);
+    }
+
+    await this.claimCheckoutForPlacement(checkoutId, userId);
+
+    let orders: any[];
+    try {
+      await checkoutModel.findByIdAndUpdate(checkoutId, { paymentType: 'free', status: 'payment_pending' });
+      const paid = { paymentType: 'free', isPaid: true };
+      orders = await this.createOrder(userId, checkout, orderModel, addressModel, paid, paid);
+    } catch (err) {
+      await this.releaseCheckoutPlacementClaim(checkoutId);
+      throw err;
+    }
+
+    await paymentTransactionModel.create({
+      userId,
+      checkoutId: checkout._id.toString(),
+      orderIds: orders.map((o: any) => o._id.toString()),
+      paymentType: 'free',
+      amount: 0,
+      currency: checkout.currency,
+      fxSnapshots: checkout.fxSnapshots,
+      status: 'completed',
+      stripePaymentIntentId: null,
+      stripeClientSecret: null,
+      paidAt: new Date(),
+    });
+
+    await checkoutModel.findByIdAndUpdate(checkoutId, { status: 'completed' });
+    await this.removeCheckedOutItemsFromCart(userId, checkout, cartModel);
+
+    return {
+      success: true,
+      message: 'Order placed successfully',
+      data: { orders: orders.map((o: any) => this.formatOrder(o)) },
+    };
   }
 
   async codPayment(userId: string, body: any) {
@@ -1175,6 +1370,7 @@ export class PaymentService {
     // Per-seller opt-out — a store can disable COD on its own listings.
     // No platform-wide order-value ceiling — COD is available for any amount.
     const storeIds = [...new Set(checkout.items.map((i: any) => i.storeId))];
+    assertSingleStoreForCod(storeIds);
     const codDisabledStores = await this.databaseService.repositories.storeModel
       .find({ _id: { $in: storeIds }, codEnabled: false })
       .select('name')
@@ -1191,6 +1387,8 @@ export class PaymentService {
       .select('stock unlimitedStock')
       .lean();
     const codVariantById = new Map<string, any>((codVariants as any[]).map((v: any) => [String(v._id), v]));
+    await this.assertStoresStillActive(checkout);
+
     for (const item of checkout.items) {
       const variant = codVariantById.get(String(item.variantId));
       if (!variant)
@@ -1281,6 +1479,10 @@ export class PaymentService {
       throw new BadRequestException('Checkout has expired');
     }
 
+    if (!(checkout.totalAmount > 0)) {
+      throw new BadRequestException('There is nothing to pay for this order — if it is free, confirm it without a payment.');
+    }
+    await this.assertStoresStillActive(checkout);
     // The buyer pays the seller's own account — the seller must have set one up.
     const payStore = await storeModel.findById(checkout.items?.[0]?.storeId).select('directPayment').lean<{ directPayment?: DirectPaymentDetails | null }>();
     if (!hasDirectPayment(payStore?.directPayment)) {
@@ -1548,9 +1750,21 @@ export class PaymentService {
     const allStoreIds = [...new Set(checkout.items.map((i: any) => i.storeId))] as string[];
     const storesById = new Map(
       (
-        await storeModel.find({ _id: { $in: allStoreIds } }).select('baseCurrency').lean()
+        await storeModel.find({ _id: { $in: allStoreIds } }).select('baseCurrency fulfillmentMode').lean()
       ).map((s: any) => [s._id.toString(), s]),
     );
+
+    // Each store with physical items has its own shipping line on the checkout
+    // (CheckoutService.addShippingInCheckout). A checkout created before per-store
+    // shipping existed has none: it was single-store by construction, so the whole
+    // flat fee belongs to that one store.
+    const shippingByStoreId = new Map<string, number>(
+      ((checkout.shippingByStore as any[]) ?? []).map((l: any) => [l.storeId, l.fee ?? 0] as [string, number]),
+    );
+    if (shippingByStoreId.size === 0 && (checkout.shippingFee || 0) > 0) {
+      const firstPhysicalStore = physicalItems[0]?.storeId;
+      if (firstPhysicalStore) shippingByStoreId.set(firstPhysicalStore, checkout.shippingFee);
+    }
 
     // --- helper: ek type ke items ko store-wise sellerOrders me ---
     const buildSellerOrders = (items: any[]) => {
@@ -1589,12 +1803,29 @@ export class PaymentService {
         // and back again just to arrive at the same number.
         const settlementAmount = this.round(subtotalNative + platformSponsoredDiscountUSDNative);
         const isConnectSettled = connectInfo?.storeId === sellerStoreId;
+        // This store's own shipping line: in the order's currency, and in the
+        // seller's settlement currency (what a seller-fulfilled store is credited).
+        const lineFeeInCheckoutCurrency = storeItems[0].type === 'physical' ? (shippingByStoreId.get(sellerStoreId) ?? 0) : 0;
+        const sellerShippingFee = convFrom(lineFeeInCheckoutCurrency, checkout.currency) ?? 0;
+        let settlementShippingFee = 0;
+        if (lineFeeInCheckoutCurrency > 0) {
+          try {
+            settlementShippingFee = this.exchangeRateService.convertWithSnapshots(lineFeeInCheckoutCurrency, checkout.currency, settlementCurrency, fxSnapshots);
+          } catch (err: any) {
+            console.error('Shipping settlement conversion failed:', err?.message, { storeId: sellerStoreId });
+          }
+        }
         return {
           sellerId: storeItems[0].sellerId,
           storeId: storeItems[0].storeId,
           fulfillmentType: storeItems[0].type, // 'physical' ya 'digital'
+          // Snapshot of who ships this sub-order (Store.fulfillmentMode now, not whenever it is read later).
+          // Digital sub-orders ship nothing, so they carry none.
+          fulfillmentMode: storeItems[0].type === 'physical' ? (storesById.get(sellerStoreId)?.fulfillmentMode ?? 'seller') : null,
           settlementCurrency,
           settlementAmount,
+          shippingFee: sellerShippingFee,
+          settlementShippingFee,
           settledViaConnect: isConnectSettled,
           stripeConnectedAccountId: isConnectSettled ? connectInfo!.accountId : null,
           items: storeItems.map((i) => ({
@@ -1656,7 +1887,8 @@ export class PaymentService {
       // CheckoutService.addShippingInCheckout) — convert it into
       // orderCurrency the same way (a no-op when they're the same, as in
       // every case except manual-bank-transfer).
-      const shippingFee = convFrom(checkout.shippingFee || 0, checkout.currency) ?? 0;
+      // The order's shipping is the sum of its sub-orders' own lines.
+      const shippingFee = this.round(sellerOrders.reduce((sum: number, so: any) => sum + (so.shippingFee ?? 0), 0));
       const subscriberDiscountTotal = convertedSum(physicalItems, 'subscriberDiscountUSD');
       const couponDiscountTotal = convertedSum(physicalItems, 'couponDiscountUSD');
       const giftCardDiscountTotal = convertedSum(physicalItems, 'giftCardDiscountUSD');
@@ -1782,7 +2014,7 @@ export class PaymentService {
       if (checkout.couponSourceType === 'reward_voucher') {
         await this.databaseService.repositories.rewardVoucherModel.updateOne(
           { storeId: checkout.couponStoreId, code: checkout.couponCode, status: 'active' },
-          { status: 'used', usedAt: new Date(), checkoutId: String(checkout._id), orderId: String(createdOrders[0]?._id ?? '') },
+          { status: 'used', usedAt: new Date(), checkoutId: String(checkout._id), orderId: orderIdForStore(createdOrders, checkout.couponStoreId) },
         );
       } else {
         const couponFilter = checkout.couponStoreId
@@ -1825,7 +2057,7 @@ export class PaymentService {
         checkout.giftCardCode,
         checkout.giftCardDiscountTotalUSD,
         String(checkout._id),
-        String(createdOrders[0]?._id ?? ''),
+        orderIdForStore(createdOrders, checkout.giftCardStoreId),
       );
     }
 

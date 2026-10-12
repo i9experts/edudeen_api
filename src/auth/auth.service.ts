@@ -49,6 +49,8 @@ export class AuthService {
 
   /** Seller logins/edits are logged against their store's activity feed; users/admins have no store to attach to. */
   private static readonly MAX_OTP_ATTEMPTS = 5;
+  /** Lifetime of a password-reset code (see forgotPassword). */
+  private static readonly OTP_TTL_SECONDS = 5 * 60;
 
   /** Cryptographically secure 6-digit code (Math.random is predictable). */
   private static generateOtp(): string {
@@ -70,27 +72,65 @@ export class AuthService {
     return new InternalServerErrorException(context);
   }
 
+  /** Reset-password for an email with no account must be indistinguishable from a real account, attempt by attempt
+   *  (forgot-password answers the same for both, so this is the only place the difference could show). A Redis marker
+   *  stands in for "a code was issued" (set by forgotPassword, lifetime = the OTP's) and a counter for the attempts:
+   *  no pending code → OTP_EXPIRED; wrong tries count down 4..1; the 5th burns it (OTP_LOCKED); then it is gone
+   *  (OTP_EXPIRED) — exactly the sequence checkOtp produces for a real account. Without Redis it degrades to a constant
+   *  first-attempt answer. */
+  private async failUnknownAccountOtp(role: string, email: string): Promise<never> {
+    const max = AuthService.MAX_OTP_ATTEMPTS;
+    if (!this.redisService.isConnected) {
+      throw AuthService.otpError('Invalid OTP', 'OTP_INVALID', { attemptsLeft: max - 1 });
+    }
+    const id = `${role}:${String(email).toLowerCase()}`;
+    const pendingKey = `otp-sim:pending:${id}`;
+    const attemptsKey = `otp-sim:attempts:${id}`;
+    if (!(await this.redisService.get(pendingKey))) {
+      throw AuthService.otpError('OTP has expired, please request a new one', 'OTP_EXPIRED');
+    }
+    const n = await this.redisService.incrWithTtl(attemptsKey, AuthService.OTP_TTL_SECONDS);
+    if (n >= max) {
+      await this.redisService.del(pendingKey);
+      await this.redisService.del(attemptsKey);
+      throw AuthService.otpError('Invalid OTP', 'OTP_LOCKED');
+    }
+    throw AuthService.otpError('Invalid OTP', 'OTP_INVALID', { attemptsLeft: max - n });
+  }
+
+  /** An OTP failure: same HTTP status (401) and message as ever, plus a machine-readable `code` so the app does
+   *  not have to string-match the message, and optionally `attemptsLeft`. */
+  private static otpError(message: string, code: 'OTP_INVALID' | 'OTP_EXPIRED' | 'OTP_LOCKED', extra: Record<string, unknown> = {}) {
+    return new UnauthorizedException({ statusCode: 401, message, error: 'Unauthorized', code, ...extra });
+  }
+
   /** Validates an OTP against the account and burns it after
    *  MAX_OTP_ATTEMPTS wrong tries — the per-IP throttle alone does not stop
-   *  a distributed brute force of a 6-digit code. */
+   *  a distributed brute force of a 6-digit code.
+   *  Failures carry `code`: OTP_EXPIRED (none issued / past its time), OTP_INVALID (wrong, with `attemptsLeft`),
+   *  OTP_LOCKED (the attempt that burned the code, or any attempt on a code already out of tries). */
   private async checkOtp(user: any, otp: string): Promise<void> {
     if (!user.otp || !user.otpExpiresAt || new Date() > user.otpExpiresAt) {
-      throw new UnauthorizedException('OTP has expired, please request a new one');
+      throw AuthService.otpError('OTP has expired, please request a new one', 'OTP_EXPIRED');
     }
     if ((user.otpAttempts ?? 0) >= AuthService.MAX_OTP_ATTEMPTS) {
-      throw new UnauthorizedException('Too many wrong attempts, please request a new OTP');
+      throw AuthService.otpError('Too many wrong attempts, please request a new OTP', 'OTP_LOCKED');
     }
     const a = Buffer.from(AuthService.hashOtp(otp));
     const b = Buffer.from(String(user.otp));
     const ok = a.length === b.length && timingSafeEqual(a, b);
     if (!ok) {
       user.otpAttempts = (user.otpAttempts ?? 0) + 1;
-      if (user.otpAttempts >= AuthService.MAX_OTP_ATTEMPTS) {
+      const burned = user.otpAttempts >= AuthService.MAX_OTP_ATTEMPTS;
+      if (burned) {
         user.otp = null;
         user.otpExpiresAt = null;
       }
       await user.save();
-      throw new UnauthorizedException('Invalid OTP');
+      if (burned) throw AuthService.otpError('Invalid OTP', 'OTP_LOCKED');
+      throw AuthService.otpError('Invalid OTP', 'OTP_INVALID', {
+        attemptsLeft: AuthService.MAX_OTP_ATTEMPTS - user.otpAttempts,
+      });
     }
   }
 
@@ -733,7 +773,7 @@ export class AuthService {
       // would look from the outside.
       if (user) {
         const otp = AuthService.generateOtp();
-        const otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+        const otpExpiresAt = new Date(Date.now() + AuthService.OTP_TTL_SECONDS * 1000); // 5 minutes
 
         user.otp = AuthService.hashOtp(otp);
         user.otpExpiresAt = otpExpiresAt;
@@ -741,6 +781,12 @@ export class AuthService {
         await user.save();
 
         await this.otpService.sendOtp(user.email, otp);
+      } else {
+        // Nothing to send, but remember that a code was "issued" so a later reset-password attempt for this email
+        // behaves like a real account's (see failUnknownAccountOtp).
+        const id = `${role}:${String(email).toLowerCase()}`;
+        await this.redisService.set(`otp-sim:pending:${id}`, '1', AuthService.OTP_TTL_SECONDS);
+        await this.redisService.del(`otp-sim:attempts:${id}`);
       }
 
       return {
@@ -778,8 +824,8 @@ export class AuthService {
 
       const user = await userModel.findOne({ email });
       if (!user) {
-        // Same generic failure as a wrong code — don't confirm which emails exist.
-        throw new UnauthorizedException('Invalid OTP');
+        // Same failure sequence as a real account — don't confirm which emails exist.
+        return await this.failUnknownAccountOtp(role, email);
       }
 
       await this.checkOtp(user, otp);

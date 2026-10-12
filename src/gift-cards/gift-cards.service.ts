@@ -316,6 +316,45 @@ export class GiftCardsService {
     });
   }
 
+  /** Puts back the part of a gift card's balance that paid for items which were then cancelled /
+   *  refunded / returned (the buyer's money refund covers only what they paid by other means).
+   *
+   *  - Atomic and idempotent per `refKey`: one update both adds the amount and records the key,
+   *    so a retried request (or two racing ones) can credit the card only once.
+   *  - Never restores more than was actually taken from the card for this checkout (a redemption
+   *    clamped by a low balance restores only what really left the card), and never past the
+   *    card's initial value. */
+  async restoreBalance(storeId: string, code: string, amount: number, checkoutId: string, orderId: string, refKey: string) {
+    const want = Math.round(amount * 100) / 100;
+    if (!(want > 0)) return { restored: 0 };
+
+    const redeemed = await this.r.giftCardTransactionModel.find({ storeId, checkoutId, type: 'redeem' }).lean();
+    const priorRestores = await this.r.giftCardTransactionModel.find({ storeId, checkoutId, type: 'refund' }).lean();
+    const taken = (redeemed as any[]).reduce((sum, t) => sum - t.amount, 0);
+    const restoredBefore = (priorRestores as any[]).reduce((sum, t) => sum + t.amount, 0);
+    const restore = Math.round(Math.min(want, Math.max(0, taken - restoredBefore)) * 100) / 100;
+    if (!(restore > 0)) return { restored: 0 };
+
+    const before = await this.r.giftCardModel.findOneAndUpdate(
+      { storeId, code: code.toUpperCase(), restoredRefKeys: { $ne: refKey } },
+      [{
+        $set: {
+          balance: { $min: ['$initialValue', { $round: [{ $add: ['$balance', restore] }, 2] }] },
+          restoredRefKeys: { $concatArrays: [{ $ifNull: ['$restoredRefKeys', []] }, [refKey]] },
+        },
+      }],
+      { returnDocument: 'before', updatePipeline: true },
+    );
+    if (!before) return { restored: 0 }; // this refKey was already applied (or the card is gone)
+
+    const balanceAfter = Math.min(before.initialValue, Math.round((before.balance + restore) * 100) / 100);
+    await this.r.giftCardTransactionModel.create({
+      storeId, giftCardId: String(before._id), type: 'refund', amount: restore, balanceAfter, checkoutId, orderId,
+      description: `Restored — cancelled/refunded items (${refKey})`,
+    });
+    return { restored: restore };
+  }
+
   private async createGiftCardRecord(opts: {
     storeId: string; currency: string; value: number; issuedBy: 'purchase' | 'manual';
     issuedByUserId: string | null; purchaserUserId: string | null; recipientEmail: string | null;

@@ -5,7 +5,7 @@ import { IsDateString, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class
 
 export const TRANSACTION_TYPES = ['sale', 'payout', 'fee', 'refund', 'adjustment'] as const;
 export const TRANSACTION_STATUSES = ['completed', 'pending', 'failed'] as const;
-export const TRANSACTION_PAYMENT_METHOD_TYPES = ['stripe', 'cash_on_delivery', 'manual_bank_transfer'] as const;
+export const TRANSACTION_PAYMENT_METHOD_TYPES = ['stripe', 'cash_on_delivery', 'manual_bank_transfer', 'free'] as const;
 
 export class AdminTransactionsQueryDto {
   @ApiProperty({ required: false, enum: TRANSACTION_TYPES })

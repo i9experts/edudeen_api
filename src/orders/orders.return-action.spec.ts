@@ -22,9 +22,13 @@ function build(opts: { currency?: string; settlement?: string; paymentType?: str
     paymentTransactionModel: { findOne: jest.fn().mockResolvedValue({ amount: 28000, amountRefunded: 0, stripePaymentIntentId: 'pi_1' }) },
   };
   const finance: any = { recordRefund: jest.fn().mockResolvedValue(undefined) };
+  // The services now go through recordRefundForSellerOrder; for non-COD orders it is exactly recordRefund.
+  finance.recordRefundForSellerOrder = jest.fn((a: any) =>
+    finance.recordRefund(a.storeId, a.sellerId, a.orderId, a.sellerDebitAmount, a.actorId, a.actorRole, { description: a.description, targetType: a.targetType, currency: a.currency }),
+  );
   const activity: any = { log: jest.fn().mockResolvedValue(undefined) };
   const loyalty: any = { clawbackPurchasePoints: jest.fn().mockResolvedValue(undefined) };
-  const payment: any = { refundStripePaymentIntent: jest.fn().mockResolvedValue({ id: 're_1' }) };
+  const payment: any = { refundStripePaymentIntent: jest.fn().mockResolvedValue({ id: 're_1' }), restoreGiftCardForItems: jest.fn().mockResolvedValue(undefined) };
   const fx: any = { convertWithSnapshots: jest.fn((amt: number, from: string, to: string) => (from === 'PKR' && to === 'USD' ? amt / 280 : amt)) };
   const svc = new OrdersService({ repositories: repos } as any, {} as any, {} as any, {} as any, finance, activity, loyalty, {} as any, {} as any, payment, fx);
   return { svc, orderModel, variants, finance, activity, payment, fx };
