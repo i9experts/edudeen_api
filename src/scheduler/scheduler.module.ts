@@ -11,9 +11,10 @@ import { AdminMarketingModule } from '../admin-marketing/admin-marketing.module'
 import { PromotionsModule } from '../promotions/promotions.module';
 import { ExchangeRateModule } from '../exchange-rate/exchange-rate.module';
 import { AdminFinanceModule } from '../admin-finance/admin-finance.module';
+import { BannersModule } from '../banner/banner.module';
 
 @Module({
-  imports: [ScheduleModule.forRoot(), SubscriptionsModule, FinanceModule, RedisModule, SeoModule, AdminMarketingModule, PromotionsModule, ExchangeRateModule, AdminFinanceModule, AiStudioModule],
+  imports: [ScheduleModule.forRoot(), SubscriptionsModule, FinanceModule, RedisModule, SeoModule, AdminMarketingModule, PromotionsModule, ExchangeRateModule, AdminFinanceModule, AiStudioModule, BannersModule],
   providers: [SchedulerService],
 })
 export class SchedulerModule {}

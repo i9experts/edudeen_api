@@ -22,9 +22,19 @@ const HERO_MAX_DIMENSION = 2560;
 // reject rather than silently store a source that will always look soft.
 const HERO_MIN_SOURCE_WIDTH = 1280;
 
-/** A row is "visible" whether it was migrated to the new `status` field or is a
+/** A row is "visible" when it is active and not past its end, OR scheduled and its start time has arrived (so a
+ * scheduled banner goes live on time even before the minute-cron flips its stored status), OR it is a
  * pre-migration legacy row that only ever had `isActive`. */
-const VISIBLE_FILTER = { $or: [{ status: 'active' }, { status: { $exists: false }, isActive: true }] };
+function visibleFilter(now = new Date()) {
+  const notEnded = { $or: [{ endAt: null }, { endAt: { $gte: now } }] };
+  return {
+    $or: [
+      { status: 'active', ...notEnded },
+      { status: 'scheduled', startAt: { $lte: now }, ...notEnded },
+      { status: { $exists: false }, isActive: true },
+    ],
+  };
+}
 
 /** Matches both the new multi-placement `placements` array and the legacy
  * scalar `placement` field (pre-migration rows have an empty `placements`
@@ -62,7 +72,7 @@ export class BannersService {
   // post-migration. Placement-aware pages opt in explicitly.
 
   async findAll(placement?: PromotionPlacement) {
-    const filter: Record<string, unknown> = { ...VISIBLE_FILTER };
+    const filter: Record<string, unknown> = { ...visibleFilter() };
     if (placement) filter.$and = [placementMatch(placement)];
 
     let query = this.bannerModel.find(filter).sort({ order: 1, createdAt: 1 });
@@ -75,10 +85,39 @@ export class BannersService {
     return { success: true, count: banners.length, data: banners };
   }
 
+  // ── GET ALL (admin) — every status (draft / scheduled / live / paused / expired), with a computed `live` flag ──
+
+  async findAllForAdmin() {
+    const now = Date.now();
+    const banners = await this.bannerModel.find({}).sort({ order: 1, createdAt: 1 }).lean();
+    const data = banners.map((b: any) => {
+      const started = !b.startAt || new Date(b.startAt).getTime() <= now;
+      const notEnded = !b.endAt || new Date(b.endAt).getTime() >= now;
+      const live = (b.status === 'active' && notEnded) || (b.status === 'scheduled' && started && notEnded) || (b.status === undefined && b.isActive === true);
+      return { ...b, live };
+    });
+    return { success: true, count: data.length, data };
+  }
+
+  // ── SCHEDULE TICK (cron, every minute) — scheduled -> active when the start time arrives; active/scheduled -> expired past endAt ──
+
+  async runScheduleTick(now = new Date()) {
+    const notEnded = { $or: [{ endAt: null }, { endAt: { $gte: now } }] };
+    const activated = await this.bannerModel.updateMany(
+      { status: 'scheduled', startAt: { $lte: now }, ...notEnded },
+      { $set: { status: 'active', isActive: true } },
+    );
+    const expired = await this.bannerModel.updateMany(
+      { status: { $in: ['active', 'scheduled'] }, endAt: { $lt: now } },
+      { $set: { status: 'expired', isActive: false } },
+    );
+    return { activated: activated.modifiedCount ?? 0, expired: expired.modifiedCount ?? 0 };
+  }
+
   // ── GET COUNT (admin) ──────────────────────────────────────────────────────
 
   async getCount(placement: PromotionPlacement = DEFAULT_PLACEMENT) {
-    const count = await this.bannerModel.countDocuments({ ...VISIBLE_FILTER, $and: [placementMatch(placement)] });
+    const count = await this.bannerModel.countDocuments({ ...visibleFilter(), $and: [placementMatch(placement)] });
     const max = await this.adminConfigService.getPlacementLimit(placement);
 
     return {
@@ -94,7 +133,7 @@ export class BannersService {
 
     const placements = dto.placements?.length ? dto.placements : [dto.placement ?? DEFAULT_PLACEMENT];
     const placement = placements[0];
-    const status = computeInitialStatus(dto.startAt, dto.endAt);
+    const status: BannerStatus = dto.saveAsDraft ? 'draft' : computeInitialStatus(dto.startAt, dto.endAt);
 
     // Re-host through Cloudinary rather than trusting the pasted URL as-is —
     // an admin can paste any external image (e.g. a search-result thumbnail),
@@ -181,7 +220,8 @@ export class BannersService {
     const banner = await this.bannerModel.findById(bannerId);
     if (!banner) throw new NotFoundException('Banner not found');
 
-    const set: Record<string, unknown> = { ...dto };
+    const { saveAsDraft, ...rest } = dto;
+    const set: Record<string, unknown> = { ...rest };
     // Keep the legacy scalar `placement` in sync as `placements[0]` whenever
     // the multi-select array is what actually changed.
     if (dto.placements?.length) {
@@ -191,8 +231,14 @@ export class BannersService {
     // Keep `isActive` in sync for any code still reading it directly, whenever
     // this write changes the schedule (status itself is set explicitly via
     // pause/resume, not through this generic update).
-    if (dto.startAt !== undefined || dto.endAt !== undefined) {
-      const status = computeInitialStatus(dto.startAt as string | undefined, dto.endAt as string | undefined);
+    if (dto.startAt !== undefined || dto.endAt !== undefined || saveAsDraft !== undefined) {
+      // Effective schedule = what this request sends (null clears it), else what is stored.
+      const start = dto.startAt !== undefined ? dto.startAt : banner.startAt?.toISOString();
+      const end = dto.endAt !== undefined ? dto.endAt : banner.endAt?.toISOString();
+      let status: BannerStatus;
+      if (saveAsDraft === true) status = 'draft';
+      else if (banner.status === 'paused' && saveAsDraft !== false) status = 'paused';
+      else status = computeInitialStatus(start ?? undefined, end ?? undefined);
       set.status = status;
       set.isActive = status === 'active';
     }

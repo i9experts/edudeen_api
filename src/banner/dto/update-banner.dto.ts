@@ -19,12 +19,12 @@ export class UpdateBannerDto {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsDateString()
-  startAt?: string;
+  startAt?: string | null;
 
   @ApiProperty({ required: false })
   @IsOptional()
   @IsDateString()
-  endAt?: string;
+  endAt?: string | null;
 
   @ApiProperty({ required: false, example: 'https://res.cloudinary.com/demo/image/upload/banner.jpg' })
   @IsOptional()
@@ -42,6 +42,11 @@ export class UpdateBannerDto {
   @IsNumber()
   @Min(0)
   order?: number;
+
+  @ApiProperty({ required: false, description: 'Save without publishing: the banner stays a draft (never shown) until published.' })
+  @IsOptional()
+  @IsBoolean()
+  saveAsDraft?: boolean;
 
   @ApiProperty({ required: false, example: true })
   @IsOptional()

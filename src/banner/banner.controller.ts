@@ -45,6 +45,15 @@ export class BannersController {
     return this.bannersService.findAll(placement);
   }
 
+  // GET every banner in every state — admin only (the public GET above only returns what is live)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @ApiBearerAuth()
+  @Get('admin/all')
+  findAllForAdmin() {
+    return this.bannersService.findAllForAdmin();
+  }
+
   // GET banner count — admin only
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')

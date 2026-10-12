@@ -15,6 +15,7 @@ import { SeoMonitoringService } from 'src/seo/services/seo-monitoring.service';
 import { SeoAuditService } from 'src/seo/services/seo-audit.service';
 import { AdminMarketingService } from 'src/admin-marketing/admin-marketing.service';
 import { PromotionsService } from 'src/promotions/promotions.service';
+import { BannersService } from 'src/banner/banner.service';
 import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { AdminFinanceService } from 'src/admin-finance/admin-finance.service';
@@ -38,6 +39,7 @@ export class SchedulerService {
     private readonly seoAuditService: SeoAuditService,
     private readonly adminMarketingService: AdminMarketingService,
     private readonly promotionsService: PromotionsService,
+    private readonly bannersService: BannersService,
     private readonly exchangeRateService: ExchangeRateService,
     private readonly activityLogService: ActivityLogService,
     private readonly adminFinanceService: AdminFinanceService,
@@ -189,6 +191,15 @@ export class SchedulerService {
       if (result.activated > 0 || result.expired > 0) {
         this.logger.log(`Promotions: ${result.activated} activated, ${result.expired} expired, ${result.expiringSoonNotified} expiring-soon notices sent`);
       }
+    });
+  }
+
+  // Admin banners with a start/end schedule: go live when the start time arrives, expire after the end time.
+  @Cron('* * * * *')
+  async tickBanners() {
+    await this.runLocked('banner-schedule', 50_000, async () => {
+      const r = await this.bannersService.runScheduleTick();
+      if (r.activated > 0 || r.expired > 0) this.logger.log(`Banners: ${r.activated} went live, ${r.expired} expired`);
     });
   }
 
