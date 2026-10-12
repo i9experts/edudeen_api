@@ -11,6 +11,7 @@
  *        --from old@example.com --to new@example.com            # shows what would change
  *   node --env-file=.env --experimental-strip-types src/scripts/change-admin-email.ts \
  *        --from old@example.com --to new@example.com --apply    # performs the change
+ * Optional: --name "New Name" also sets the display name; with --name and no --to only the name changes.
  *
  * Afterwards the admin signs in with the new email and the SAME password. Existing sessions keep working
  * (tokens are tied to the admin id); log out and in again to see the new email.
@@ -25,14 +26,16 @@ function arg(name: string): string | undefined {
 async function run() {
   const from = arg('from')?.toLowerCase().trim();
   const to = arg('to')?.toLowerCase().trim();
+  const newName = arg('name')?.trim();
   const apply = process.argv.includes('--apply');
   const uri = process.env.MONGO_URI;
 
-  if (!from || !to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
-    console.error('Usage: --from <old email> --to <new email> [--apply]');
+  const changingEmail = !!to;
+  if (!from || (!changingEmail && !newName) || (changingEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to!))) {
+    console.error('Usage: --from <current email> [--to <new email>] [--name <display name>] [--apply]');
     process.exit(1);
   }
-  if (from === to) { console.error('Old and new email are the same.'); process.exit(1); }
+  if (changingEmail && from === to) { console.error('Old and new email are the same.'); process.exit(1); }
   if (!uri) { console.error('MONGO_URI is not set'); process.exit(1); }
 
   await mongoose.connect(uri);
@@ -46,7 +49,7 @@ async function run() {
     await mongoose.disconnect();
     process.exit(1);
   }
-  const clash = await admins.countDocuments({ email: to });
+  const clash = changingEmail ? await admins.countDocuments({ email: to }) : 0;
   if (clash > 0) {
     console.error(`Another admin already uses "${to}". Nothing changed (no duplicate admins are created).`);
     await mongoose.disconnect();
@@ -55,15 +58,16 @@ async function run() {
 
   const target = matches[0];
   console.log(`Admin to update: _id=${String(target._id)} name=${target.name ?? '-'} role=${target.role ?? 'admin'}`);
-  console.log(`Email: ${from}  ->  ${to}`);
+  if (changingEmail) console.log(`Email: ${from}  ->  ${to}`);
+  if (newName) console.log(`Name: ${target.name ?? '-'}  ->  ${newName}`);
   if (!apply) {
     console.log('DRY RUN - nothing written. Re-run with --apply to perform the change.');
     await mongoose.disconnect();
     return;
   }
 
-  const res = await admins.updateOne({ _id: target._id, email: from }, { $set: { email: to, updatedAt: new Date() } });
-  console.log(res.modifiedCount === 1 ? 'Done: email updated (password, role and all other fields unchanged).' : 'No document was modified.');
+  const res = await admins.updateOne({ _id: target._id, email: from }, { $set: { ...(changingEmail ? { email: to } : {}), ...(newName ? { name: newName } : {}), updatedAt: new Date() } });
+  console.log(res.modifiedCount === 1 ? 'Done: updated (password, role and all other fields unchanged).' : 'No document was modified.');
   await mongoose.disconnect();
 }
 
