@@ -79,6 +79,15 @@ export class SchedulerService {
     }
   }
 
+  // Every 5 minutes — finishes seller credits whose recordSale failed (durable sale_credit_jobs outbox).
+  @Cron('*/5 * * * *')
+  async retrySaleCreditJobs() {
+    await this.runLocked('sale-credit-retry', 4 * 60_000, async () => {
+      const r = await this.financeService.processDueCreditJobs();
+      if (r.processed > 0) this.logger.log(`Sale-credit retries: ${r.processed} processed, ${r.succeeded} credited, ${r.failed} still failing`);
+    });
+  }
+
   @Cron('* * * * *')
   async activateScheduledProducts() {
     await this.runLocked('activate-scheduled-products', 50_000, async () => {

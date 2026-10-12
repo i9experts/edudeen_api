@@ -38,6 +38,14 @@ export class AdminFinanceService {
     return this.db.repositories;
   }
 
+  async listCreditJobs(query: { status?: string; page?: number; limit?: number }) {
+    return { success: true, data: await this.financeService.listCreditJobs(query) };
+  }
+
+  async retryCreditJob(id: string, adminId: string, ip?: string, userAgent?: string) {
+    return { success: true, data: await this.financeService.retryCreditJob(id, adminId, ip, userAgent) };
+  }
+
   private async cached<T>(cacheKey: string, compute: () => Promise<T>): Promise<T> {
     return withAnalyticsCache(this.redis, cacheKey, CACHE_TTL_SECONDS, compute);
   }

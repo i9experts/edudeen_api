@@ -58,6 +58,7 @@ import { DatabaseService } from './databaseservice';
       { name: schema.PayoutMethod.name, schema: schema.PayoutMethodSchema },
       { name: schema.PayoutSchedule.name, schema: schema.PayoutScheduleSchema },
       { name: schema.TaxReport.name, schema: schema.TaxReportSchema },
+      { name: schema.SaleCreditJob.name, schema: schema.SaleCreditJobSchema },
       {
         name: schema.SubscriptionPlan.name,
         schema: schema.SubscriptionPlanSchema,

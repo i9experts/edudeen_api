@@ -64,6 +64,15 @@ export function shippingCreditFor(
   return sellerOrder.settlementShippingFee ?? 0;
 }
 
+export const SALE_CREDIT_MAX_ATTEMPTS = 10;
+
+/** Everything recordSale needs — also the payload stored on the sale-credit job. */
+export interface SaleCreditArgs {
+  storeId: string; sellerId: string; orderId: string; saleAmount: number; description: string;
+  platformSponsoredUSD?: number; campaignId?: string | null; currency?: string; paymentMethodType?: string;
+  fulfillmentMode?: string | null; shippingCredit?: number; feeItems?: FeeItem[]; fxSnapshots?: any[];
+}
+
 /** One sold line, as the platform-fee computation needs it. `type` is the order item's fulfilment type
  *  ('physical' or 'digital' — educational/course items are stored as 'digital'). */
 export interface FeeItem { type: string; totalPrice: number; quantity: number }
@@ -364,15 +373,26 @@ export class FinanceService {
       };
     }));
 
+    const feeBreakdown = {
+      marketplaceListingFee: 'Free',
+      transactionFee: `${(commissionRate.rate * 100).toFixed(2)}% per sale`,
+      transactionFeeSource: commissionRate.source,
+      paymentProcessing: `${PAYMENT_PROCESSING_RATE * 100}% + $${PAYMENT_PROCESSING_FIXED} (card payments only — not charged for COD or bank transfer)`,
+      digitalDelivery: 'Included',
+      aiCredits: '750 / month',
+    };
     return {
       wallets,
-      feeBreakdown: {
-        marketplaceListingFee: 'Free',
-        transactionFee: `${(commissionRate.rate * 100).toFixed(2)}% per sale`,
-        transactionFeeSource: commissionRate.source,
-        paymentProcessing: `${PAYMENT_PROCESSING_RATE * 100}% + $${PAYMENT_PROCESSING_FIXED} (card payments only — not charged for COD or bank transfer)`,
-        digitalDelivery: 'Included',
-        aiCredits: '750 / month',
+      // Old name kept as an alias so existing clients keep working.
+      feeBreakdown,
+      platformFeeRate: commissionRate.rate,
+      platformFeeBreakdown: {
+        marketplaceListingFee: feeBreakdown.marketplaceListingFee,
+        platformFee: feeBreakdown.transactionFee,
+        platformFeeSource: feeBreakdown.transactionFeeSource,
+        paymentProcessing: feeBreakdown.paymentProcessing,
+        digitalDelivery: feeBreakdown.digitalDelivery,
+        aiCredits: feeBreakdown.aiCredits,
       },
     };
   }
@@ -1097,6 +1117,10 @@ export class FinanceService {
     return {
       month,
       currency,
+      // New names first; the old commission* names stay as aliases for existing clients.
+      platformFeeRate: commissionRate.rate,
+      platformFee: s.commission,
+      codPlatformFeeOwed: s.codCommissionOwed,
       commissionRate: commissionRate.rate,
       orderCount: s.orderCount,
       grossSales: s.grossSales,
@@ -1781,8 +1805,8 @@ export class FinanceService {
   /** The ONE commission calculation for order sales (commission rules: seller
    *  override / category / default) — shared by `recordSale` and the COD
    *  commission debit so the two can never drift. */
-  private async platformCommission(storeId: string, saleAmount: number, currency = 'USD', feeItems?: FeeItem[]) {
-    const perType = await this.perTypePlatformFee(saleAmount, currency, feeItems);
+  private async platformCommission(storeId: string, saleAmount: number, currency = 'USD', feeItems?: FeeItem[], fxSnapshots?: any[]) {
+    const perType = await this.perTypePlatformFee(saleAmount, currency, feeItems, fxSnapshots);
     if (perType) return perType;
     const { rate, source } = await this.commissionRulesService.resolveRate(storeId);
     return { rate, source, platformFee: this.round(saleAmount * rate) };
@@ -1792,7 +1816,7 @@ export class FinanceService {
    *  configured / no sold lines were passed (callers then fall back to the legacy commission rules).
    *  percentage: the type's share of `saleAmount` (in the seller's currency) x value / 100.
    *  fixed: value (USD) x units sold, converted to `currency`. The result never exceeds `saleAmount`. */
-  private async perTypePlatformFee(saleAmount: number, currency: string, feeItems?: FeeItem[]) {
+  private async perTypePlatformFee(saleAmount: number, currency: string, feeItems?: FeeItem[], fxSnapshots?: any[]) {
     if (!feeItems?.length || typeof this.adminConfigService?.getPlatformFees !== 'function') return null;
     const fees = await this.adminConfigService.getPlatformFees().catch(() => null);
     if (!fees) return null;
@@ -1812,13 +1836,24 @@ export class FinanceService {
       } else {
         const units = lines.reduce((s, i) => s + Math.max(0, i.quantity), 0);
         const usd = rule.value * units;
-        part = currency === 'USD' || !usd ? usd : await this.requireFx().convert(usd, 'USD', currency);
+        part = currency === 'USD' || !usd ? usd : await this.convertFixedFee(usd, currency, fxSnapshots);
       }
       breakdown[type] = this.round(part);
       fee += part;
     }
     const platformFee = this.round(Math.min(Math.max(fee, 0), Math.max(saleAmount, 0)));
     return { rate: saleAmount > 0 ? platformFee / saleAmount : 0, source: 'platform_fees', platformFee, breakdown };
+  }
+
+  /** USD fixed fee -> order/settlement currency. Preference: the order's frozen fxSnapshots, then the last-known
+   *  stored rate (no stale ceiling). If neither exists this throws and the sale-credit job simply stays pending. */
+  private async convertFixedFee(usd: number, currency: string, fxSnapshots?: any[]): Promise<number> {
+    const snap = (fxSnapshots ?? []).find((s) => s?.currency === currency && Number(s?.ratePerUSD) > 0);
+    if (snap) {
+      const v = usd * Number(snap.ratePerUSD);
+      return currency === 'PKR' ? Math.round(v) : Math.round(v * 100) / 100;
+    }
+    return this.requireFx().convertLastKnown(usd, 'USD', currency);
   }
 
   private requireFx(): ExchangeRateService {
@@ -1840,6 +1875,7 @@ export class FinanceService {
     fulfillmentMode?: string | null,
     shippingCredit = 0,
     feeItems?: FeeItem[],
+    fxSnapshots?: any[],
   ) {
     // Nothing was paid for and no platform-funded discount is owed (a free order): there is no sale to
     // credit and no commission to take, so no ledger rows at all.
@@ -1848,10 +1884,10 @@ export class FinanceService {
     // crediting sale-minus-commission here would pay the seller for money they
     // already hold. Debit the commission instead.
     if (isSellerCollectedCod(paymentMethodType, { fulfillmentMode })) {
-      return this.recordCodCommissionDebit(storeId, sellerId, orderId, saleAmount, platformSponsoredUSD, campaignId, currency, feeItems);
+      return this.recordCodCommissionDebit(storeId, sellerId, orderId, saleAmount, platformSponsoredUSD, campaignId, currency, feeItems, fxSnapshots);
     }
     const chargesProcessingFee = paymentMethodType === 'stripe';
-    const { rate: platformFeeRate, source: feeRateSource, platformFee } = await this.platformCommission(storeId, saleAmount, currency, feeItems);
+    const { rate: platformFeeRate, source: feeRateSource, platformFee } = await this.platformCommission(storeId, saleAmount, currency, feeItems, fxSnapshots);
     // The card network charges on everything the buyer paid, shipping included; the platform
     // commission is on the sale only — never on shipping, which passes through to the seller.
     const processingFee = chargesProcessingFee ? this.round((saleAmount + shippingCredit) * PAYMENT_PROCESSING_RATE + PAYMENT_PROCESSING_FIXED) : 0;
@@ -1964,6 +2000,151 @@ export class FinanceService {
     });
   }
 
+  // ── Durable sale-credit outbox ───────────────────────────────────────────
+  // A seller must never lose a credit because recordSale failed after the buyer paid (FX outage, Mongo
+  // hiccup, deploy mid-request). Every call site goes through recordSaleDurable: the job row is written
+  // first, success marks it done, failure leaves it pending for the retry cron / an admin. recordSale is
+  // idempotent per (order, store) so retries can never double credit.
+
+  private get jobModel() { return this.db.repositories.saleCreditJobModel; }
+
+  private runRecordSale(p: SaleCreditArgs) {
+    return this.recordSale(
+      p.storeId, p.sellerId, p.orderId, p.saleAmount, p.description,
+      p.platformSponsoredUSD ?? 0, p.campaignId ?? null, p.currency ?? 'USD', p.paymentMethodType ?? 'stripe',
+      p.fulfillmentMode ?? null, p.shippingCredit ?? 0, p.feeItems, p.fxSnapshots,
+    );
+  }
+
+  async recordSaleDurable(args: SaleCreditArgs): Promise<{ creditStatus: 'credited' | 'pending' | 'not_applicable'; jobId?: string; error?: string }> {
+    if (!(args.saleAmount > 0) && !(((args.shippingCredit as number) ?? 0) > 0)) return { creditStatus: 'not_applicable' };
+    const payload: SaleCreditArgs = JSON.parse(JSON.stringify(args));
+    let job: any = null;
+    try {
+      const key = { orderId: args.orderId, storeId: args.storeId };
+      try {
+        job = await this.jobModel.findOneAndUpdate(
+          key,
+          { $setOnInsert: { sellerId: args.sellerId, payload, status: 'pending', attempts: 0, nextAttemptAt: new Date() } },
+          { upsert: true, returnDocument: 'after' },
+        );
+      } catch {
+        job = await this.jobModel.findOne(key); // lost the upsert race on the unique index
+      }
+    } catch (e: any) {
+      this.logger.error(`Could not write sale-credit job for order ${args.orderId}: ${e?.message}`);
+    }
+    if (job?.status === 'done') return { creditStatus: 'credited', jobId: String(job._id) };
+    try {
+      await this.runRecordSale(payload);
+      if (job) await this.jobModel.updateOne({ _id: job._id }, { $set: { status: 'done', doneAt: new Date(), lastError: null } });
+      return { creditStatus: 'credited', jobId: job ? String(job._id) : undefined };
+    } catch (e: any) {
+      const msg = e?.message ?? String(e);
+      this.logger.error(`recordSale failed for order ${args.orderId} / store ${args.storeId}: ${msg}`);
+      if (job) await this.recordCreditFailure(job, msg);
+      else await this.alertCreditFailure(args.storeId, args.orderId, msg, false);
+      return { creditStatus: 'pending', jobId: job ? String(job._id) : undefined, error: msg };
+    }
+  }
+
+  private async alertCreditFailure(storeId: string, orderId: string, error: string, final: boolean) {
+    try {
+      await this.activityLogService.log({
+        storeId,
+        category: 'finance',
+        action: final ? 'sale_credit_failed_final' : 'sale_credit_failed',
+        description: final
+          ? `Seller credit for order #${orderId} / store ${storeId} FAILED after ${SALE_CREDIT_MAX_ATTEMPTS} attempts and needs manual action (Admin > Finance > Failed credits): ${error}`
+          : `Seller credit for order #${orderId} / store ${storeId} failed and is queued for automatic retry: ${error}`,
+        actorId: 'system',
+        actorRole: 'system',
+        targetId: orderId,
+        targetType: 'order',
+        isSecurityAlert: true,
+      });
+    } catch (e: any) {
+      this.logger.error(`Could not raise the sale-credit alert: ${e?.message}`);
+    }
+  }
+
+  /** Exponential backoff: 5 min, 10, 20 ... capped at 6 h. */
+  private creditBackoffMs(attempts: number) {
+    return Math.min(5 * 60_000 * 2 ** Math.max(0, attempts - 1), 6 * 3_600_000);
+  }
+
+  private async recordCreditFailure(job: any, error: string) {
+    const attempts = (job.attempts ?? 0) + 1;
+    const final = attempts >= SALE_CREDIT_MAX_ATTEMPTS;
+    await this.jobModel.updateOne(
+      { _id: job._id },
+      { $set: { attempts, lastError: error.slice(0, 500), status: final ? 'failed_final' : 'pending', nextAttemptAt: new Date(Date.now() + this.creditBackoffMs(attempts)), ...(attempts === 1 || final ? { alertedAt: new Date() } : {}) } },
+    );
+    if (attempts === 1 || final) await this.alertCreditFailure(job.storeId, job.orderId, error, final);
+  }
+
+  private async attemptCreditJob(job: any): Promise<boolean> {
+    try {
+      await this.runRecordSale(job.payload);
+      await this.jobModel.updateOne({ _id: job._id }, { $set: { status: 'done', doneAt: new Date(), lastError: null } });
+      return true;
+    } catch (e: any) {
+      await this.recordCreditFailure(job, e?.message ?? String(e));
+      return false;
+    }
+  }
+
+  /** Retry runner (cron): claims due pending jobs one at a time (10 min lease so two instances never race). */
+  async processDueCreditJobs(limit = 25) {
+    let processed = 0, succeeded = 0;
+    while (processed < limit) {
+      const now = new Date();
+      const job = await this.jobModel.findOneAndUpdate(
+        { status: 'pending', nextAttemptAt: { $lte: now } },
+        { $set: { nextAttemptAt: new Date(now.getTime() + 10 * 60_000) } },
+        { sort: { nextAttemptAt: 1 }, returnDocument: 'after' },
+      );
+      if (!job) break;
+      processed++;
+      if (await this.attemptCreditJob(job)) succeeded++;
+    }
+    return { processed, succeeded, failed: processed - succeeded };
+  }
+
+  async listCreditJobs(query: { status?: string; page?: number; limit?: number }) {
+    const page = clampInt(query.page, 1, 1, 100000);
+    const limit = clampInt(query.limit, 20, 1, 100);
+    const filter: any = {};
+    if (query.status && ['pending', 'done', 'failed_final'].includes(query.status)) filter.status = query.status;
+    const [items, total] = await Promise.all([
+      this.jobModel.find(filter).sort({ updatedAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      this.jobModel.countDocuments(filter),
+    ]);
+    return { items, total, page, limit, pages: Math.ceil(total / limit) };
+  }
+
+  /** Admin: retry one job right now (pending or failed_final). Audit-logged. */
+  async retryCreditJob(jobId: string, adminId: string, ip?: string, userAgent?: string) {
+    const job: any = await this.jobModel.findById(jobId);
+    if (!job) throw new NotFoundException('Credit job not found');
+    if (job.status === 'done') throw new BadRequestException('This credit was already recorded');
+    job.attempts = 0; // a manual retry gets a fresh attempt budget (and re-alerts if it fails again)
+    const ok = await this.attemptCreditJob(job);
+    this.activityLogService.log({
+      storeId: job.storeId,
+      category: 'finance',
+      action: 'sale_credit_retry',
+      description: `Admin retried the seller credit for order #${job.orderId} / store ${job.storeId}: ${ok ? 'credited' : 'still failing'}`,
+      actorId: adminId,
+      actorRole: 'admin',
+      targetId: job.orderId,
+      targetType: 'order',
+      ip, userAgent,
+    });
+    const fresh = await this.jobModel.findById(jobId).lean();
+    return { creditStatus: ok ? 'credited' : 'pending', job: fresh };
+  }
+
   /** True if this store/order was settled by a COD commission debit (as
    *  opposed to a legacy sale credit, or not settled at all). */
   private async findCodCommissionDebit(storeId: string, orderId: string, session?: ClientSession) {
@@ -2067,9 +2248,9 @@ export class FinanceService {
    */
   private async recordCodCommissionDebit(
     storeId: string, sellerId: string, orderId: string, saleAmount: number,
-    platformSponsoredUSD = 0, campaignId?: string | null, currency = 'USD', feeItems?: FeeItem[],
+    platformSponsoredUSD = 0, campaignId?: string | null, currency = 'USD', feeItems?: FeeItem[], fxSnapshots?: any[],
   ) {
-    const { rate: feeRate, source: feeRateSource, platformFee: commission } = await this.platformCommission(storeId, saleAmount, currency, feeItems);
+    const { rate: feeRate, source: feeRateSource, platformFee: commission } = await this.platformCommission(storeId, saleAmount, currency, feeItems, fxSnapshots);
 
     const { justFlagged, balanceAfter } = await this.withTransaction(async (session) => {
       const already = await this.txModel.exists({

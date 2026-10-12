@@ -74,6 +74,7 @@ describe('FinanceService', () => {
   let notificationsService: any;
 
   let orderModel: any;
+  let jobModel: any;
 
   beforeEach(() => {
     balanceModel = { findOne: jest.fn(), find: jest.fn().mockReturnValue(makeChainableFind([])) };
@@ -88,13 +89,17 @@ describe('FinanceService', () => {
     storeModel = { findById: jest.fn().mockResolvedValue({ _id: STORE_ID, sellerId: SELLER_ID, isDelete: false }) };
     sellerModel = { findById: jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ name: 'Jane Seller' }) }) }) };
     orderModel = { find: jest.fn().mockReturnValue(makeChainableFind([])) };
+    jobModel = {
+      findOneAndUpdate: jest.fn().mockResolvedValue({ _id: 'job-1', orderId: 'o', storeId: STORE_ID, status: 'pending', attempts: 0 }),
+      findOne: jest.fn(), updateOne: jest.fn().mockResolvedValue({}),
+    };
 
     const db = {
       repositories: {
         sellerBalanceModel: balanceModel, transactionModel: txModel, payoutModel,
         payoutMethodModel: methodModel, payoutScheduleModel: scheduleModel,
         storeModel, sellerModel, taxReportModel: {}, campaignModel: { findByIdAndUpdate: jest.fn() },
-        orderModel,
+        orderModel, saleCreditJobModel: jobModel,
       },
     } as unknown as DatabaseService;
 
@@ -206,11 +211,50 @@ describe('FinanceService', () => {
     it('fixed: value (USD) x units sold per type, converted into the sale currency', async () => {
       balanceModel.findOne.mockResolvedValue(makeBalance());
       fees({ digital: { mode: 'fixed', value: 0.5 }, physical: { mode: 'fixed', value: 1 } });
-      (service as any).exchangeRateService = { convert: jest.fn(async (amt: number) => amt * 280) };
+      (service as any).exchangeRateService = { convertLastKnown: jest.fn(async (amt: number) => amt * 280) };
       const items = [{ type: 'digital', totalPrice: 1000, quantity: 3 }, { type: 'physical', totalPrice: 2000, quantity: 2 }];
-      // USD 0.5*3 + 1*2 = 3.5 -> PKR 980
+      // USD 0.5*3 + 1*2 = 3.5 -> PKR 980 (no snapshot given -> last-known/cached rate)
       await service.recordSale(STORE_ID, SELLER_ID, 'o-fix', 3000, 'd', 0, null, 'PKR', 'manual_bank_transfer', 'seller', 0, items);
       expect(feeOf('o-fix').amount).toBeCloseTo(-980, 2);
+    });
+
+    it('fixed fee uses the order\'s FROZEN fxSnapshots first (never touches the live rate service)', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      fees({ digital: { mode: 'fixed', value: 0.5 }, physical: null });
+      const live = { convertLastKnown: jest.fn(), convert: jest.fn() };
+      (service as any).exchangeRateService = live;
+      const items = [{ type: 'digital', totalPrice: 1000, quantity: 4 }];
+      const snaps = [{ currency: 'PKR', ratePerUSD: 250 }];
+      // USD 0.5*4 = 2 -> PKR 500 at the frozen 250 (not today's rate)
+      await service.recordSale(STORE_ID, SELLER_ID, 'o-snap', 3000, 'd', 0, null, 'PKR', 'manual_bank_transfer', 'seller', 0, items, snaps);
+      expect(feeOf('o-snap').amount).toBeCloseTo(-500, 2);
+      expect(live.convertLastKnown).not.toHaveBeenCalled();
+    });
+
+    it('fixed fee with no snapshot falls back to the cached last-known rate', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      fees({ digital: { mode: 'fixed', value: 1 }, physical: null });
+      const live = { convertLastKnown: jest.fn(async (amt: number) => amt * 275) };
+      (service as any).exchangeRateService = live;
+      await service.recordSale(STORE_ID, SELLER_ID, 'o-cache', 3000, 'd', 0, null, 'PKR', 'manual_bank_transfer', 'seller', 0, [{ type: 'digital', totalPrice: 1000, quantity: 1 }], []);
+      expect(live.convertLastKnown).toHaveBeenCalledWith(1, 'USD', 'PKR');
+      expect(feeOf('o-cache').amount).toBeCloseTo(-275, 2);
+    });
+
+    it('fixed fee with NO rate anywhere: the durable path never throws, writes nothing to the ledger and leaves the job pending + alerts', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      fees({ digital: { mode: 'fixed', value: 1 }, physical: null });
+      (service as any).exchangeRateService = { convertLastKnown: jest.fn().mockRejectedValue(new Error('No exchange rate available for PKR')) };
+      const res = await service.recordSaleDurable({
+        storeId: STORE_ID, sellerId: SELLER_ID, orderId: 'o-none', saleAmount: 3000, description: 'd', currency: 'PKR',
+        paymentMethodType: 'manual_bank_transfer', feeItems: [{ type: 'digital', totalPrice: 1000, quantity: 1 }], fxSnapshots: [],
+      });
+      expect(res.creditStatus).toBe('pending');
+      expect(txModel.created).toHaveLength(0);
+      const upd = jobModel.updateOne.mock.calls.find((c: any[]) => c[1]?.$set?.status === 'pending');
+      expect(upd[1].$set.attempts).toBe(1);
+      expect(upd[1].$set.lastError).toContain('No exchange rate');
+      expect(activityLogService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'sale_credit_failed', isSecurityAlert: true }));
     });
 
     it('a COD sale collected by the seller is debited the per-type fee', async () => {
@@ -228,6 +272,27 @@ describe('FinanceService', () => {
       commissionRulesService.resolveRate = jest.fn().mockResolvedValue({ rate: 0.08, source: 'hardcoded_fallback' });
       await service.recordSale(STORE_ID, SELLER_ID, 'o-legacy', 100, 'd', 0, null, 'USD', 'manual_bank_transfer', 'seller', 0, [{ type: 'digital', totalPrice: 100, quantity: 1 }]);
       expect(feeOf('o-legacy').amount).toBeCloseTo(-8, 2);
+    });
+  });
+
+  describe('sale-credit outbox', () => {
+    it('marks the job done after a successful credit', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      const res = await service.recordSaleDurable({ storeId: STORE_ID, sellerId: SELLER_ID, orderId: 'o-ok', saleAmount: 100, description: 'd' });
+      expect(res.creditStatus).toBe('credited');
+      expect(jobModel.updateOne).toHaveBeenCalledWith({ _id: 'job-1' }, { $set: expect.objectContaining({ status: 'done' }) });
+    });
+
+    it('goes failed_final (and alerts) after the 10th failed attempt', async () => {
+      jobModel.findOneAndUpdate.mockResolvedValue({ _id: 'job-9', orderId: 'o-x', storeId: STORE_ID, status: 'pending', attempts: 9, payload: { storeId: STORE_ID, sellerId: SELLER_ID, orderId: 'o-x', saleAmount: 100, description: 'd' } });
+      balanceModel.findOne.mockRejectedValue(new Error('db down'));
+      jobModel.findById = jest.fn().mockResolvedValue({ _id: 'job-9', orderId: 'o-x', storeId: STORE_ID, status: 'pending', attempts: 9, payload: { storeId: STORE_ID, sellerId: SELLER_ID, orderId: 'o-x', saleAmount: 100, description: 'd' } });
+      const claimed = { _id: 'job-9', orderId: 'o-x', storeId: STORE_ID, status: 'pending', attempts: 9, payload: { storeId: STORE_ID, sellerId: SELLER_ID, orderId: 'o-x', saleAmount: 100, description: 'd' } };
+      jobModel.findOneAndUpdate = jest.fn().mockResolvedValueOnce(claimed).mockResolvedValueOnce(null);
+      const r = await service.processDueCreditJobs();
+      expect(r).toEqual({ processed: 1, succeeded: 0, failed: 1 });
+      expect(jobModel.updateOne).toHaveBeenCalledWith({ _id: 'job-9' }, { $set: expect.objectContaining({ status: 'failed_final', attempts: 10 }) });
+      expect(activityLogService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'sale_credit_failed_final', isSecurityAlert: true }));
     });
   });
 

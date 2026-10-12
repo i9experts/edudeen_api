@@ -83,6 +83,18 @@ export class AdminFinanceController {
     return this.adminFinanceService.createManualPayout(storeId, req.user.userId, dto.amount, dto.payoutMethodId, dto.notes, req.ip, req.headers['user-agent']);
   }
 
+  // ─── Failed / pending seller credits (sale_credit_jobs outbox) ───────────
+
+  @Get('credit-jobs')
+  listCreditJobs(@Query('status') status?: string, @Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.adminFinanceService.listCreditJobs({ status, page: page ? Number(page) : undefined, limit: limit ? Number(limit) : undefined });
+  }
+
+  @Post('credit-jobs/:id/retry')
+  retryCreditJob(@Req() req: any, @Param('id') id: string) {
+    return this.adminFinanceService.retryCreditJob(id, req.user.userId, req.ip, req.headers['user-agent']);
+  }
+
   // ─── Platform transactions ───────────────────────────────────────────────
 
   @Get('transactions')

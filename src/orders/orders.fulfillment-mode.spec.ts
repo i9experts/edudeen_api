@@ -35,7 +35,7 @@ function build(sellerOrder: any, orderOver: any = {}) {
   };
   const activity: any = { log: jest.fn().mockResolvedValue(undefined) };
   const notifications: any = { notify: jest.fn().mockResolvedValue(undefined) };
-  const finance: any = { recordSale: jest.fn().mockResolvedValue(undefined) };
+  const finance: any = { recordSaleDurable: jest.fn().mockResolvedValue({ creditStatus: 'credited' }) };
   const svc = new OrdersService(
     { repositories: { orderModel, storeModel } } as any,
     {} as any,
@@ -150,13 +150,13 @@ describe('markPaid on COD', () => {
       platform.svc.markPaid('order-1', { userId: 'seller-1', role: 'seller' }),
     ).rejects.toThrow(/confirmed by the Edudeen team/);
     expect(platform.orderModel.findOneAndUpdate).not.toHaveBeenCalled();
-    expect(platform.finance.recordSale).not.toHaveBeenCalled();
+    expect(platform.finance.recordSaleDurable).not.toHaveBeenCalled();
 
     await expect(
       platform.svc.markPaid('order-1', { userId: 'admin-1', role: 'admin' }),
     ).resolves.toBeDefined();
-    const args = platform.finance.recordSale.mock.calls[0];
-    expect(args.slice(0, 3)).toEqual(['store-1', 'seller-1', 'order-1']);
-    expect(args.slice(-4, -2)).toEqual(['cash_on_delivery', 'platform']); // payment type + the sub-order's snapshotted mode (then the shipping credit + fee items)
+    const args = platform.finance.recordSaleDurable.mock.calls[0][0];
+    expect([args.storeId, args.sellerId, args.orderId]).toEqual(['store-1', 'seller-1', 'order-1']);
+    expect([args.paymentMethodType, args.fulfillmentMode]).toEqual(['cash_on_delivery', 'platform']); // payment type + the sub-order's snapshotted mode
   });
 });

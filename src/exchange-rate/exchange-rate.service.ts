@@ -177,6 +177,15 @@ export class ExchangeRateService {
     return rate;
   }
 
+  /** Converts via the last-known rate (on-demand fetch if none was ever stored) WITHOUT the stale-rate
+   *  ceiling — for settlement paths that must not lose a sale over rate age. Throws only when no rate exists at all. */
+  async convertLastKnown(amount: number, fromCurrency: string, toCurrency: string): Promise<number> {
+    if (fromCurrency === toCurrency) return amount;
+    const fromRate = await this.lastKnownRate(fromCurrency);
+    const toRate = await this.lastKnownRate(toCurrency);
+    return this.roundForCurrency((amount / fromRate.ratePerUSD) * toRate.ratePerUSD, toCurrency);
+  }
+
   /**
    * Converts `amount` using an ALREADY-SNAPSHOTTED set of rates (from an
    * existing Checkout/Order/PaymentTransaction's fxSnapshots) rather than

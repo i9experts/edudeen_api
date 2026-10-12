@@ -271,6 +271,7 @@ export class ManualPaymentsService {
     }
 
     const isLive = (x: any) => !['cancelled', 'refunded'].includes(x?.status);
+    let creditStatus: 'credited' | 'pending' = 'credited';
     for (const order of payable) {
       const updateData: Record<string, any> = {
         isPaid: true,
@@ -300,17 +301,16 @@ export class ManualPaymentsService {
         if (!isLive(so)) continue;
         const platformSponsoredUSD = so.platformSponsoredDiscountUSD ?? 0;
         const sponsoredCampaignId = so.items.find((i: any) => i.campaignSponsorType === 'platform')?.campaignId ?? null;
-        try {
-          await this.financeService.recordSale(
-            so.storeId, so.sellerId, order._id.toString(), sellerPayoutBasis(so),
-            `Sale — Order #${order._id} (manual bank transfer, verified)`,
-            platformSponsoredUSD, sponsoredCampaignId, sellerPayoutCurrency(so, order),
-            order.paymentType || 'manual_bank_transfer',
-            so.fulfillmentMode, shippingCreditFor(order, so), feeItemsFor(so),
-          );
-        } catch (e: any) {
-          console.error('Finance recordSale failed (manual payment approval):', e?.message);
-        }
+        // Durable outbox: approval still succeeds if the credit fails; a pending job is retried + admins alerted.
+        const credit = await this.financeService.recordSaleDurable({
+          storeId: so.storeId, sellerId: so.sellerId, orderId: order._id.toString(), saleAmount: sellerPayoutBasis(so),
+          description: `Sale — Order #${order._id} (manual bank transfer, verified)`,
+          platformSponsoredUSD, campaignId: sponsoredCampaignId, currency: sellerPayoutCurrency(so, order),
+          paymentMethodType: order.paymentType || 'manual_bank_transfer',
+          fulfillmentMode: so.fulfillmentMode, shippingCredit: shippingCreditFor(order, so), feeItems: feeItemsFor(so),
+          fxSnapshots: (order.fxSnapshots as any) ?? [],
+        });
+        if (credit?.creditStatus === 'pending') creditStatus = 'pending';
       }
     }
 
@@ -337,7 +337,7 @@ export class ManualPaymentsService {
       })
       .catch(() => {});
 
-    return this.presentProof(proof);
+    return { ...(await this.presentProof(proof)), creditStatus };
   }
 
   async adminReject(proofId: string, adminId: string, reason: string, ip?: string, userAgent?: string, scope?: { storeId: string }) {

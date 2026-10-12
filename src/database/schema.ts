@@ -40,6 +40,7 @@ export { Payout, PayoutDocument, PayoutSchema } from '../finance/schemas/payout.
 export { PayoutMethod, PayoutMethodDocument, PayoutMethodSchema } from '../finance/schemas/payout-method.schema';
 export { PayoutSchedule, PayoutScheduleDocument, PayoutScheduleSchema } from '../finance/schemas/payout-schedule.schema';
 export { TaxReport, TaxReportDocument, TaxReportSchema } from '../finance/schemas/tax-report.schema';
+export { SaleCreditJob, SaleCreditJobDocument, SaleCreditJobSchema } from '../finance/schemas/sale-credit-job.schema';
 export { SubscriptionPlan, SubscriptionPlanDocument, SubscriptionPlanSchema } from '../subscriptions/schemas/subscription-plan.schema';
 export { Subscription, SubscriptionDocument, SubscriptionSchema } from '../subscriptions/schemas/subscription.schema';
 export { SubscriptionInvoice, SubscriptionInvoiceDocument, SubscriptionInvoiceSchema } from '../subscriptions/schemas/subscription-invoice.schema';

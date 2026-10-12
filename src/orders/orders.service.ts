@@ -726,24 +726,22 @@ export class OrdersService {
         const sponsoredCampaignId =
           so.items.find((i: any) => i.campaignSponsorType === 'platform')
             ?.campaignId ?? null;
-        try {
-          await this.financeService.recordSale(
-            so.storeId,
-            so.sellerId,
-            orderId,
-            sellerPayoutBasis(so),
-            `Sale — Order #${orderId}`,
-            platformSponsoredUSD,
-            sponsoredCampaignId,
-            sellerPayoutCurrency(so, order),
-            order.paymentType,
-            so.fulfillmentMode,
-            shippingCreditFor(order, so),
-            feeItemsFor(so),
-          );
-        } catch (e) {
-          console.error('Finance recordSale failed:', e?.message);
-        }
+        // Durable: a failure leaves a pending sale_credit_jobs row (retried by cron, alerts admins).
+        await this.financeService.recordSaleDurable({
+          storeId: so.storeId,
+          sellerId: so.sellerId,
+          orderId,
+          saleAmount: sellerPayoutBasis(so),
+          description: `Sale — Order #${orderId}`,
+          platformSponsoredUSD,
+          campaignId: sponsoredCampaignId,
+          currency: sellerPayoutCurrency(so, order),
+          paymentMethodType: order.paymentType,
+          fulfillmentMode: so.fulfillmentMode,
+          shippingCredit: shippingCreditFor(order, so),
+          feeItems: feeItemsFor(so),
+          fxSnapshots: (order.fxSnapshots as any) ?? [],
+        });
       }
 
       this.awardLoyaltyPointsWithMultiplier(
@@ -869,30 +867,29 @@ export class OrdersService {
     // Record sale in finance ledger for each store's sub-order — skipping
     // any that settled directly via Stripe Connect (see the same guard/
     // comment in the status-transition branch above).
+    let creditStatus: 'credited' | 'pending' = 'credited';
     for (const so of order.sellerOrders) {
       if (so.settledViaConnect) continue;
       const platformSponsoredUSD = so.platformSponsoredDiscountUSD ?? 0;
       const sponsoredCampaignId =
         so.items.find((i: any) => i.campaignSponsorType === 'platform')
           ?.campaignId ?? null;
-      try {
-        await this.financeService.recordSale(
-          so.storeId,
-          so.sellerId,
-          orderId,
-          sellerPayoutBasis(so),
-          `Sale — Order #${orderId}`,
-          platformSponsoredUSD,
-          sponsoredCampaignId,
-          sellerPayoutCurrency(so, order),
-          order.paymentType,
-          so.fulfillmentMode,
-          shippingCreditFor(order, so),
-          feeItemsFor(so),
-        );
-      } catch (e) {
-        console.error('Finance recordSale failed:', e?.message);
-      }
+      const credit = await this.financeService.recordSaleDurable({
+        storeId: so.storeId,
+        sellerId: so.sellerId,
+        orderId,
+        saleAmount: sellerPayoutBasis(so),
+        description: `Sale — Order #${orderId}`,
+        platformSponsoredUSD,
+        campaignId: sponsoredCampaignId,
+        currency: sellerPayoutCurrency(so, order),
+        paymentMethodType: order.paymentType,
+        fulfillmentMode: so.fulfillmentMode,
+        shippingCredit: shippingCreditFor(order, so),
+        feeItems: feeItemsFor(so),
+        fxSnapshots: (order.fxSnapshots as any) ?? [],
+      });
+      if (credit?.creditStatus === 'pending') creditStatus = 'pending';
 
       this.awardLoyaltyPointsWithMultiplier(
         so.storeId,
@@ -913,7 +910,7 @@ export class OrdersService {
       })
       .catch(() => {});
 
-    return { success: true, message: 'Order marked as paid' };
+    return { success: true, message: 'Order marked as paid', creditStatus };
   }
 
   async cancelOrder(userId: string, orderId: string, body: any) {

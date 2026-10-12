@@ -98,6 +98,9 @@ export class DatabaseService {
     @InjectModel(schema.TaxReport.name)
     private taxReportModel: Model<schema.TaxReportDocument>,
 
+    @InjectModel(schema.SaleCreditJob.name)
+    private saleCreditJobModel: Model<schema.SaleCreditJobDocument>,
+
     @InjectModel(schema.SubscriptionPlan.name)
     private subscriptionPlanModel: Model<schema.SubscriptionPlanDocument>,
 
@@ -335,6 +338,7 @@ export class DatabaseService {
       payoutMethodModel: this.payoutMethodModel,
       payoutScheduleModel: this.payoutScheduleModel,
       taxReportModel: this.taxReportModel,
+      saleCreditJobModel: this.saleCreditJobModel,
       subscriptionPlanModel: this.subscriptionPlanModel,
       subscriptionModel: this.subscriptionModel,
       subscriptionInvoiceModel: this.subscriptionInvoiceModel,

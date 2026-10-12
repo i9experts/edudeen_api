@@ -83,6 +83,7 @@ function build(gatewayStatus: 'active' | 'incomplete') {
       clientSecret: gatewayStatus === 'active' ? undefined : 'cs_1',
     }),
     cancelProviderSubscription: jest.fn().mockResolvedValue(undefined),
+    getOrCreatePrice: jest.fn().mockResolvedValue({ providerProductId: 'prod_1', providerPriceId: 'price_y' }),
   };
   const svc: any = new SellerPlatformSubscriptionsService(
     { repositories: repos } as any,
@@ -183,6 +184,49 @@ describe('Platform plan first paid purchase (Stripe)', () => {
     expect(sub.platformPlanId).toBe('plan-business');
     expect(sub.providerSubscriptionId).toBe('sub_stripe_new');
     expect(sub.pendingPlanChange).toBeNull();
+  });
+});
+
+describe('Yearly first paid purchase (3-D Secure)', () => {
+  afterEach(() => {
+    (PAID as any).yearlyPriceUSD = 490;
+    delete (PAID as any).stripeYearlyPriceId;
+  });
+
+  it('charges yearlyPriceUSD and returns requiresAction + clientSecret exactly like monthly', async () => {
+    const { svc, sub, gateway } = build('incomplete');
+    const res: any = await svc.changePlan('seller-1', 'store-1', { platformPlanId: 'plan-business', billingInterval: 'yearly' });
+    expect(gateway.createProviderSubscription.mock.calls[0][2]).toBe(490);
+    expect(gateway.createProviderSubscription.mock.calls[0][3]).toBe('yearly');
+    expect(res.data.requiresAction).toBe(true);
+    expect(res.data.clientSecret).toBe('cs_1');
+    expect(sub.platformPlanId).toBe('plan-free'); // not granted until the invoice is paid
+    expect(sub.pendingPlanChange).toMatchObject({ billingInterval: 'yearly', amountUSD: 490 });
+  });
+
+  it('falls back to 12x the monthly price when no yearly price is set', async () => {
+    (PAID as any).yearlyPriceUSD = null;
+    const { svc, gateway } = build('incomplete');
+    const res: any = await svc.changePlan('seller-1', 'store-1', { platformPlanId: 'plan-business', billingInterval: 'yearly' });
+    expect(gateway.createProviderSubscription.mock.calls[0][2]).toBe(588);
+    expect(res.data.requiresAction).toBe(true);
+  });
+
+  it('applies the yearly plan once Stripe reports the invoice paid', async () => {
+    const { svc, sub } = build('incomplete');
+    await svc.changePlan('seller-1', 'store-1', { platformPlanId: 'plan-business', billingInterval: 'yearly' });
+    await svc.handleInvoicePaymentSucceeded({ id: 'in_y', subscription: 'sub_stripe_new', amount_paid: 49000, billing_reason: 'subscription_create', lines: { data: [] } });
+    expect(sub.platformPlanId).toBe('plan-business');
+    expect(sub.billingInterval).toBe('yearly');
+    expect(sub.amountUSD).toBe(490);
+  });
+
+  it('no action needed when the saved card is charged straight away (status active)', async () => {
+    const { svc, sub } = build('active');
+    const res: any = await svc.changePlan('seller-1', 'store-1', { platformPlanId: 'plan-business', billingInterval: 'yearly' });
+    expect(res.data.requiresAction).toBe(false);
+    expect(res.data.clientSecret).toBeNull();
+    expect(sub.billingInterval).toBe('yearly');
   });
 });
 
