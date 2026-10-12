@@ -178,7 +178,7 @@ function world(seeds: Seed[], opts: { userId?: string } = {}) {
     {
       getActiveCampaignsForStores: jest.fn().mockResolvedValue(new Map()),
     } as any,
-    { isManualPaymentEnabled: jest.fn().mockResolvedValue(false) } as any,
+    { isManualPaymentEnabled: jest.fn().mockResolvedValue(false), isManualTransferAvailable: jest.fn().mockResolvedValue(false) } as any,
     fx,
     {} as any,
     {

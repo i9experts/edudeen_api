@@ -3,7 +3,7 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { DatabaseService } from 'src/database/databaseservice';
 import { UploadService } from 'src/upload/upload.service';
 import { PaymentService } from 'src/payment/payment.service';
-import { FinanceService, shippingCreditFor } from 'src/finance/finance.service';
+import { FinanceService, shippingCreditFor, feeItemsFor } from 'src/finance/finance.service';
 import { AdminConfigService } from 'src/admin-config/admin-config.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
@@ -15,7 +15,8 @@ import { ReuploadManualPaymentDto } from './dto/reupload-manual-payment.dto';
 
 import { clampInt } from 'src/common/query-safety.util';
 import { ReceiptCheckService, buildReceiptExpectation } from './receipt-check.service';
-import { hasDirectPayment, type DirectPaymentDetails } from 'src/common/direct-payment.util';
+import { GoneException } from '@nestjs/common';
+import type { DirectPaymentDetails } from 'src/common/direct-payment.util';
 /** Mirrors OrdersService's local `sellerPayoutBasis`/`sellerPayoutCurrency` —
  *  settlement must always be computed and labeled in the SELLER'S OWN
  *  currency (so.settlementCurrency), independent of `order.currency` (the
@@ -89,29 +90,27 @@ export class ManualPaymentsService {
     return { url: this.proofViewUrl(proof), expiresInSeconds: proof.proofPublicId ? PROOF_URL_TTL_SECONDS : null };
   }
 
-  /** The details a buyer pays into: the SELLER'S own account for this checkout's store. */
+  /** The details a buyer pays into: the PLATFORM's own bank / wallet account (admin-managed). */
   async getBankDetails(userId: string, checkoutId: string) {
     if (!checkoutId) throw new BadRequestException('checkoutId is required');
     const checkout = await this.db.repositories.checkoutModel.findOne({ _id: checkoutId, userId, isDelete: false }).select('items.storeId').lean<{ items?: { storeId: string }[] }>();
     if (!checkout) throw new NotFoundException('Checkout not found');
-    const store = await this.db.repositories.storeModel.findById(checkout.items?.[0]?.storeId).select('name directPayment').lean<{ name?: string; directPayment?: DirectPaymentDetails | null }>();
-    const dp = store?.directPayment;
-    if (!hasDirectPayment(dp)) {
-      throw new BadRequestException('This seller has not set up bank transfer yet — please use another payment method.');
+    const dp = await this.adminConfigService.getPlatformTransferDetails();
+    if (!dp) {
+      throw new BadRequestException('Bank transfer is not available right now — please use another payment method.');
     }
     // The authoritative PKR amount is still locked in server-side at submission;
     // `usdToPkrRate` is only for the "approximately" hint shown before submitting.
-    const config = await this.adminConfigService.getManualPaymentConfig().catch(() => null);
     return {
-      payeeName: store?.name ?? null,
-      bankName: dp?.bankName ?? null,
-      accountTitle: dp?.accountTitle ?? null,
-      accountNumber: dp?.accountNumber ?? null,
-      iban: dp?.iban ?? null,
-      jazzcashNumber: dp?.jazzcashNumber ?? null,
-      easypaisaNumber: dp?.easypaisaNumber ?? null,
-      instructions: dp?.instructions ?? null,
-      usdToPkrRate: config?.usdToPkrRate ?? 0,
+      payeeName: dp.accountTitle ?? 'Edudeen',
+      bankName: dp.bankName ?? null,
+      accountTitle: dp.accountTitle ?? null,
+      accountNumber: dp.accountNumber ?? null,
+      iban: dp.iban ?? null,
+      jazzcashNumber: dp.jazzcashNumber ?? null,
+      easypaisaNumber: dp.easypaisaNumber ?? null,
+      instructions: dp.instructions ?? null,
+      usdToPkrRate: dp.usdToPkrRate ?? 0,
     };
   }
   /** Places the order(s) (unpaid, `pending_verification`) and attaches the buyer's uploaded proof in one step. */
@@ -149,12 +148,11 @@ export class ManualPaymentsService {
       })
       .catch(() => {});
 
-    this.notifySellerOfProof(proof).catch(() => {});
-    // Advisory: read the screenshot in the background so the seller sees a match/mismatch hint.
-    if (this.receiptCheckService && proof.storeId) {
+    // Advisory: read the screenshot in the background so the admin sees a match/mismatch hint.
+    if (this.receiptCheckService) {
       const receiptSvc = this.receiptCheckService;
-      this.db.repositories.storeModel.findById(proof.storeId).select('directPayment').lean<{ directPayment?: DirectPaymentDetails | null }>()
-        .then((s) => receiptSvc.check(file.buffer, file.mimetype, amountPKR, buildReceiptExpectation(s?.directPayment, dto.transactionReference)))
+      this.adminConfigService.getPlatformTransferDetails()
+        .then((d) => receiptSvc.check(file.buffer, file.mimetype, amountPKR, buildReceiptExpectation(d as DirectPaymentDetails | null, dto.transactionReference)))
         .then((rc) => this.proofModel.updateOne({ _id: proof._id }, { $set: { receiptCheck: rc } }))
         .catch(() => {});
     }
@@ -296,9 +294,8 @@ export class ManualPaymentsService {
         { $set: updateData },
       );
 
-      // Direct-to-seller transfers: the money is already in the seller's own account,
-      // so nothing is credited to a platform balance (it would be paid out twice).
-      if (proof.storeId) continue;
+      // The transfer landed in the PLATFORM account, so each seller's wallet is credited the
+      // sale minus the platform fee (pending until clearing, like card). Idempotent per order+store.
       for (const so of order.sellerOrders) {
         if (!isLive(so)) continue;
         const platformSponsoredUSD = so.platformSponsoredDiscountUSD ?? 0;
@@ -309,7 +306,7 @@ export class ManualPaymentsService {
             `Sale — Order #${order._id} (manual bank transfer, verified)`,
             platformSponsoredUSD, sponsoredCampaignId, sellerPayoutCurrency(so, order),
             order.paymentType || 'manual_bank_transfer',
-            so.fulfillmentMode, shippingCreditFor(order, so),
+            so.fulfillmentMode, shippingCreditFor(order, so), feeItemsFor(so),
           );
         } catch (e: any) {
           console.error('Finance recordSale failed (manual payment approval):', e?.message);
@@ -323,7 +320,7 @@ export class ManualPaymentsService {
       action: 'manual_payment_approved',
       description: `Manual bank-transfer payment of PKR ${proof.amountPKR.toFixed(2)} approved for ${payable.length} order(s)`,
       actorId: adminId,
-      actorRole: scope ? 'seller' : 'admin',
+      actorRole: 'admin',
       targetId: proofId,
       targetType: 'manual_payment_proof',
       ip, userAgent,
@@ -382,80 +379,20 @@ export class ManualPaymentsService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // SELLER — receives the transfer directly, so the seller confirms it
+  // SELLER — retired. Bank transfers are paid into the PLATFORM account and
+  // confirmed by an admin (who credits the seller's wallet), so the seller-side
+  // direct-bank setup and confirmation endpoints now answer 410 Gone.
+  // Stored Store.directPayment data is left untouched in the DB.
   // ═══════════════════════════════════════════════════════════════════════
 
-  private async ownStore(sellerId: string, storeId: string) {
-    const store = await this.db.repositories.storeModel.findOne({ _id: storeId, sellerId, isDelete: false }).select('directPayment sellerId').lean<any>();
-    if (!store) throw new NotFoundException('Store not found');
-    return store;
+  private gone(): never {
+    throw new GoneException('Bank transfers are now paid to Edudeen and confirmed by the Edudeen team — sellers no longer set up or confirm direct payments.');
   }
 
-  /** Tells the seller a transfer is waiting for them to confirm. */
-  private async notifySellerOfProof(proof: any) {
-    if (!proof.storeId) return;
-    const store = await this.db.repositories.storeModel.findById(proof.storeId).select('sellerId').lean<{ sellerId?: string }>();
-    if (!store?.sellerId) return;
-    await this.notificationsService.notify({
-      recipientId: String(store.sellerId),
-      recipientRole: 'seller',
-      type: NOTIFICATION_TYPES.MANUAL_PAYMENT_SUBMITTED,
-      title: 'A buyer sent a bank transfer',
-      body: `Check your account for PKR ${Number(proof.amountPKR).toFixed(2)}, then confirm the payment so the order can proceed.`,
-      data: { proofId: String(proof._id), orderIds: proof.orderIds },
-    });
-  }
-
-  async getStorePaymentSettings(sellerId: string, storeId: string) {
-    const store = await this.ownStore(sellerId, storeId);
-    return { directPayment: store.directPayment ?? null, enabled: hasDirectPayment(store.directPayment) };
-  }
-
-  async updateStorePaymentSettings(sellerId: string, storeId: string, dto: DirectPaymentDetails) {
-    await this.ownStore(sellerId, storeId);
-    const clean = (v?: string | null) => (typeof v === 'string' && v.trim() ? v.trim() : null);
-    const details = {
-      bankName: clean(dto.bankName), accountTitle: clean(dto.accountTitle), accountNumber: clean(dto.accountNumber),
-      iban: clean(dto.iban), jazzcashNumber: clean(dto.jazzcashNumber), easypaisaNumber: clean(dto.easypaisaNumber),
-      instructions: clean(dto.instructions),
-    };
-    const directPayment = hasDirectPayment(details) ? details : null;
-    await this.db.repositories.storeModel.updateOne({ _id: storeId, sellerId }, { $set: { directPayment } });
-    return { directPayment, enabled: !!directPayment };
-  }
-
-  async sellerListProofs(sellerId: string, storeId: string, query: any) {
-    await this.ownStore(sellerId, storeId);
-    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
-    const limit = Math.min(50, clampInt(query.limit, 20, 1, 50));
-    const filter: Record<string, any> = { storeId };
-    if (query.status) filter.status = String(query.status);
-    const [proofs, total] = await Promise.all([
-      this.proofModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-      this.proofModel.countDocuments(filter),
-    ]);
-    const users = await this.db.repositories.userModel.find({ _id: { $in: [...new Set((proofs as any[]).map((p) => p.userId))] } }).select('name email').lean();
-    const userMap = new Map(users.map((u: any) => [u._id.toString(), u]));
-    return {
-      proofs: (proofs as any[]).map((p) => ({ ...this.presentProof(p), buyerName: userMap.get(p.userId)?.name ?? 'Buyer', buyerEmail: userMap.get(p.userId)?.email ?? '' })),
-      total, page, limit, pages: Math.ceil(total / limit),
-    };
-  }
-
-  async sellerGetProofUrl(sellerId: string, storeId: string, proofId: string) {
-    await this.ownStore(sellerId, storeId);
-    const proof = await this.proofModel.findOne({ _id: proofId, storeId }).lean();
-    if (!proof) throw new NotFoundException('Payment proof not found');
-    return { url: this.proofViewUrl(proof), expiresInSeconds: proof.proofPublicId ? PROOF_URL_TTL_SECONDS : null };
-  }
-
-  async sellerApprove(sellerId: string, storeId: string, proofId: string, ip?: string, userAgent?: string) {
-    await this.ownStore(sellerId, storeId);
-    return this.adminApprove(proofId, sellerId, ip, userAgent, { storeId });
-  }
-
-  async sellerReject(sellerId: string, storeId: string, proofId: string, reason: string, ip?: string, userAgent?: string) {
-    await this.ownStore(sellerId, storeId);
-    return this.adminReject(proofId, sellerId, reason, ip, userAgent, { storeId });
-  }
+  async getStorePaymentSettings(_sellerId: string, _storeId: string) { return this.gone(); }
+  async updateStorePaymentSettings(_sellerId: string, _storeId: string, _dto: DirectPaymentDetails) { return this.gone(); }
+  async sellerListProofs(_sellerId: string, _storeId: string, _query: any) { return this.gone(); }
+  async sellerGetProofUrl(_sellerId: string, _storeId: string, _proofId: string) { return this.gone(); }
+  async sellerApprove(_sellerId: string, _storeId: string, _proofId: string, _ip?: string, _userAgent?: string) { return this.gone(); }
+  async sellerReject(_sellerId: string, _storeId: string, _proofId: string, _reason: string, _ip?: string, _userAgent?: string) { return this.gone(); }
 }

@@ -157,6 +157,6 @@ describe('markPaid on COD', () => {
     ).resolves.toBeDefined();
     const args = platform.finance.recordSale.mock.calls[0];
     expect(args.slice(0, 3)).toEqual(['store-1', 'seller-1', 'order-1']);
-    expect(args.slice(-3, -1)).toEqual(['cash_on_delivery', 'platform']); // payment type + the sub-order's snapshotted mode (then the shipping credit)
+    expect(args.slice(-4, -2)).toEqual(['cash_on_delivery', 'platform']); // payment type + the sub-order's snapshotted mode (then the shipping credit + fee items)
   });
 });

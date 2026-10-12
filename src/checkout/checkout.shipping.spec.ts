@@ -39,7 +39,7 @@ function makeService(opts: { pickedAddress?: any; zonesConfigured?: boolean } = 
     { repositories } as any,
     { getActiveBenefits: jest.fn().mockResolvedValue(null), getActiveBenefitsBatch: jest.fn().mockResolvedValue(new Map()), resolveProductDiscount: jest.fn() } as any,
     { getActiveCampaignsForStores: jest.fn().mockResolvedValue(new Map()) } as any,
-    { isManualPaymentEnabled: jest.fn().mockResolvedValue(false) } as any,
+    { isManualPaymentEnabled: jest.fn().mockResolvedValue(false), isManualTransferAvailable: jest.fn().mockResolvedValue(false) } as any,
     { buildSnapshots: jest.fn().mockResolvedValue([]) } as any,
     {} as any,
     { getActiveDiscountsForStores: jest.fn().mockResolvedValue(new Map()) } as any,

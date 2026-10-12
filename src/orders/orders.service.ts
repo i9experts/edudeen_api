@@ -12,7 +12,7 @@ import { DatabaseService } from 'src/database/databaseservice';
 import { UploadService } from 'src/upload/upload.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { FinanceService, shippingCreditFor } from 'src/finance/finance.service';
+import { FinanceService, shippingCreditFor, feeItemsFor } from 'src/finance/finance.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { LoyaltyService } from 'src/loyalty/loyalty.service';
 import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-benefits.service';
@@ -739,6 +739,7 @@ export class OrdersService {
             order.paymentType,
             so.fulfillmentMode,
             shippingCreditFor(order, so),
+            feeItemsFor(so),
           );
         } catch (e) {
           console.error('Finance recordSale failed:', e?.message);
@@ -887,6 +888,7 @@ export class OrdersService {
           order.paymentType,
           so.fulfillmentMode,
           shippingCreditFor(order, so),
+          feeItemsFor(so),
         );
       } catch (e) {
         console.error('Finance recordSale failed:', e?.message);

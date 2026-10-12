@@ -15,6 +15,7 @@ import { UpdatePayoutConfigDto } from './dto/update-payout-config.dto';
 import { UpdateManualPaymentConfigDto } from './dto/update-manual-payment-config.dto';
 import { UpdateFxConfigDto } from './dto/update-fx-config.dto';
 import { UpdateSocialLinksDto } from './dto/update-social-links.dto';
+import { UpdatePlatformFeesDto } from './dto/update-platform-fees.dto';
 import { SOCIAL_LINK_KEYS } from './schemas/platform-config.schema';
 
 export type FeatureFlagKey =
@@ -136,6 +137,31 @@ export class AdminConfigService {
     return config.manualPaymentConfig?.enabled === true;
   }
 
+  /** The platform's bank/wallet account every bank transfer is paid into, or null when the admin has not
+   *  filled any in (or explicitly switched the option off). Checkout offers bank transfer iff this is non-null. */
+  async getPlatformTransferDetails() {
+    const mp = (await this.getRawConfig()).manualPaymentConfig;
+    if (!mp || mp.enabled === false) return null;
+    const has = [mp.accountNumber, mp.iban, mp.jazzcashNumber, mp.easypaisaNumber].some((v) => typeof v === 'string' && v.trim());
+    return has ? mp : null;
+  }
+
+  async isManualTransferAvailable(): Promise<boolean> {
+    return (await this.getPlatformTransferDetails()) !== null;
+  }
+
+  /** Platform fee per product type, validated; null when not configured (legacy commission rules then apply). */
+  async getPlatformFees(): Promise<{ digital?: { mode: 'percentage' | 'fixed'; value: number }; physical?: { mode: 'percentage' | 'fixed'; value: number } } | null> {
+    const raw = (await this.getRawConfig()).platformFees;
+    if (!raw || typeof raw !== 'object') return null;
+    const out: any = {};
+    for (const t of ['digital', 'physical']) {
+      const r = raw[t];
+      if (r && (r.mode === 'percentage' || r.mode === 'fixed') && Number.isFinite(r.value) && r.value >= 0) out[t] = { mode: r.mode, value: r.value };
+    }
+    return Object.keys(out).length ? out : null;
+  }
+
   /** Used by ExchangeRateService's cron refresh + sanity/abnormal-jump checks. */
   async getFxConfig() {
     const config = await this.getRawConfig();
@@ -247,6 +273,28 @@ export class AdminConfigService {
     // Bank account numbers/IBAN intentionally omitted from the audit description — full values are in `dto`/DB, not duplicated into the activity log.
     await this.logChange('manual_payment_config_updated', `Manual payment config updated (enabled=${config.manualPaymentConfig?.enabled}, rate=${config.manualPaymentConfig?.usdToPkrRate})`, meta);
     return { success: true, message: 'Manual payment config updated', data: config };
+  }
+
+  async getPlatformFeesView() {
+    return { success: true, data: { platformFees: (await this.getPlatformFees()) ?? { digital: null, physical: null } } };
+  }
+
+  async updatePlatformFees(dto: UpdatePlatformFeesDto, meta: AuditMeta) {
+    const set: Record<string, unknown> = {};
+    for (const type of ['digital', 'physical'] as const) {
+      const rule = dto[type];
+      if (!rule) continue;
+      if (rule.mode === 'percentage' && rule.value > 100) throw new BadRequestException(`${type}: a percentage fee must be between 0 and 100`);
+      if (!(rule.value >= 0)) throw new BadRequestException(`${type}: fee value must be 0 or more`);
+      set[`platformFees.${type}`] = { mode: rule.mode, value: rule.value };
+    }
+    if (!Object.keys(set).length) throw new BadRequestException('Send a fee rule for digital and/or physical');
+    // A null/non-object platformFees cannot take dotted $set paths — normalise it first.
+    await this.model.updateOne({ platformFees: null }, { $set: { platformFees: {} } });
+    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
+    this.invalidateCache();
+    await this.logChange('platform_fees_updated', `Platform fees updated: ${JSON.stringify(dto)}`, meta);
+    return { success: true, message: 'Platform fees updated', data: config };
   }
 
   async updateFxConfig(dto: UpdateFxConfigDto, meta: AuditMeta) {

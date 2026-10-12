@@ -4,9 +4,10 @@ import { FinanceService } from './finance.service';
 import { AuthModule } from '../auth/auth.module';
 import { RedisModule } from '../redis/redis.module';
 import { AdminConfigModule } from '../admin-config/admin-config.module';
+import { ExchangeRateModule } from '../exchange-rate/exchange-rate.module';
 
 @Module({
-  imports: [AuthModule, RedisModule, AdminConfigModule],
+  imports: [AuthModule, RedisModule, AdminConfigModule, ExchangeRateModule],
   controllers: [FinanceController],
   providers: [FinanceService],
   exports: [FinanceService],

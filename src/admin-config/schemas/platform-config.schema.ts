@@ -73,7 +73,9 @@ export const PayoutConfigSchema = SchemaFactory.createForClass(PayoutConfig);
 // without a deploy; `enabled: false` hides the option from checkout entirely.
 @Schema({ _id: false })
 export class ManualPaymentConfig {
-  @Prop({ type: Boolean, default: false }) enabled: boolean;
+  // The platform's own bank/wallet account that ALL buyer bank transfers go to. Available at checkout
+  // whenever account details are filled in and this is not explicitly false.
+  @Prop({ type: Boolean, default: true }) enabled: boolean;
 
   @Prop({ type: String, default: null }) bankName: string | null;
   @Prop({ type: String, default: null }) accountTitle: string | null;
@@ -188,6 +190,14 @@ export class PlatformConfig {
 
   @Prop({ type: SocialLinksSchema, default: () => ({}) })
   socialLinks: SocialLinks;
+
+  // Platform fee taken from each sale, per product type, admin-controlled.
+  // Shape: { digital?: {mode:'percentage'|'fixed', value}, physical?: {...} }.
+  // percentage = 0-100 of the item price; fixed = USD per unit sold (converted to the
+  // order currency). null = not configured -> FinanceService falls back to the legacy
+  // commission rules. Applies to item price only, never shipping.
+  @Prop({ type: Object, default: null })
+  platformFees: { digital?: { mode: 'percentage' | 'fixed'; value: number }; physical?: { mode: 'percentage' | 'fixed'; value: number } } | null;
 
   // Admin-editable homepage copy (hero text/image, promise strip, trust items).
   // Free-form object; admin-config.service sanitises it on write.

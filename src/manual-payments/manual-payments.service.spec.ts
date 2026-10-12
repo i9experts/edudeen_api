@@ -51,7 +51,7 @@ describe('ManualPaymentsService', () => {
     } as any;
     paymentService = { manualBankTransferPayment: jest.fn() } as any;
     financeService = { recordSale: jest.fn().mockResolvedValue(undefined) } as any;
-    adminConfigService = { getManualPaymentConfig: jest.fn().mockResolvedValue({ enabled: true, usdToPkrRate: 278, bankName: 'Meezan' }) } as any;
+    adminConfigService = { getPlatformTransferDetails: jest.fn().mockResolvedValue({ enabled: true, usdToPkrRate: 278, bankName: 'Meezan', accountTitle: 'Edudeen Pvt Ltd', accountNumber: '0011223344' }) } as any;
     activityLogService = { log: jest.fn() } as any;
     notificationsService = { notify: jest.fn().mockResolvedValue(undefined) } as any;
 
@@ -66,19 +66,21 @@ describe('ManualPaymentsService', () => {
       await expect(service.getBankDetails(USER_ID, 'c1')).rejects.toThrow(NotFoundException);
     });
 
-    it('throws when the seller has not set up bank transfer', async () => {
+    it('throws when the platform has not filled in its bank details', async () => {
       checkoutModel.findOne.mockReturnValue(lean({ items: [{ storeId: 's1' }] }));
-      storeModel.findById.mockReturnValue(lean({ name: 'Shop', directPayment: null }));
+      (adminConfigService.getPlatformTransferDetails as jest.Mock).mockResolvedValue(null);
       await expect(service.getBankDetails(USER_ID, 'c1')).rejects.toThrow(BadRequestException);
     });
 
-    it("returns the SELLER's account, not the platform's", async () => {
+    it("returns the PLATFORM's account (even when the seller has none), never the seller's", async () => {
       checkoutModel.findOne.mockReturnValue(lean({ items: [{ storeId: 's1' }] }));
-      storeModel.findById.mockReturnValue(lean({ name: 'Shop', directPayment: { bankName: 'HBL', accountNumber: '123456789' } }));
+      storeModel.findById.mockReturnValue(lean({ name: 'Shop', directPayment: null }));
       const result = await service.getBankDetails(USER_ID, 'c1');
-      expect(result.bankName).toBe('HBL');
-      expect(result.accountNumber).toBe('123456789');
-      expect(result.payeeName).toBe('Shop');
+      expect(result.bankName).toBe('Meezan');
+      expect(result.accountNumber).toBe('0011223344');
+      expect(result.payeeName).toBe('Edudeen Pvt Ltd');
+      expect(result.usdToPkrRate).toBe(278);
+      expect(storeModel.findById).not.toHaveBeenCalled();
     });
   });
   describe('submitPayment', () => {
@@ -176,9 +178,19 @@ describe('ManualPaymentsService', () => {
         { _id: 'order-1', isPaid: { $ne: true }, orderStatus: { $ne: 'cancelled' } },
         { $set: expect.objectContaining({ isPaid: true, paymentStatus: 'paid', orderStatus: 'completed' }) },
       );
-      expect(financeService.recordSale).toHaveBeenCalledWith('store-1', 'seller-1', 'order-1', 100, expect.any(String), 0, null, 'PKR', 'manual_bank_transfer', undefined, 0); // + the sub-order's fulfillment mode and shipping credit
+      expect(financeService.recordSale).toHaveBeenCalledWith('store-1', 'seller-1', 'order-1', 100, expect.any(String), 0, null, 'PKR', 'manual_bank_transfer', undefined, 0, expect.any(Array)); // + the sub-order's fulfillment mode and shipping credit
       expect(activityLogService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'manual_payment_approved' }));
       expect(notificationsService.notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'manual_payment_approved' }));
+    });
+
+    it('credits the seller even when the proof carries a storeId (all transfers now land in the platform account)', async () => {
+      const order = { _id: 'order-1', currency: 'PKR', orderStatus: 'pending', sellerOrders: [makeSellerOrder({ items: [{ type: 'digital', totalPrice: 100, quantity: 1, campaignSponsorType: null, campaignId: null }] })] };
+      proofModel.findOneAndUpdate.mockResolvedValue(claimed({ storeId: 'store-1' }));
+      orderModel.find.mockResolvedValue([order]);
+      await service.adminApprove('p1', 'admin-1');
+      expect(financeService.recordSale).toHaveBeenCalledTimes(1);
+      const feeItems = (financeService.recordSale as jest.Mock).mock.calls[0][11];
+      expect(feeItems).toEqual([{ type: 'digital', totalPrice: 100, quantity: 1 }]);
     });
 
     it('never revives a cancelled order: no paid flag, no seller credit, claim released', async () => {
@@ -197,7 +209,7 @@ describe('ManualPaymentsService', () => {
       orderModel.find.mockResolvedValue([{ _id: 'order-1', currency: 'PKR', orderStatus: 'pending', sellerOrders: [live, dead] }]);
       await service.adminApprove('p1', 'admin-1');
       expect(financeService.recordSale).toHaveBeenCalledTimes(1);
-      expect(financeService.recordSale).toHaveBeenCalledWith('store-1', 'seller-1', 'order-1', 100, expect.any(String), 0, null, 'PKR', 'manual_bank_transfer', undefined, 0); // + the sub-order's fulfillment mode and shipping credit // store-2 (cancelled) is never credited
+      expect(financeService.recordSale).toHaveBeenCalledWith('store-1', 'seller-1', 'order-1', 100, expect.any(String), 0, null, 'PKR', 'manual_bank_transfer', undefined, 0, expect.any(Array)); // + the sub-order's fulfillment mode and shipping credit // store-2 (cancelled) is never credited
       const set = (orderModel.findOneAndUpdate as jest.Mock).mock.calls[0][1].$set;
       expect(Object.keys(set).some((k) => k.startsWith('sellerOrders.1.'))).toBe(false);
     });

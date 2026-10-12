@@ -4,7 +4,6 @@ import {
   NotFoundException,
   ConflictException,
 } from '@nestjs/common';
-import { hasDirectPayment, type DirectPaymentDetails } from 'src/common/direct-payment.util';
 import { ConfigService } from '@nestjs/config';
 import { DatabaseService } from 'src/database/databaseservice';
 import { NotificationsService } from 'src/notifications/notifications.service';
@@ -1483,10 +1482,9 @@ export class PaymentService {
       throw new BadRequestException('There is nothing to pay for this order — if it is free, confirm it without a payment.');
     }
     await this.assertStoresStillActive(checkout);
-    // The buyer pays the seller's own account — the seller must have set one up.
-    const payStore = await storeModel.findById(checkout.items?.[0]?.storeId).select('directPayment').lean<{ directPayment?: DirectPaymentDetails | null }>();
-    if (!hasDirectPayment(payStore?.directPayment)) {
-      throw new BadRequestException('This seller has not set up bank transfer yet — please use another payment method.');
+    // The buyer pays the PLATFORM's own account — the admin must have filled it in.
+    if (!(await this.adminConfigService.isManualTransferAvailable())) {
+      throw new BadRequestException('Bank transfer is not available right now — please use another payment method.');
     }
 
     for (const item of checkout.items) {

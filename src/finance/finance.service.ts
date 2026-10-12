@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Injectable, NotFoundException, BadRequestException, ConflictException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Logger, Optional } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection, ClientSession } from 'mongoose';
 import { DatabaseService } from 'src/database/databaseservice';
@@ -11,6 +11,7 @@ import { round } from 'src/common/number.util';
 import { verifyStoreExists, verifyStoreOwnershipStrict } from 'src/common/store-ownership.util';
 import { CommissionRulesService } from 'src/commission-rules/commission-rules.service';
 import { AdminConfigService } from 'src/admin-config/admin-config.service';
+import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 
@@ -63,6 +64,19 @@ export function shippingCreditFor(
   return sellerOrder.settlementShippingFee ?? 0;
 }
 
+/** One sold line, as the platform-fee computation needs it. `type` is the order item's fulfilment type
+ *  ('physical' or 'digital' — educational/course items are stored as 'digital'). */
+export interface FeeItem { type: string; totalPrice: number; quantity: number }
+
+/** The sold lines of a sub-order, for the per-product-type platform fee. Shipping is never part of it. */
+export function feeItemsFor(sellerOrder: { items?: Array<{ type?: string | null; totalPrice?: number | null; quantity?: number | null }> | null } | null | undefined): FeeItem[] {
+  return (sellerOrder?.items ?? []).map((i) => ({
+    type: i.type === 'physical' ? 'physical' : 'digital',
+    totalPrice: Number(i.totalPrice ?? 0),
+    quantity: Number(i.quantity ?? 1),
+  }));
+}
+
 function clearingDaysForRail(paymentMethodType: string): number {
   return paymentMethodType === 'stripe' ? CLEARING_DAYS_CARD : CLEARING_DAYS;
 }
@@ -84,6 +98,7 @@ export class FinanceService {
     private readonly adminConfigService: AdminConfigService,
     private readonly notificationsService: NotificationsService,
     @InjectConnection() private readonly connection: Connection,
+    @Optional() private readonly exchangeRateService?: ExchangeRateService,
   ) {}
 
   // ── Shorthand repo getters ───────────────────────────────────────────────
@@ -1766,9 +1781,49 @@ export class FinanceService {
   /** The ONE commission calculation for order sales (commission rules: seller
    *  override / category / default) — shared by `recordSale` and the COD
    *  commission debit so the two can never drift. */
-  private async platformCommission(storeId: string, saleAmount: number) {
+  private async platformCommission(storeId: string, saleAmount: number, currency = 'USD', feeItems?: FeeItem[]) {
+    const perType = await this.perTypePlatformFee(saleAmount, currency, feeItems);
+    if (perType) return perType;
     const { rate, source } = await this.commissionRulesService.resolveRate(storeId);
     return { rate, source, platformFee: this.round(saleAmount * rate) };
+  }
+
+  /** Admin-configured platform fee per product type (`PlatformConfig.platformFees`), or null when it is not
+   *  configured / no sold lines were passed (callers then fall back to the legacy commission rules).
+   *  percentage: the type's share of `saleAmount` (in the seller's currency) x value / 100.
+   *  fixed: value (USD) x units sold, converted to `currency`. The result never exceeds `saleAmount`. */
+  private async perTypePlatformFee(saleAmount: number, currency: string, feeItems?: FeeItem[]) {
+    if (!feeItems?.length || typeof this.adminConfigService?.getPlatformFees !== 'function') return null;
+    const fees = await this.adminConfigService.getPlatformFees().catch(() => null);
+    if (!fees) return null;
+    const totalWeight = feeItems.reduce((s, i) => s + Math.max(0, i.totalPrice), 0);
+    let fee = 0;
+    const breakdown: Record<string, number> = {};
+    for (const type of ['digital', 'physical'] as const) {
+      const rule = fees[type];
+      if (!rule) continue;
+      const lines = feeItems.filter((i) => i.type === type);
+      if (!lines.length) continue;
+      let part = 0;
+      if (rule.mode === 'percentage') {
+        const weight = lines.reduce((s, i) => s + Math.max(0, i.totalPrice), 0);
+        const basis = totalWeight > 0 ? (saleAmount * weight) / totalWeight : (saleAmount / feeItems.length) * lines.length;
+        part = (basis * rule.value) / 100;
+      } else {
+        const units = lines.reduce((s, i) => s + Math.max(0, i.quantity), 0);
+        const usd = rule.value * units;
+        part = currency === 'USD' || !usd ? usd : await this.requireFx().convert(usd, 'USD', currency);
+      }
+      breakdown[type] = this.round(part);
+      fee += part;
+    }
+    const platformFee = this.round(Math.min(Math.max(fee, 0), Math.max(saleAmount, 0)));
+    return { rate: saleAmount > 0 ? platformFee / saleAmount : 0, source: 'platform_fees', platformFee, breakdown };
+  }
+
+  private requireFx(): ExchangeRateService {
+    if (!this.exchangeRateService) throw new Error('ExchangeRateService unavailable — cannot convert the fixed platform fee');
+    return this.exchangeRateService;
   }
 
   /**
@@ -1784,6 +1839,7 @@ export class FinanceService {
     platformSponsoredUSD = 0, campaignId?: string | null, currency = 'USD', paymentMethodType = 'stripe',
     fulfillmentMode?: string | null,
     shippingCredit = 0,
+    feeItems?: FeeItem[],
   ) {
     // Nothing was paid for and no platform-funded discount is owed (a free order): there is no sale to
     // credit and no commission to take, so no ledger rows at all.
@@ -1792,10 +1848,10 @@ export class FinanceService {
     // crediting sale-minus-commission here would pay the seller for money they
     // already hold. Debit the commission instead.
     if (isSellerCollectedCod(paymentMethodType, { fulfillmentMode })) {
-      return this.recordCodCommissionDebit(storeId, sellerId, orderId, saleAmount, platformSponsoredUSD, campaignId, currency);
+      return this.recordCodCommissionDebit(storeId, sellerId, orderId, saleAmount, platformSponsoredUSD, campaignId, currency, feeItems);
     }
     const chargesProcessingFee = paymentMethodType === 'stripe';
-    const { rate: platformFeeRate, source: feeRateSource, platformFee } = await this.platformCommission(storeId, saleAmount);
+    const { rate: platformFeeRate, source: feeRateSource, platformFee } = await this.platformCommission(storeId, saleAmount, currency, feeItems);
     // The card network charges on everything the buyer paid, shipping included; the platform
     // commission is on the sale only — never on shipping, which passes through to the seller.
     const processingFee = chargesProcessingFee ? this.round((saleAmount + shippingCredit) * PAYMENT_PROCESSING_RATE + PAYMENT_PROCESSING_FIXED) : 0;
@@ -2011,9 +2067,9 @@ export class FinanceService {
    */
   private async recordCodCommissionDebit(
     storeId: string, sellerId: string, orderId: string, saleAmount: number,
-    platformSponsoredUSD = 0, campaignId?: string | null, currency = 'USD',
+    platformSponsoredUSD = 0, campaignId?: string | null, currency = 'USD', feeItems?: FeeItem[],
   ) {
-    const { rate: feeRate, source: feeRateSource, platformFee: commission } = await this.platformCommission(storeId, saleAmount);
+    const { rate: feeRate, source: feeRateSource, platformFee: commission } = await this.platformCommission(storeId, saleAmount, currency, feeItems);
 
     const { justFlagged, balanceAfter } = await this.withTransaction(async (session) => {
       const already = await this.txModel.exists({

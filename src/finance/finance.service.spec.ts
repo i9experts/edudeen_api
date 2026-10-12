@@ -186,6 +186,51 @@ describe('FinanceService', () => {
     });
   });
 
+  describe('recordSale — per-product-type platform fees', () => {
+    const fees = (v: any) => { (adminConfigService as any).getPlatformFees = jest.fn().mockResolvedValue(v); };
+    const feeOf = (orderId: string) => txModel.created.find((t: any) => t.referenceId === orderId && t.type === 'fee');
+
+    it('percentage: digital 10% + physical 5% applied to each type\'s share of the sale; shipping credit is not charged', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      fees({ digital: { mode: 'percentage', value: 10 }, physical: { mode: 'percentage', value: 5 } });
+      const items = [{ type: 'digital', totalPrice: 60, quantity: 1 }, { type: 'physical', totalPrice: 40, quantity: 2 }];
+      // sale 100: digital share 60 -> 6, physical share 40 -> 2 => 8 ; shipping 20 passes through untouched
+      await service.recordSale(STORE_ID, SELLER_ID, 'o-pct', 100, 'd', 0, null, 'USD', 'manual_bank_transfer', 'seller', 20, items);
+      expect(feeOf('o-pct').amount).toBeCloseTo(-8, 2);
+      const sale = txModel.created.find((t: any) => t.referenceId === 'o-pct' && t.type === 'sale');
+      expect(sale.metadata.netAmount).toBeCloseTo(112, 2); // 100 - 8 + 20 shipping
+      expect(sale.metadata.feeRateSource).toBe('platform_fees');
+      expect(commissionRulesService.resolveRate).not.toHaveBeenCalled();
+    });
+
+    it('fixed: value (USD) x units sold per type, converted into the sale currency', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      fees({ digital: { mode: 'fixed', value: 0.5 }, physical: { mode: 'fixed', value: 1 } });
+      (service as any).exchangeRateService = { convert: jest.fn(async (amt: number) => amt * 280) };
+      const items = [{ type: 'digital', totalPrice: 1000, quantity: 3 }, { type: 'physical', totalPrice: 2000, quantity: 2 }];
+      // USD 0.5*3 + 1*2 = 3.5 -> PKR 980
+      await service.recordSale(STORE_ID, SELLER_ID, 'o-fix', 3000, 'd', 0, null, 'PKR', 'manual_bank_transfer', 'seller', 0, items);
+      expect(feeOf('o-fix').amount).toBeCloseTo(-980, 2);
+    });
+
+    it('a COD sale collected by the seller is debited the per-type fee', async () => {
+      const balance = makeBalance();
+      balanceModel.findOne.mockResolvedValue(balance);
+      fees({ digital: { mode: 'percentage', value: 10 }, physical: { mode: 'percentage', value: 20 } });
+      await service.recordSale(STORE_ID, SELLER_ID, 'o-cod', 100, 'd', 0, null, 'USD', 'cash_on_delivery', 'seller', 0, [{ type: 'physical', totalPrice: 100, quantity: 1 }]);
+      expect(balance.availableBalance).toBe(-20);
+      expect(feeOf('o-cod').amount).toBe(-20);
+    });
+
+    it('falls back to the legacy commission rules when platformFees is not configured', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      fees(null);
+      commissionRulesService.resolveRate = jest.fn().mockResolvedValue({ rate: 0.08, source: 'hardcoded_fallback' });
+      await service.recordSale(STORE_ID, SELLER_ID, 'o-legacy', 100, 'd', 0, null, 'USD', 'manual_bank_transfer', 'seller', 0, [{ type: 'digital', totalPrice: 100, quantity: 1 }]);
+      expect(feeOf('o-legacy').amount).toBeCloseTo(-8, 2);
+    });
+  });
+
   describe('recordRefund', () => {
     it('deducts fully from availableBalance when it covers the refund', async () => {
       const balance = makeBalance({ availableBalance: 100, pendingBalance: 0 });
