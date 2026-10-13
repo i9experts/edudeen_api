@@ -7,6 +7,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -16,6 +17,7 @@ import { CreateContactSubmissionDto, UpdateContactStatusDto } from './dto/contac
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 
 @ApiTags('Contact')
 @Controller('api/contact')
@@ -26,11 +28,14 @@ export class ContactController {
   // PUBLIC (No Auth) — Contact Us form submission
   // ============================================================
 
+  // Optional auth: a signed-in Premium member's message gets the priority flag. The typed email alone is NOT trusted for that.
+  @UseGuards(OptionalJwtAuthGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post()
   @ApiOperation({ summary: 'Submit the Contact Us form (public)' })
-  submit(@Body() dto: CreateContactSubmissionDto) {
-    return this.contactService.submit(dto);
+  submit(@Body() dto: CreateContactSubmissionDto, @Req() req: any) {
+    const authedUserId = req?.user?.role === 'user' ? (req.user.userId as string | undefined) : undefined;
+    return this.contactService.submit(dto, authedUserId);
   }
 
   // ============================================================

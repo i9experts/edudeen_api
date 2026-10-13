@@ -205,16 +205,20 @@ describe('wiring in other modules', () => {
     expect(map.get('A')![0].earlyAccess).toBe(true);
   });
 
-  it('contact: a premium member email gets priority, everyone else the old payload', async () => {
+  it('contact: only a SIGNED-IN premium member gets priority (a typed member email alone does not)', async () => {
     const create = jest.fn(async (d: any) => ({ ...d, name: 'N', email: d.email }));
     const model: any = { create, countDocuments: jest.fn().mockResolvedValue(1) };
     const mail: any = { sendMail: jest.fn().mockResolvedValue(undefined) };
     const dto: any = { name: 'N', email: 'M@x.com', topic: 't', message: 'hello' };
-    await new ContactService(model, mail, { isPremiumEmail: jest.fn().mockResolvedValue(true) } as any).submit(dto);
+    const member: any = { getEntitlements: jest.fn().mockResolvedValue({ prioritySupport: true }) };
+    const nonMember: any = { getEntitlements: jest.fn().mockResolvedValue({ prioritySupport: false }) };
+    await new ContactService(model, mail, member).submit(dto, 'u1');
     expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ email: 'm@x.com', priority: true }));
-    await new ContactService(model, mail, { isPremiumEmail: jest.fn().mockResolvedValue(false) } as any).submit(dto);
+    await new ContactService(model, mail, member).submit(dto); // anonymous: not flagged even for a member's email
     expect(create.mock.calls[1][0]).not.toHaveProperty('priority');
-    await new ContactService(model, mail).submit(dto);
+    await new ContactService(model, mail, nonMember).submit(dto, 'u2');
     expect(create.mock.calls[2][0]).not.toHaveProperty('priority');
+    await new ContactService(model, mail).submit(dto, 'u3');
+    expect(create.mock.calls[3][0]).not.toHaveProperty('priority');
   });
 });

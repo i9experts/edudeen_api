@@ -83,7 +83,16 @@ export class PremiumService {
   private async pkrRate(): Promise<number | null> {
     try {
       const r: any = await this.exchangeRate.getCurrentRate('PKR');
-      return r?.ratePerUSD > 0 ? Number(r.ratePerUSD) : null;
+      if (r?.ratePerUSD > 0) return Number(r.ratePerUSD);
+    } catch { /* fall through */ }
+    // No stored rate yet (fresh install / cron not run): fetch on demand, then fall back to the admin's bank-transfer rate.
+    try {
+      const [s] = await this.exchangeRate.buildSnapshots(['PKR']);
+      if (s?.ratePerUSD > 0) return Number(s.ratePerUSD);
+    } catch { /* fall through */ }
+    try {
+      const mp: any = await this.adminConfig.getManualPaymentConfig();
+      return mp?.usdToPkrRate > 0 ? Number(mp.usdToPkrRate) : null;
     } catch { return null; }
   }
 

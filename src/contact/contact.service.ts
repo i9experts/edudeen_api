@@ -48,10 +48,10 @@ export class ContactService {
     @Optional() private readonly premium?: PremiumEntitlementsService,
   ) {}
 
-  async submit(dto: CreateContactSubmissionDto) {
+  async submit(dto: CreateContactSubmissionDto, authedUserId?: string) {
     const email = dto.email.trim().toLowerCase();
-    // Edudeen Premium priority support: the typed email belongs to an active member -> flagged for the admin queue.
-    const priority = this.premium ? await this.premium.isPremiumEmail(email) : false;
+    // Edudeen Premium priority support: only a SIGNED-IN active member is flagged (anyone can type a member's email).
+    const priority = this.premium && authedUserId ? (await this.premium.getEntitlements(authedUserId)).prioritySupport : false;
     const submission = await this.contactModel.create({
       name: dto.name.trim(),
       email,
