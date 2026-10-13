@@ -336,7 +336,7 @@ export class AdminConfigService {
     const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
     const src = body ?? {};
     const set: Record<string, unknown> = {};
-    for (const key of ['heroEyebrow', 'heroTitle', 'heroHighlight', 'heroText', 'heroPrimaryLabel', 'heroSecondaryLabel', 'heroBadge', 'featureEyebrow', 'featureHeading', 'featureText', 'featureLinkLabel', 'featuredCategory']) {
+    for (const key of ['heroEyebrow', 'heroTitle', 'heroHighlight', 'heroText', 'heroPrimaryLabel', 'heroSecondaryLabel', 'heroBadge', 'featureEyebrow', 'featureHeading', 'featureText', 'featureLinkLabel', 'featuredCategory', 'creatorEyebrow', 'creatorHeading', 'creatorText', 'creatorLinkLabel']) {
       if (src[key] !== undefined) set[`homeContent.${key}`] = str(src[key], 300);
     }
     for (const key of ['heroImageUrl', 'googlePlayUrl', 'appStoreUrl']) {

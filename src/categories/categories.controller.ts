@@ -9,6 +9,7 @@ import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { AdminReauthGuard } from '../admin-reauth/admin-reauth.guard';
 
 interface AdminRequest {
   user: { userId: string };
@@ -21,7 +22,7 @@ const auditMeta = (req: AdminRequest) => ({ adminId: req.user.userId, ip: req.ip
 export class CategoriesController {
   constructor(private readonly categoriesService: CategoriesService) {}
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('seller', 'admin')
   @Post('add-category')
   async addCategory(
@@ -43,28 +44,28 @@ export class CategoriesController {
   }
 
   // ── Admin taxonomy management (declared reorder before :id routes) ──
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @Get('admin/tree')
   async adminTree() {
     return this.categoriesService.getAdminCategoryTree();
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @Patch('reorder')
   async reorder(@Req() req: AdminRequest, @Body() dto: ReorderCategoriesDto) {
     return this.categoriesService.reorderCategories(dto, auditMeta(req));
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @Patch('category/:id')
   async update(@Req() req: AdminRequest, @Param('id') id: string, @Body() dto: UpdateCategoryDto) {
     return this.categoriesService.updateCategory(id, dto, auditMeta(req));
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @Delete('category/:id')
   async remove(@Req() req: AdminRequest, @Param('id') id: string, @Query('reassignTo') reassignTo?: string) {

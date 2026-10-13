@@ -3,6 +3,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, Use
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { AdminReauthGuard } from '../admin-reauth/admin-reauth.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { AdminMarketingService } from './admin-marketing.service';
@@ -14,7 +15,7 @@ import { UpdatePlatformCouponDto } from './dto/update-platform-coupon.dto';
 
 @ApiTags('Admin Marketing')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
 @Roles('admin')
 @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
 @Controller('api/admin/marketing')

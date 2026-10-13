@@ -128,6 +128,7 @@ export class AdminConfigController {
     });
   }
 
+  @UseGuards(AdminReauthGuard)
   @Put('social-links')
   updateSocialLinks(@Req() req: any, @Body() dto: UpdateSocialLinksDto) {
     return this.adminConfigService.updateSocialLinks(dto, {
