@@ -2,6 +2,7 @@
 import {
   Controller,
   Get,
+  Header,
   Post,
   Patch,
   Delete,
@@ -41,6 +42,8 @@ export class BannersController {
   constructor(private readonly bannersService: BannersService) {}
 
   // GET all banners — public. Omit `placement` to preserve today's unscoped behavior.
+  // Admins publish/schedule banners live, so browsers/CDNs must revalidate rather than serve an older copy.
+  @Header('Cache-Control', 'no-cache')
   @Get()
   findAll(@Query('placement') placement?: PromotionPlacement) {
     return this.bannersService.findAll(placement);

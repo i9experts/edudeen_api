@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Header } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminConfigService } from './admin-config.service';
 
@@ -16,6 +16,8 @@ export class PublicPlatformConfigController {
     return this.adminConfigService.getPublicMaintenance();
   }
 
+  // Admins edit this live (inline edit mode): browsers/CDNs must revalidate instead of serving an older copy.
+  @Header('Cache-Control', 'no-cache')
   @Get('public')
   getPublicConfig() {
     return this.adminConfigService.getPublicConfig();
