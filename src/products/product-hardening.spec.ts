@@ -361,3 +361,42 @@ describe('ProductsService digital config + sub-category', () => {
     await expect(bad.resolveSubCategoryId('root1', null)).resolves.toBeNull();
   });
 });
+
+describe('ProductsService root category choice', () => {
+  const ROOT = '64f0c0ffee0c0ffee0c0ff09';
+  const make = (found: any) => {
+    const svc: any = Object.create(ProductsService.prototype);
+    svc.databaseService = { repositories: { categoryModel: { findOne: jest.fn().mockResolvedValue(found) } } };
+    return svc;
+  };
+
+  it('accepts another active main category and queries parentId null', async () => {
+    const svc = make({ _id: ROOT });
+    await expect(svc.resolveRootCategoryId('storeCat', ROOT)).resolves.toBe(ROOT);
+    expect(svc.databaseService.repositories.categoryModel.findOne).toHaveBeenCalledWith({
+      _id: ROOT, parentId: null, status: 'active', isDelete: false,
+    });
+  });
+
+  it('rejects sub / inactive / deleted (not found) and malformed ids', async () => {
+    const svc = make(null);
+    await expect(svc.resolveRootCategoryId('storeCat', ROOT)).rejects.toThrow(/active main category/);
+    await expect(svc.resolveRootCategoryId('storeCat', 'nope')).rejects.toThrow(/valid category id/);
+    await expect(svc.resolveRootCategoryId('storeCat', { $ne: null })).rejects.toThrow(BadRequestException);
+  });
+
+  it('omitted categoryId keeps the store default without a DB lookup', async () => {
+    const svc = make(null);
+    await expect(svc.resolveRootCategoryId('storeCat', undefined)).resolves.toBe('storeCat');
+    expect(svc.databaseService.repositories.categoryModel.findOne).not.toHaveBeenCalled();
+    await expect(svc.resolveRootCategoryId(null, undefined)).rejects.toThrow(/no category/);
+  });
+
+  it('sub-category is validated against the chosen root', async () => {
+    const svc = make({ _id: '64f0c0ffee0c0ffee0c0ff01' });
+    await svc.resolveSubCategoryId(ROOT, '64f0c0ffee0c0ffee0c0ff01');
+    expect(svc.databaseService.repositories.categoryModel.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ parentId: ROOT }),
+    );
+  });
+});

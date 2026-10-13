@@ -184,6 +184,22 @@ export class ProductsService {
 
   /** subCategoryId must be an ACTIVE child of the product's root category. It used to be stored unchecked
    *  (any string, any foreign/inactive/deleted/root category), polluting other categories' browse pages. */
+  /** Seller may pick ANY active main category per product; omitted -> the store's own category (legacy default). */
+  private async resolveRootCategoryId(defaultCategoryId: string | null | undefined, requested: unknown): Promise<string> {
+    if (requested === undefined || requested === null || requested === '') {
+      if (!defaultCategoryId) throw new BadRequestException('Your store has no category selected');
+      return defaultCategoryId;
+    }
+    if (typeof requested !== 'string' || !isValidObjectId(requested)) {
+      throw new BadRequestException('categoryId is not a valid category id');
+    }
+    const root = await this.databaseService.repositories.categoryModel.findOne({
+      _id: requested, parentId: null, status: 'active', isDelete: false,
+    });
+    if (!root) throw new BadRequestException('categoryId must be an active main category');
+    return requested;
+  }
+
   private async resolveSubCategoryId(rootCategoryId: string, subCategoryId: unknown): Promise<string | null> {
     if (subCategoryId === undefined || subCategoryId === null || subCategoryId === '') return null;
     if (typeof subCategoryId !== 'string' || !isValidObjectId(subCategoryId)) {
@@ -192,7 +208,7 @@ export class ProductsService {
     const sub = await this.databaseService.repositories.categoryModel.findOne({
       _id: subCategoryId, parentId: rootCategoryId, status: 'active', isDelete: false,
     });
-    if (!sub) throw new BadRequestException('subCategoryId must be an active subcategory of your store\'s category');
+    if (!sub) throw new BadRequestException('subCategoryId must be an active subcategory of the selected category');
     return subCategoryId;
   }
 
@@ -1380,9 +1396,7 @@ export class ProductsService {
     const cleanTags = tags === undefined ? [] : assertStringArray(tags, 'tags', { maxItems: 30, maxLength: 60 });
     const cleanImages = images === undefined ? [] : assertStringArray(images, 'images', { maxItems: 20, maxLength: 2048 });
 
-    const categoryId = store.categoryId;
-    if (!categoryId)
-      throw new BadRequestException('Your store has no category selected');
+    const categoryId = await this.resolveRootCategoryId(store.categoryId, body.categoryId);
 
     const campaignIds = body.campaignIds === undefined ? [] : await this.marketingService.resolveProductCampaignIds(String(store._id), body.campaignIds);
     const slug = await generateUniqueSlug(productModel, name);
@@ -1553,9 +1567,7 @@ export class ProductsService {
       }
     }
 
-    const categoryId = store.categoryId;
-    if (!categoryId)
-      throw new BadRequestException('Your store has no category selected');
+    const categoryId = await this.resolveRootCategoryId(store.categoryId, body.categoryId);
 
     const validSubCategoryId = await this.resolveSubCategoryId(categoryId, subCategoryId);
     const digitalConfig = digital ? await this.buildDigitalConfig(sellerId, digital, null) : null;
@@ -1758,8 +1770,14 @@ export class ProductsService {
 
     if (name !== undefined) assertText(name, 'name', 200);
     if (description !== undefined) productUpdate.description = description === null ? null : assertText(description, 'description', 20000);
+    let effectiveCategoryId = product.categoryId;
+    if (body.categoryId !== undefined && body.categoryId !== null && body.categoryId !== '' && body.categoryId !== product.categoryId) {
+      effectiveCategoryId = await this.resolveRootCategoryId(product.categoryId, body.categoryId);
+      productUpdate.categoryId = effectiveCategoryId;
+      productUpdate.subCategoryId = null;
+    }
     if (subCategoryId !== undefined)
-      productUpdate.subCategoryId = await this.resolveSubCategoryId(product.categoryId, subCategoryId);
+      productUpdate.subCategoryId = await this.resolveSubCategoryId(effectiveCategoryId, subCategoryId);
     if (images !== undefined) productUpdate.images = assertStringArray(images, 'images', { maxItems: 20, maxLength: 2048 });
     if (tags !== undefined) productUpdate.tags = assertStringArray(tags, 'tags', { maxItems: 30, maxLength: 60 });
     if (isListedOnEdudeen !== undefined)
