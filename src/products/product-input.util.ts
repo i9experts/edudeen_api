@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { cleanClassRange } from './class-levels';
 import { CURRICULA, DELIVERY_FORMATS, DeliveryFormat, DownloadLimit, LicenseType, LICENSE_OPTION_LABEL, LICENSE_OPTION_NAME, LIVE_PLATFORMS } from './schemas/product.schema';
 
 /** 'single_classroom' etc. for a variant that carries a "License" option. */
@@ -10,8 +11,8 @@ export function licenseFromVariant(variant: any): string | null {
 
 /** Board/syllabus list and age range shared by every product type. Only keys
  *  present in the request are returned, so an edit leaves the rest alone. */
-export function cleanLearningMeta(body: Record<string, unknown>): { curricula?: string[]; ageMin?: number | null; ageMax?: number | null } {
-  const out: { curricula?: string[]; ageMin?: number | null; ageMax?: number | null } = {};
+export function cleanLearningMeta(body: Record<string, unknown>): { curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null } {
+  const out: { curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null } = {};
   if (body.curricula !== undefined) {
     if (!Array.isArray(body.curricula) || body.curricula.length > CURRICULA.length) {
       throw new BadRequestException('curricula must be a list of boards');
@@ -34,6 +35,12 @@ export function cleanLearningMeta(body: Record<string, unknown>): { curricula?: 
   if (body.ageMax !== undefined) out.ageMax = age(body.ageMax, 'ageMax');
   if (out.ageMin != null && out.ageMax != null && out.ageMin > out.ageMax) {
     throw new BadRequestException('ageMin cannot be more than ageMax');
+  }
+  // Optional class range (see class-levels.ts); a single side means that one class.
+  Object.assign(out, cleanClassRange(body, (m) => new BadRequestException(m)));
+  if (body.classFrom !== undefined && body.classTo !== undefined) {
+    if (out.classFrom && !out.classTo) out.classTo = out.classFrom;
+    if (out.classTo && !out.classFrom) out.classFrom = out.classTo;
   }
   return out;
 }

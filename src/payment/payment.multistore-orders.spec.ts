@@ -198,6 +198,19 @@ describe('createOrder — a multi-store checkout becomes up to 2 Orders (digital
     expect(digital.sellerOrders[0].shippingFee).toBe(0);
   });
 
+  it("copies the checkout's shipping estimate text onto the physical Order only", async () => {
+    const { place, checkout } = build();
+    checkout.shippingEstimate = '2-3 days';
+    const orders = await place();
+    const physical = orders.find((o: any) => o.sellerOrders[0].fulfillmentType === 'physical');
+    const digital = orders.find((o: any) => o.sellerOrders[0].fulfillmentType === 'digital');
+    expect(physical.shippingEstimate).toBe('2-3 days');
+    expect(digital.shippingEstimate ?? null).toBeNull();
+    // the order-success payload (formatOrder) exposes it too
+    const fmt = (PaymentService.prototype as any).formatOrder.call({}, physical);
+    expect(fmt.shippingEstimate).toBe('2-3 days');
+  });
+
   it("snapshots each store's fulfillment mode on its physical sub-order (digital has none)", async () => {
     const { place } = build();
     const orders = await place();

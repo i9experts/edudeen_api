@@ -148,6 +148,22 @@ describe('buyer order views — fulfillment mode and per-store shipping (additiv
   });
 });
 
+describe('buyer order views — shippingEstimate (additive)', () => {
+  it('my-orders, by-checkout and GET /orders/:id carry the snapshot (null when absent)', async () => {
+    const { svc } = build([
+      order('1', { shippingEstimate: '2-3 days' }),
+      order('2'),
+    ]);
+    const mine = await svc.getOrdersByUserId('buyer1', {});
+    expect(mine.data.orders.map((o: any) => o.shippingEstimate)).toEqual(['2-3 days', null]);
+    const one = await svc.getOrderById('buyer1', 'order-1');
+    expect(one.data.shippingEstimate).toBe('2-3 days');
+    const CHK = '64f0c0ffee0c0ffee0c0ff01';
+    const by = await build([order('1', { checkoutId: CHK, shippingEstimate: '2-3 days' })]).svc.getOrdersByCheckout('buyer1', CHK);
+    expect(by.data.orders[0].shippingEstimate).toBe('2-3 days');
+  });
+});
+
 describe('seller order list rows', () => {
   it('carry fulfillmentMode of THEIR sub-order (missing → "seller"), so the app need not infer it from a 403', async () => {
     const orders = [

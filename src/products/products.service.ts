@@ -23,7 +23,9 @@ import { EducationLevel, LICENSE_OPTION_LABEL, LICENSE_OPTION_NAME } from './sch
 import { EducationLevelService } from './education-level.service';
 import { UploadService } from 'src/upload/upload.service';
 import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
+import { fetchPdfPageCount, isPdfName } from './pdf-page-count.util';
 import { sanitizeDigitalForPublicView } from './product-public-view.util';
+import { classFilter, classIndex } from './class-levels';
 import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, cleanLearningMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
 import { generateUniqueSlug } from 'src/common/slug.util';
 import { RedisService } from 'src/redis/redis.service';
@@ -233,7 +235,7 @@ export class ProductsService {
     if (!Array.isArray(rawFiles)) throw new BadRequestException('digital.files must be an array');
     if (rawFiles.length > 30) throw new BadRequestException('A product can have at most 30 files');
 
-    const files: Array<{ url: string; name: string; size: number | null; mimeType: string | null }> = [];
+    const files: Array<{ url: string; name: string; size: number | null; mimeType: string | null; pageCount?: number }> = [];
     for (const f of rawFiles as Array<Record<string, unknown>>) {
       if (!f || typeof f !== 'object') throw new BadRequestException('Each file must be an object');
       const known = existingFiles.find((e) => e.url === f.url);
@@ -245,8 +247,11 @@ export class ProductsService {
         name,
         size: trusted?.fileSize ?? known?.size ?? null,
         mimeType: trusted?.mimeType ?? known?.mimeType ?? null,
+        ...(typeof known?.pageCount === 'number' ? { pageCount: known.pageCount as number } : {}), // kept for unchanged files; new PDFs are counted after save
       });
     }
+    const knownPages = files.filter(f => typeof f.pageCount === 'number');
+    const pageCount = knownPages.length ? knownPages.reduce((s, f) => s + (f.pageCount as number), 0) : null;
 
     // Free sample: same ownership rule as the paid files.
     let sampleFile: { url: string; name: string; size: number | null; mimeType: string | null } | null = existing?.sampleFile ?? null;
@@ -264,7 +269,31 @@ export class ProductsService {
 
     const settings = cleanDigitalSettings(input, existing);
     const { preview, ...rest } = settings;
-    return this.prepareDigitalPreview(existing?.preview ?? null, { files, ...rest, preview, sampleFile });
+    return this.prepareDigitalPreview(existing?.preview ?? null, { files, pageCount, ...rest, preview, sampleFile });
+  }
+
+  /** Best-effort, fire-and-forget: counts the pages of PDF files that have no pageCount yet and stores them per file
+   *  (digital.files.[].pageCount) plus the sum (digital.pageCount). Never throws; a failure just leaves pageCount unset. */
+  async fillPdfPageCounts(productId: string): Promise<void> {
+    try {
+      const { productModel } = this.databaseService.repositories;
+      const product: any = await productModel.findOne({ _id: productId }).select('digital.files').lean();
+      const files: any[] = product?.digital?.files ?? [];
+      let changed = false;
+      for (const f of files) {
+        if (typeof f.pageCount === 'number' || !isPdfName(f.name, f.mimeType)) continue;
+        const n = await fetchPdfPageCount(this.uploadService.generateSignedUrl(f.url, 'raw', 300));
+        if (n === null) continue;
+        f.pageCount = n;
+        changed = true;
+        await productModel.updateOne({ _id: productId }, { $set: { 'digital.files.$[f].pageCount': n } }, { arrayFilters: [{ 'f.url': f.url }] });
+      }
+      if (!changed) return;
+      const total = files.reduce((s, f) => s + (typeof f.pageCount === 'number' ? f.pageCount : 0), 0);
+      await productModel.updateOne({ _id: productId }, { $set: { 'digital.pageCount': total || null } });
+    } catch {
+      /* best-effort */
+    }
   }
 
   /** Creates, updates or removes the extra "License" variants of a digital
@@ -560,7 +589,7 @@ export class ProductsService {
     sortBy?: 'newest' | 'price_asc' | 'price_desc' | 'rating' | 'popularity',
     attributesFilter?: Record<string, string[]>,
     search?: string,
-    learning?: { curriculum?: string; age?: number; featured?: boolean },
+    learning?: { curriculum?: string; age?: number; featured?: boolean; classValue?: string },
   ): Promise<any> {
     const productModel = this.databaseService.repositories.productModel;
     const productVariantModel =
@@ -583,6 +612,12 @@ export class ProductsService {
         { $or: [{ ageMin: null }, { ageMin: { $lte: learning.age } }] },
         { $or: [{ ageMax: null }, { ageMax: { $gte: learning.age } }] },
       ];
+    }
+
+    // Exact class (class-3): the product's class range covers it, or it has no class data and its coarse level does.
+    if (learning?.classValue) {
+      const cf = classFilter(learning.classValue);
+      if (cf) query.$and = [...(query.$and ?? []), cf];
     }
 
     const term = typeof search === 'string' ? search.trim().slice(0, 100) : '';
@@ -1685,6 +1720,8 @@ export class ProductsService {
       if (tiers.length) await this.syncLicenseVariants(product, digitalConfig?.licenseType ?? 'personal', tiers, store.baseCurrency ?? 'PKR');
     }
 
+    void this.fillPdfPageCounts(String(product._id));
+
     return {
       success: true,
       message: 'Digital product created successfully',
@@ -1861,6 +1898,15 @@ export class ProductsService {
       const nextMin = productUpdate.ageMin !== undefined ? productUpdate.ageMin : product.ageMin;
       const nextMax = productUpdate.ageMax !== undefined ? productUpdate.ageMax : product.ageMax;
       if (nextMin != null && nextMax != null && nextMin > nextMax) throw new BadRequestException('ageMin cannot be more than ageMax');
+      if (productUpdate.classFrom !== undefined || productUpdate.classTo !== undefined) {
+        let cf = productUpdate.classFrom !== undefined ? productUpdate.classFrom : product.classFrom;
+        let ct = productUpdate.classTo !== undefined ? productUpdate.classTo : product.classTo;
+        if (cf && !ct) ct = cf;
+        if (ct && !cf) cf = ct;
+        if (cf && ct && classIndex(cf) > classIndex(ct)) throw new BadRequestException('classFrom cannot be after classTo');
+        productUpdate.classFrom = cf ?? null;
+        productUpdate.classTo = ct ?? null;
+      }
     }
 
     if (educationLevel !== undefined && product.productType === 'educational') {
@@ -1907,6 +1953,7 @@ export class ProductsService {
             returnDocument: 'after',
           })
         : product;
+    if (productUpdate.digital) void this.fillPdfPageCounts(productId);
 
     // Digital/educational products still have exactly one (default) variant
     // and no dedicated variant-management endpoints — price/compareAtPrice

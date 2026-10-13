@@ -740,7 +740,7 @@ export class CheckoutService {
       shippingFee = added.data.shippingFee;
       finalTotal = added.data.totalAmount;
       // Reuse the document we just created instead of re-reading it.
-      checkout.set({ shippingZoneId: body.shippingZoneId, shippingFee, totalAmount: finalTotal });
+      checkout.set({ shippingZoneId: body.shippingZoneId, shippingFee, totalAmount: finalTotal, shippingEstimate: added.data.shippingEstimate ?? null });
       finalCheckout = checkout;
     }
 
@@ -871,12 +871,18 @@ export class CheckoutService {
     const shippingFee = this.round(shippingByStore.reduce((sum, l) => sum + l.fee, 0));
 
     const totalAmount = this.round(checkout.subtotal + shippingFee);
+    // Display-only snapshot of the zone's delivery estimate text (physical items only).
+    const shippingEstimate: string | null =
+      physicalStoreIds.length && typeof shippingZone.estimatedDeliveryTime === 'string' && shippingZone.estimatedDeliveryTime.trim()
+        ? shippingZone.estimatedDeliveryTime.trim()
+        : null;
 
     await checkoutModel.findByIdAndUpdate(checkoutId, {
       shippingZoneId,
       shippingFee,
       shippingByStore,
       totalAmount,
+      shippingEstimate,
     });
 
     return {
@@ -887,6 +893,7 @@ export class CheckoutService {
         shippingZoneId,
         shippingFee,
         shippingByStore,
+        shippingEstimate,
         subtotal: checkout.subtotal,
         totalAmount,
         ...this.splitSubtotalsByType(checkout.items as any[]),

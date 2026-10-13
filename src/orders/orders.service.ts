@@ -10,6 +10,7 @@ import { isValidObjectId } from 'mongoose';
 import { isVerifiedPurchaseLine } from 'src/rating/verified-purchase.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { UploadService } from 'src/upload/upload.service';
+import { ZIP_MAX_FILE_BYTES, ZIP_MAX_TOTAL_BYTES, buildZipStream, uniqueZipEntryNames, zipDownloadName } from './download-zip.util';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { FinanceService, shippingCreditFor, feeItemsFor } from 'src/finance/finance.service';
@@ -121,6 +122,7 @@ export class OrdersService {
       totalAmount: order.totalAmount,
       currency: order.currency,
       shippingAddress: order.shippingAddress,
+      shippingEstimate: order.shippingEstimate ?? null,
       stores: (order.sellerOrders ?? []).map((so: any) => {
         const seller = sellerMap.get(so.sellerId?.toString());
         return {
@@ -325,6 +327,7 @@ export class OrdersService {
 
     const enrichedOrder = {
       ...order,
+      shippingEstimate: (order as any).shippingEstimate ?? null,
       sellerOrders: orderSellerOrders.map((so: any) => {
         const seller = sellerMap.get(so.sellerId?.toString());
         const store: any = storeMap.get(String(so.storeId));
@@ -1930,6 +1933,78 @@ export class OrdersService {
     };
   }
 
+  /** Short-lived token for the browser-direct zip download (an <a href> cannot send the JWT header). */
+  getZipLink(userId: string, orderId: string, productId: string) {
+    return this.resolveDigitalAccess(userId, orderId, productId).then(() => ({
+      success: true,
+      data: {
+        token: this.jwtService.sign(
+          { typ: 'download-zip', userId, orderId, productId },
+          { secret: this.configService.get<string>('JWT_SECRET'), expiresIn: OrdersService.DOWNLOAD_TOKEN_TTL },
+        ),
+        endpoint: '/api/orders/download-zip-file',
+        expiresIn: '10 minutes',
+      },
+    }));
+  }
+
+  async downloadZipByToken(token: string) {
+    let payload: any;
+    try {
+      payload = this.jwtService.verify(token, { secret: this.configService.get<string>('JWT_SECRET') });
+    } catch {
+      throw new BadRequestException('Download link expired or invalid');
+    }
+    if (payload?.typ !== 'download-zip') throw new BadRequestException('Download link expired or invalid');
+    return this.downloadZip(payload.userId, payload.orderId, payload.productId);
+  }
+
+  /** All files of a purchased digital product as ONE streamed zip. Same access rules as every other download
+   *  (resolveDigitalAccess). Counts ONE download for the bundle (not one per file) so a download limit of N means
+   *  N bundle downloads; PDFs with stamping enabled are stamped per buyer exactly like the single-file path. */
+  async downloadZip(userId: string, orderId: string, productId: string) {
+    const access = await this.resolveDigitalAccess(userId, orderId, productId);
+    const { product, order, files } = access;
+
+    let total = 0;
+    for (const f of files as any[]) {
+      const size = Number(f.size) || 0;
+      if (size > ZIP_MAX_FILE_BYTES) {
+        throw new BadRequestException(`"${f.name}" is too large to include in a zip. Please download the files one by one.`);
+      }
+      total += size;
+    }
+    if (total > ZIP_MAX_TOTAL_BYTES) {
+      throw new BadRequestException('These files are too large to download as one zip. Please download them one by one.');
+    }
+
+    const needStamp = (files as any[]).some((f) => this.isStampedPdf(product, f));
+    let userEmail = userId;
+    if (needStamp) {
+      const user = await this.databaseService.repositories.userModel.findOne({ _id: userId }).select('email').lean();
+      userEmail = (user as any)?.email || userId;
+    }
+
+    await this.consumeDownload(orderId, access.soIndex, access.itemIndex, access.limit);
+
+    const names = uniqueZipEntryNames((files as any[]).map((f) => f.name));
+    const archive = buildZipStream(
+      (files as any[]).map((file, i) => ({
+        name: names[i],
+        open: async () => {
+          if (this.isStampedPdf(product, file)) {
+            return this.uploadService.stampPdf(file.url, userEmail, order.orderNumber);
+          }
+          const mimeType = this.uploadService.resolveMimeType(file.name, file.mimeType ?? 'application/octet-stream');
+          const resourceType = mimeType.startsWith('video/') ? 'video' : mimeType.startsWith('image/') ? 'image' : 'raw';
+          const response = await fetch(this.uploadService.generateSignedUrl(file.url, resourceType, 300));
+          if (!response.ok || !response.body) throw new BadRequestException('Failed to fetch file from storage');
+          return Readable.fromWeb(response.body as any);
+        },
+      })),
+    );
+    return { archive, fileName: zipDownloadName(product.name) };
+  }
   async streamStampedPdfByToken(token: string) {
     const { userId, orderId, productId, fileIndex } = this.verifyDownloadToken(token);
     return this.streamStampedPdf(userId, orderId, productId, Number(fileIndex));

@@ -172,6 +172,10 @@ export class Checkout {
   @Prop({ type: String, default: null })
   shippingZoneId: string | null;
 
+  // Display-only snapshot of the chosen zone's estimatedDeliveryTime (e.g. '2-3 days').
+  @Prop({ type: String, default: null })
+  shippingEstimate: string | null;
+
   @Prop({ type: String, enum: ['cash_on_delivery', 'stripe', 'manual_bank_transfer', 'jazzcash', 'easypaisa', 'free'], default: null })
   paymentType: string | null;
 

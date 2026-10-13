@@ -5,6 +5,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MessagingController } from './messaging.controller';
 import { MessagingService } from './messaging.service';
 import { MessagingGateway } from './messaging.gateway';
+import { ResponseStatsService } from './response-stats.service';
 import { AuthModule } from 'src/auth/auth.module';
 import { RedisModule } from 'src/redis/redis.module';
 import { UploadModule } from 'src/upload/upload.module';
@@ -24,7 +25,7 @@ import { UploadModule } from 'src/upload/upload.module';
     }),
   ],
   controllers: [MessagingController],
-  providers: [MessagingService, MessagingGateway, WsAuthService],
+  providers: [MessagingService, MessagingGateway, WsAuthService, ResponseStatsService],
   exports: [MessagingService],
 })
 export class MessagingModule {}

@@ -1002,6 +1002,27 @@ export class StoreService {
       }
     }
 
+    // Seller-stated return policy (advisory; shown on product pages).
+    if (body.returnPolicy !== undefined) {
+      const rp = body.returnPolicy;
+      if (rp === null) updateData.returnPolicy = null;
+      else {
+        if (typeof rp !== 'object' || Array.isArray(rp)) throw new BadRequestException('returnPolicy must be an object');
+        if (typeof rp.returnsAccepted !== 'boolean') throw new BadRequestException('returnPolicy.returnsAccepted must be true or false');
+        const days = rp.windowDays ?? 0;
+        if (typeof days !== 'number' || !Number.isInteger(days) || days < 0 || days > 90) {
+          throw new BadRequestException('returnPolicy.windowDays must be a whole number from 0 to 90');
+        }
+        if (rp.returnsAccepted && days < 1) throw new BadRequestException('returnPolicy.windowDays must be at least 1 day when returns are accepted');
+        if (rp.note !== undefined && rp.note !== null) text(rp.note, 'returnPolicy.note', 300);
+        updateData.returnPolicy = {
+          returnsAccepted: rp.returnsAccepted,
+          windowDays: rp.returnsAccepted ? days : 0,
+          note: typeof rp.note === 'string' && rp.note.trim() ? rp.note.trim() : null,
+        };
+      }
+    }
+
     // productTypes change ho to enabledTools bhi refresh
     if (productTypes !== undefined) {
       updateData.productTypes = productTypes;
@@ -1167,6 +1188,10 @@ export class StoreService {
         sellerType: store.sellerType ?? null,
         badges: store.badges ?? [],
         educatorProfile: store.educatorProfile ?? null,
+        returnPolicy: store.returnPolicy ?? null,
+        responseStats: store.responseStats?.medianReplyMinutes != null && store.responseStats.sampleSize >= 3
+          ? { medianReplyMinutes: store.responseStats.medianReplyMinutes, sampleSize: store.responseStats.sampleSize }
+          : null,
         createdAt: store.createdAt,
         announcementBar: announcementActive ? { message: bar.message, type: bar.type, ctaLabel: bar.ctaLabel, ctaLink: bar.ctaLink } : null,
         activeCampaign: primaryCampaign ? {

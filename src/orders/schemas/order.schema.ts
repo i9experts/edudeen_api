@@ -381,6 +381,10 @@ export class Order {
   @Prop({ type: OrderShippingAddressSchema, default: null })
   shippingAddress: OrderShippingAddress | null;
 
+  // Display-only snapshot of the shipping zone's delivery estimate (e.g. '2-3 days'); null for digital orders.
+  @Prop({ type: String, default: null })
+  shippingEstimate: string | null;
+
   @Prop({ required: true, default: 0 })
   subtotal: number;
 

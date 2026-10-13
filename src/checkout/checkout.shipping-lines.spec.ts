@@ -40,7 +40,7 @@ function setup(
       findByIdAndUpdate: update,
     },
     shippingZoneModel: {
-      findOne: jest.fn().mockResolvedValue({ _id: 'z1', shippingPrice: 300 }),
+      findOne: jest.fn().mockResolvedValue({ _id: 'z1', shippingPrice: 300, estimatedDeliveryTime: ' 2-3 days ' }),
     }, // PKR 300 per shipping line
   };
   const subs: any = {
@@ -107,6 +107,14 @@ describe('addShippingInCheckout — one shipping line per store with physical it
     const { res } = await run();
     expect(res.shippingByStore.map((l: any) => l.storeId)).toEqual(['A']);
     expect(res.shippingFee).toBe(300);
+  });
+
+  it('snapshots the zone delivery estimate text onto the checkout (physical only)', async () => {
+    const phys = await setup([line('A', 'physical', 1000)]).run();
+    expect(phys.saved.shippingEstimate).toBe('2-3 days');
+    expect(phys.res.shippingEstimate).toBe('2-3 days');
+    const digital = await setup([line('A', 'digital', 1000)]).run();
+    expect(digital.saved.shippingEstimate).toBeNull();
   });
 
   it('a digital-only checkout has no shipping', async () => {

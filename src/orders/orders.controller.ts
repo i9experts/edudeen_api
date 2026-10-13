@@ -219,6 +219,46 @@ export class OrdersController {
     stream.pipe(res);
   }
 
+  // Download every file of a purchased product as one streamed zip (JWT header; same access rules as single files).
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('user')
+  @Throttle({ default: { limit: 10, ttl: 600_000 } })
+  @Get('download-zip/:orderId/:productId')
+  async downloadZip(
+    @Req() req: any,
+    @Res() res: Response,
+    @Param('orderId') orderId: string,
+    @Param('productId') productId: string,
+  ) {
+    const { archive, fileName } = await this.ordersService.downloadZip(req.user.userId, orderId, productId);
+    this.pipeZip(res, archive, fileName);
+  }
+
+  // Browser-direct variant for <a href>: step 1 (JWT) issues a 10-minute token, step 2 redeems it.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('user')
+  @Get('download-zip-link/:orderId/:productId')
+  async getZipLink(@Req() req: any, @Param('orderId') orderId: string, @Param('productId') productId: string) {
+    return this.ordersService.getZipLink(req.user.userId, orderId, productId);
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 600_000 } })
+  @Get('download-zip-file')
+  async downloadZipFile(@Res() res: Response, @Query('token') token: string) {
+    const { archive, fileName } = await this.ordersService.downloadZipByToken(token);
+    this.pipeZip(res, archive, fileName);
+  }
+
+  private pipeZip(res: Response, archive: NodeJS.ReadableStream & { destroy(e?: Error): any }, fileName: string) {
+    res.set({
+      'Content-Type': 'application/zip',
+      'Content-Disposition': contentDisposition(fileName),
+      'X-Content-Type-Options': 'nosniff',
+    });
+    archive.on('error', () => res.destroy());
+    res.on('close', () => archive.destroy());
+    archive.pipe(res);
+  }
   // stamped PDF via token — browser direct download (no JWT header)
   @Get('stream-pdf-token')
   async streamPdfByToken(@Res() res: Response, @Query('token') token: string) {

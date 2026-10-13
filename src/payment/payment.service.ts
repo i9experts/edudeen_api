@@ -1608,6 +1608,7 @@ export class PaymentService {
       // hardcode "$" regardless of what currency the order was really in.
       currency: order.currency,
       deliveryAddress: order.shippingAddress ?? null,
+      shippingEstimate: order.shippingEstimate ?? null,
       items: allItems,
       summary: {
         subtotal: order.subtotal,
@@ -1904,6 +1905,7 @@ export class PaymentService {
         fxSnapshots,
         sellerOrders,
         shippingAddress,
+        shippingEstimate: checkout.shippingEstimate ?? null,
         subtotal,
         shippingFee,
         taxAmount: 0,

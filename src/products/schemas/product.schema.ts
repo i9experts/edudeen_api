@@ -52,6 +52,10 @@ export class DigitalFile {
 
   @Prop({ type: String, default: null })
   mimeType: string | null;
+
+  // PDF page count, filled in best-effort after save (null = unknown / not a PDF)
+  @Prop({ type: Number, default: null })
+  pageCount?: number | null;
 }
 export const DigitalFileSchema = SchemaFactory.createForClass(DigitalFile);
 
@@ -83,6 +87,10 @@ export const DigitalPreviewSchema = SchemaFactory.createForClass(DigitalPreview)
 export class DigitalConfig {
   @Prop({ type: [DigitalFileSchema], default: [] })
   files: DigitalFile[];
+
+  // Sum of the PDF pages of iles (public as digital.pageCount); null = unknown
+  @Prop({ type: Number, default: null })
+  pageCount?: number | null;
 
   @Prop({ type: String, enum: Object.values(DownloadLimit), default: DownloadLimit.UNLIMITED })
   downloadLimit: DownloadLimit;
@@ -208,6 +216,14 @@ export class Product {
 
   @Prop({ type: Number, default: null })
   ageMax: number | null;
+
+  // Optional class range the product suits (values from class-levels.ts), e.g. class-2..class-4.
+  // No class data = matched through its coarse educationLevel instead.
+  @Prop({ type: String, default: null })
+  classFrom: string | null;
+
+  @Prop({ type: String, default: null })
+  classTo: string | null;
 
   // How a digital product reaches the buyer: files to download, an online
   // course built in the course builder, or a scheduled live class.
@@ -344,6 +360,7 @@ ProductSchema.index({ name: 1 });
 ProductSchema.index({ categoryId: 1 });
 ProductSchema.index({ productType: 1 });
 ProductSchema.index({ educationLevel: 1 });
+ProductSchema.index({ classFrom: 1, classTo: 1 });
 ProductSchema.index({ normalizedCustomLevel: 1 });
 ProductSchema.index({ type: 1 });
 ProductSchema.index({ purchaseCount: -1 });

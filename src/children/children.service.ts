@@ -3,6 +3,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model } from 'mongoose';
 import { EducationLevel } from '../products/schemas/product.schema';
+import { canonicalClass, levelForClass } from '../products/class-levels';
 import { ChildProfile, ChildProfileDocument } from './children.schema';
 
 export const MAX_CHILDREN = 8;
@@ -14,12 +15,15 @@ interface Clean { name: string; educationLevel: string; gradeLabel: string; age:
 /** Validates + normalises input. `partial` = PATCH (only provided keys are returned). */
 export function cleanChildInput(body: ChildInput, partial = false): Partial<Clean> {
   const out: Partial<Clean> = {};
-  const b = body ?? {};
+  let b = body ?? {};
   if (!partial || b.name !== undefined) {
     const name = typeof b.name === 'string' ? b.name.trim() : '';
     if (name.length < 1 || name.length > 60) throw new BadRequestException('Child name must be 1-60 characters');
     out.name = name;
   }
+  // gradeLabel is now a class value (class-3). Known classes derive the level; free text from before is kept as typed.
+  const cls = b.gradeLabel !== undefined ? canonicalClass(b.gradeLabel) : null;
+  if (cls) b = { ...b, educationLevel: levelForClass(cls) ?? b.educationLevel };
   if (!partial || b.educationLevel !== undefined) {
     if (typeof b.educationLevel !== 'string' || !LEVELS.has(b.educationLevel)) throw new BadRequestException('Choose a valid level');
     out.educationLevel = b.educationLevel;
@@ -27,7 +31,7 @@ export function cleanChildInput(body: ChildInput, partial = false): Partial<Clea
   if (b.gradeLabel !== undefined) {
     const g = typeof b.gradeLabel === 'string' ? b.gradeLabel.trim() : '';
     if (g.length > 30) throw new BadRequestException('Class label is too long (max 30)');
-    out.gradeLabel = g;
+    out.gradeLabel = cls ?? g;
   }
   if (b.age !== undefined) {
     if (b.age === null || b.age === '') out.age = null;

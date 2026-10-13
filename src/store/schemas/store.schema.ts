@@ -336,6 +336,15 @@ export class Store {
   @Prop({ type: Object, default: null })
   directPayment: Record<string, string | null> | null;
 
+  // Seller-stated return policy shown on the product page (advisory: the return/refund
+  // request APIs do not enforce windowDays; each request is reviewed by the seller).
+  @Prop({ type: Object, default: null })
+  returnPolicy: { returnsAccepted: boolean; windowDays: number; note?: string | null } | null;
+
+  // Computed hourly from buyer<->seller messages (ResponseStatsService). Null = not enough data.
+  @Prop({ type: Object, default: null })
+  responseStats: { medianReplyMinutes: number; sampleSize: number; updatedAt: Date } | null;
+
   @Prop({ type: String, default: null })
   categoryId!: string | null;
 

@@ -20,7 +20,7 @@ function fakeModel() {
 describe('cleanChildInput', () => {
   it('accepts a valid child and trims', () => {
     expect(cleanChildInput({ name: ' Ali ', educationLevel: 'primary_school', gradeLabel: 'Class 3', age: 8, subjects: ['Maths', ' Maths ', 'Urdu'] }))
-      .toEqual({ name: 'Ali', educationLevel: 'primary_school', gradeLabel: 'Class 3', age: 8, subjects: ['Maths', 'Urdu'] });
+      .toEqual({ name: 'Ali', educationLevel: 'primary_school', gradeLabel: 'class-3', age: 8, subjects: ['Maths', 'Urdu'] });
   });
   it('rejects bad name, level, age, subjects', () => {
     expect(() => cleanChildInput({ name: '', educationLevel: 'college' })).toThrow(BadRequestException);

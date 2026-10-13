@@ -1,4 +1,5 @@
 import { CURRICULA } from './schemas/product.schema';
+import { CLASS_VALUES } from './class-levels';
 import { clampInt, queryString } from './product-public-view.util';
 import {
   Controller,
@@ -47,6 +48,7 @@ export class productController {
     @Query('curriculum') curriculumQuery?: string,
     @Query('age') ageQuery?: string,
     @Query('featured') featuredQuery?: string,
+    @Query('class') classQuery?: string,
     @Query('exact') exactQuery?: string,
   ) {
     // Express/qs hands back arrays and objects for ?x[]=1 / ?x[$ne]=1 even though these are typed as strings.
@@ -115,6 +117,7 @@ export class productController {
         curriculum: CURRICULA.includes(curriculumQuery as any) ? curriculumQuery : undefined,
         age: ageQuery !== undefined && /^\d{1,2}$/.test(String(ageQuery)) ? Number(ageQuery) : undefined,
         featured: featuredQuery === '1' || featuredQuery === 'true',
+        classValue: CLASS_VALUES.includes(queryString(classQuery) as string) ? (queryString(classQuery) as string) : undefined,
       },
     );
     // Typo tolerance only for real keyword searches (?exact=1 = "search instead for what I typed").
