@@ -152,27 +152,96 @@ describe('PremiumEntitlementsService', () => {
     expect((await svc.getEntitlements('u1')).isPremium).toBe(true);
     expect(model.findOne).not.toHaveBeenCalled();
   });
-  it('decorateProducts: teaser percent for everyone, member price only for members, none on a campaign product', async () => {
+  it('decorateProducts (platform offer 5% on by default): teaser = seller% + platform% for everyone with the breakdown; member price from the LIST price; campaign + subscriber price hidden for a member', async () => {
     const products = [
       { _id: 'p1', storeId: 'A', variants: [{ price: 100 }] },
-      { _id: 'p2', storeId: 'A', activeCampaign: { campaignId: 'c' }, variants: [{ price: 100 }] },
+      { _id: 'p2', storeId: 'A', activeCampaign: { campaignId: 'c' }, variants: [{ price: 90, compareAtPrice: null, originalCompareAtPrice: 100, subscriberPrice: 85, discountPercent: 5 }] },
       { _id: 'p3', storeId: 'B', variants: [{ price: 100 }] },
+      { _id: 'p4', storeId: 'A', premiumDiscountPercent: 15, variants: [{ price: 90, compareAtPrice: 100 }] },
     ];
     const settings = new Map<string, any>([['A', { premiumDiscount: { enabled: true, percent: 20 } }]]);
     const member = make({ status: 'active', planSnapshot: { benefits: {} } }).svc;
-    const [a, b, c] = await member.decorateProducts(products as any, 'u1', { storeSettings: settings });
-    expect(a.premiumPercent).toBe(20);
-    expect((a.variants[0] as any)).toMatchObject({ premiumPrice: 80, premiumDiscountPercent: 20 });
-    expect(b.premiumPercent).toBe(20);
-    expect((b.variants[0] as any).premiumPrice).toBeUndefined();
+    const [a, b, c, d] = await member.decorateProducts(products as any, 'u1', { storeSettings: settings });
+    expect(a).toMatchObject({ premiumPercent: 25, premiumSellerPercent: 20, premiumPlatformPercent: 5 });
+    expect(a.variants[0] as any).toMatchObject({ premiumPrice: 75, listPrice: 100, premiumDiscountPercent: 25, premiumSellerPercent: 20, premiumPlatformPercent: 5 });
+    // p2: the campaign markdown was hidden upstream (originalCompareAtPrice keeps LIST = 100): list 100 x 0.75 = 75; badge and subscriber price removed
+    expect(b.activeCampaign).toBeNull();
+    expect(b.variants[0] as any).toMatchObject({ premiumPrice: 75, listPrice: 100 });
+    expect((b.variants[0] as any).subscriberPrice).toBeUndefined();
     expect(c.premiumPercent).toBeUndefined();
+    // p4: seller 15 + platform 5 on a 10% normal sale -> 80 (normal buyer pays 90)
+    expect(d.variants[0] as any).toMatchObject({ premiumPrice: 80, listPrice: 100, premiumDiscountPercent: 20 });
     const guest = make(null).svc;
-    const [g] = await guest.decorateProducts(products as any, null, { storeSettings: settings });
-    expect(g.premiumPercent).toBe(20);
+    const [g, , , gd] = await guest.decorateProducts(products as any, null, { storeSettings: settings });
+    expect(g.premiumPercent).toBe(25);
+    expect(g.premiumSellerPercent).toBe(20);
     expect((g.variants[0] as any).premiumPrice).toBeUndefined();
+    expect(gd.premiumPercent).toBe(20);
+    expect((gd.variants[0] as any).compareAtPrice).toBe(100); // a guest keeps seeing the seller's normal sale
+  });
+  it('decorateProducts: a percentage campaign that beats premium keeps the campaign badge and offers no premium price; one that loses is replaced by premium', async () => {
+    const mk = (pct: number) => ({ _id: 'p', storeId: 'A', activeCampaign: { campaignId: 'c', discountType: 'percentage', discountValue: pct }, variants: [{ price: 100, compareAtPrice: null, originalCompareAtPrice: null }] });
+    const settings = new Map<string, any>([['A', { premiumDiscount: { enabled: true, percent: 20 } }]]);
+    const member = make({ status: 'active', planSnapshot: { benefits: {} } }).svc;
+    const [better, worse] = await member.decorateProducts([mk(40), mk(10)] as any, 'u1', { storeSettings: settings }); // premium = 25 (20 + 5)
+    expect((better.variants[0] as any).premiumPrice).toBeUndefined();
+    expect(better.activeCampaign).not.toBeNull();
+    expect((worse.variants[0] as any).premiumPrice).toBe(75);
+    expect(worse.activeCampaign).toBeNull();
+  });  it('platform offer OFF: teaser and member price are seller-only', async () => {
+    const { svc } = make({ status: 'active', planSnapshot: { benefits: {} } });
+    (svc as any).settingsModel = { findOne: () => ({ lean: async () => ({ key: 'default', platformDiscount: { enabled: false, percent: 5 }, premiumSellerFeePercent: 5, minGapPercent: 5 }) }) };
+    const [a] = await svc.decorateProducts([{ _id: 'p1', storeId: 'A', variants: [{ price: 100 }] }] as any, 'u1', { storeSettings: new Map([['A', { premiumDiscount: { enabled: true, percent: 20 } }]]) });
+    expect(a).toMatchObject({ premiumPercent: 20, premiumPlatformPercent: 0 });
+    expect(a.variants[0] as any).toMatchObject({ premiumPrice: 80 });
+  });
+  it('getSettings/getTerms: defaults when never saved; reads the saved row; a failing read falls back to defaults', async () => {
+    const { svc } = make(null);
+    expect(await svc.getTerms()).toEqual({ platformEnabled: true, platformPercent: 5, sellerFeePercent: 5, minGapPercent: 5 });
+    const saved = new PremiumEntitlementsService({ repositories: {} } as any, {} as any, {} as any, { findOne: () => ({ lean: async () => ({ platformDiscount: { enabled: true, percent: 8 }, premiumSellerFeePercent: 3, minGapPercent: 2 }) }) } as any);
+    expect(await saved.getTerms()).toEqual({ platformEnabled: true, platformPercent: 8, sellerFeePercent: 3, minGapPercent: 2 });
+    const broken = new PremiumEntitlementsService({ repositories: {} } as any, {} as any, {} as any, { findOne: () => { throw new Error('db'); } } as any);
+    expect((await broken.getTerms()).platformPercent).toBe(5);
   });
 });
 
+describe('admin settings + public terms (R4)', () => {
+  function settingsSvc(row: any = null, fees: any = { digital: { mode: 'percentage', value: 10 }, physical: { mode: 'fixed', value: 1 } }) {
+    const state: any = { row };
+    const settingsModel: any = { findOneAndUpdate: jest.fn(async (_f: any, u: any) => { state.row = { ...state.row, ...u.$set }; return state.row; }) };
+    const ent = new PremiumEntitlementsService({ repositories: {} } as any, {} as any, {} as any, { findOne: () => ({ lean: async () => state.row }) } as any);
+    const log = jest.fn().mockResolvedValue(undefined);
+    const svc: any = Object.create(PremiumService.prototype);
+    Object.assign(svc, { entitlements: ent, settingsModel, activityLog: { log }, adminConfig: { getPlatformFees: jest.fn().mockResolvedValue(fees) }, exchangeRate: { getCurrentRate: jest.fn().mockResolvedValue({ ratePerUSD: 280 }) } });
+    return { svc: svc as PremiumService, settingsModel, log, ent };
+  }
+  it('PUT validates, saves, invalidates the cache, and writes an audit log (before/after)', async () => {
+    const { svc, settingsModel, log } = settingsSvc();
+    const r: any = await svc.adminUpdateSettings('admin1', { platformDiscount: { enabled: false, percent: 7 }, premiumSellerFeePercent: 4 });
+    expect(r.data).toMatchObject({ platformDiscount: { enabled: false, percent: 7 }, premiumSellerFeePercent: 4, minGapPercent: 5, effective: { platformPercent: 0, platformEnabled: false } });
+    expect(settingsModel.findOneAndUpdate).toHaveBeenCalledWith({ key: 'default' }, expect.objectContaining({ $set: expect.objectContaining({ updatedByAdminId: 'admin1' }) }), expect.anything());
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({ action: 'premium_settings_updated', actorId: 'admin1' }));
+    expect((await svc.adminGetSettings() as any).data.platformDiscount).toEqual({ enabled: false, percent: 7 }); // cache invalidated
+  });
+  it('PUT rejects out-of-range values and saves nothing', async () => {
+    const { svc, settingsModel } = settingsSvc();
+    await expect(svc.adminUpdateSettings('a', { platformDiscount: { percent: 45 } })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.adminUpdateSettings('a', { premiumSellerFeePercent: -1 })).rejects.toBeInstanceOf(BadRequestException);
+    expect(settingsModel.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+  it('GET terms: effective platform %, premium fee, gap and the normal fee of the product type (fixed converted to PKR)', async () => {
+    const { svc } = settingsSvc();
+    const digital: any = await svc.getTerms('digital', 'PKR');
+    expect(digital.data).toMatchObject({ platformDiscount: { enabled: true, percent: 5 }, platformPercent: 5, premiumSellerFeePercent: 5, minGapPercent: 5, normalFee: { type: 'digital', mode: 'percentage', value: 10 } });
+    const physical: any = await svc.getTerms('physical', 'PKR');
+    expect(physical.data.normalFee).toMatchObject({ type: 'physical', mode: 'fixed', value: 1, fixedAmountInCurrency: 280, currency: 'PKR' });
+    expect(((await svc.getTerms('educational')) as any).data.normalFee.type).toBe('digital');
+  });
+  it('GET terms with the platform offer off reports 0%', async () => {
+    const { svc } = settingsSvc({ platformDiscount: { enabled: false, percent: 5 }, premiumSellerFeePercent: 5, minGapPercent: 5 });
+    expect(((await svc.getTerms()) as any).data).toMatchObject({ platformPercent: 0, platformDiscount: { enabled: false, percent: 0 } });
+  });
+});
 describe('wiring in other modules', () => {
   it('children: the member limit replaces 8; non-members keep 8', async () => {
     const model: any = { countDocuments: jest.fn().mockResolvedValue(8), create: jest.fn(async (d: any) => ({ toObject: () => d })) };

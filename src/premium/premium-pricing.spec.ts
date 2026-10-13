@@ -4,7 +4,8 @@ import { CheckoutService } from '../checkout/checkout.service';
 import { PaymentService } from '../payment/payment.service';
 import { ExchangeRateService } from '../exchange-rate/exchange-rate.service';
 import { PremiumEntitlementsService } from './premium-entitlements.service';
-import { NON_PREMIUM } from './premium.util';
+import { NON_PREMIUM, termsFromSettings } from './premium.util';
+import { feeItemsFor } from '../finance/finance.service';
 
 const chain = (v: any) => {
   const c: any = { select: () => c, sort: () => c, limit: () => c, lean: () => Promise.resolve(v), then: (r: any, j: any) => Promise.resolve(v).then(r, j) };
@@ -12,10 +13,10 @@ const chain = (v: any) => {
 };
 const MEMBER = { isPremium: true, childrenLimit: 15, earlyAccessHours: 2, prioritySupport: true };
 
-interface Seed { storeId: string; productId: string; price?: number; qty?: number; productPct?: number }
+interface Seed { storeId: string; productId: string; price?: number; compareAt?: number | null; qty?: number; productPct?: number }
 
 /** One USD store world; the store gives premium members 20% unless `storePremium` says otherwise. */
-function world(seeds: Seed[], opts: { ent?: any; storePremium?: any; autoDiscount?: boolean; subscriberPct?: number; omitPremiumService?: boolean } = {}) {
+function world(seeds: Seed[], opts: { ent?: any; storePremium?: any; autoDiscount?: boolean; subscriberPct?: number; omitPremiumService?: boolean; platformOn?: boolean; campaignPct?: number; campaignSponsor?: 'seller' | 'platform' } = {}) {
   const userId = 'u1';
   const stores = new Map<string, any>();
   const carts: any[] = [];
@@ -29,7 +30,7 @@ function world(seeds: Seed[], opts: { ent?: any; storePremium?: any; autoDiscoun
       });
     }
     products.set(s.productId, { _id: s.productId, storeId: s.storeId, sellerId: `seller-${s.storeId}`, name: s.productId, type: 'digital', status: 'active', isDelete: false, images: [], premiumDiscountPercent: s.productPct ?? null });
-    variants.set(`v-${s.productId}`, { _id: `v-${s.productId}`, productId: s.productId, status: 'active', isDelete: false, price: s.price ?? 100, currency: 'USD', unlimitedStock: true, stock: 0, options: [] });
+    variants.set(`v-${s.productId}`, { _id: `v-${s.productId}`, productId: s.productId, status: 'active', isDelete: false, price: s.price ?? 100, compareAtPrice: s.compareAt ?? null, currency: 'USD', unlimitedStock: true, stock: 0, options: [] });
     let cart = carts.find((c) => c.storeId === s.storeId);
     if (!cart) carts.push((cart = { userId, storeId: s.storeId, status: 'active', isDelete: false, items: [] }));
     cart.items.push({ productId: s.productId, productVariantId: `v-${s.productId}`, name: s.productId, quantity: s.qty ?? 1, price: s.price ?? 100 });
@@ -43,6 +44,7 @@ function world(seeds: Seed[], opts: { ent?: any; storePremium?: any; autoDiscoun
     productModel: {
       findOne: jest.fn(async (f: any) => products.get(f._id) ?? null),
       find: jest.fn((f: any) => (f?._id?.$in ? chain(f._id.$in.map((id: string) => products.get(id)).filter(Boolean)) : chain([]))),
+      aggregate: jest.fn().mockResolvedValue([]),
     },
     productVariantModel: {
       findOne: jest.fn(async (f: any) => variants.get(f._id) ?? null),
@@ -61,7 +63,9 @@ function world(seeds: Seed[], opts: { ent?: any; storePremium?: any; autoDiscoun
   };
   const fx = new ExchangeRateService({} as any, {} as any, {} as any);
   jest.spyOn(fx, 'buildSnapshots').mockImplementation(async (cs: string[]) => [...new Set(cs)].map((currency) => ({ currency, ratePerUSD: 1, effectiveFrom: new Date(), source: 'admin', exchangeRateId: null })) as any);
-  const campaignsMock = jest.fn().mockResolvedValue(new Map());
+  const campaignsMock = jest.fn().mockResolvedValue(opts.campaignPct
+    ? new Map([...stores.keys()].map((id) => [id, [{ campaignId: 'c1', name: 'Flash', discountType: 'percentage', discountValue: opts.campaignPct, currency: null, endDate: new Date(Date.now() + 1e7), sponsorType: opts.campaignSponsor ?? 'platform' }]]))
+    : new Map());
   const subscriberPct = opts.subscriberPct;
   const benefits = {
     getActiveBenefits: jest.fn().mockResolvedValue(null),
@@ -72,61 +76,88 @@ function world(seeds: Seed[], opts: { ent?: any; storePremium?: any; autoDiscoun
     getActiveDiscountsForStores: jest.fn().mockResolvedValue(opts.autoDiscount ? new Map([...stores.keys()].map((id) => [id, [{ _id: 'd1', target: 'store', discountType: 'percentage', discountValue: 10, minOrderAmount: null }]])) : new Map()),
   };
   const getEntitlements = jest.fn().mockResolvedValue(opts.ent ?? NON_PREMIUM);
+  // platform offer is OFF unless a test turns it on, so the plain seller-percent cases stay easy to read (default admin setting is ON 5%).
+  const getTerms = jest.fn().mockResolvedValue(termsFromSettings({ platformDiscount: { enabled: !!opts.platformOn, percent: 5 } }));
   const svc = new CheckoutService(
     { repositories: repos } as any, benefits as any,
     { getActiveCampaignsForStores: campaignsMock } as any,
     { isManualPaymentEnabled: jest.fn().mockResolvedValue(false), isManualTransferAvailable: jest.fn().mockResolvedValue(false) } as any,
     fx, {} as any, discounts as any,
-    opts.omitPremiumService ? undefined : ({ getEntitlements } as unknown as PremiumEntitlementsService),
+    opts.omitPremiumService ? undefined : ({ getEntitlements, getTerms } as unknown as PremiumEntitlementsService),
   );
   return { svc, repos, created, userId, campaignsMock, getEntitlements, stores };
 }
 const create = (w: ReturnType<typeof world>) => w.svc.createCheckout(w.userId, { currencyPreference: 'USD' });
 
-describe('Premium member price in createCheckout (seller-funded)', () => {
-  it('a premium member pays the seller-chosen member price; the discount is recorded on the line and the checkout', async () => {
+describe('Premium member price in createCheckout (owner rules R1-R4)', () => {
+  it('seller 20% only (platform offer off): pays list x 0.8; discount recorded on the line and checkout', async () => {
     const w = world([{ storeId: 'A', productId: 'pa', price: 100, qty: 2 }], { ent: MEMBER });
     const { data } = await create(w);
     const i = data.checkout.items[0];
     expect(i.price).toBe(80);
     expect(i.totalPrice).toBe(160);
-    expect(i).toMatchObject({ premiumDiscountUSD: 40, premiumDiscountPercent: 20, originalPrice: 100 });
+    expect(i).toMatchObject({ premiumDiscountUSD: 40, premiumPlatformDiscountUSD: 0, premiumDiscountPercent: 20, premiumSellerPercent: 20, premiumPlatformPercent: 0, originalPrice: 100, premiumFeePercent: 5 });
     expect(data.checkout.subtotal).toBe(160);
     expect(data.checkout.isPremiumBuyer).toBe(true);
     expect(data.checkout.premiumDiscountTotalUSD).toBe(40);
+    expect(data.checkout.premiumPlatformDiscountTotalUSD).toBe(0);
     expect(data.summary.premiumDiscountUSD).toBe(40);
   });
 
+  it('seller 15% + platform 5% on a product with a normal 10% sale (price 90, compare-at 100): premium pays 80; normal buyer pays 90', async () => {
+    const seeds = [{ storeId: 'A', productId: 'pa', price: 90, compareAt: 100, qty: 2, productPct: 15 }];
+    const member = (await create(world(seeds, { ent: MEMBER, platformOn: true }))).data;
+    const i = member.checkout.items[0];
+    expect(i).toMatchObject({ price: 80, totalPrice: 160, originalPrice: 100, premiumDiscountUSD: 30, premiumPlatformDiscountUSD: 10, premiumDiscountPercent: 20, premiumSellerPercent: 15, premiumPlatformPercent: 5 });
+    expect(member.checkout.premiumPlatformDiscountTotalUSD).toBe(10);
+    expect(member.summary.premiumPlatformDiscountUSD).toBe(10);
+    const off = (await create(world(seeds, { ent: MEMBER, platformOn: false }))).data.checkout.items[0];
+    expect(off).toMatchObject({ price: 85, totalPrice: 170, premiumPlatformDiscountUSD: 0, premiumDiscountPercent: 15 });
+    const normal = (await create(world(seeds, { ent: NON_PREMIUM }))).data.checkout.items[0];
+    expect(normal.price).toBe(90); // a normal buyer gets exactly the seller's normal sale
+    expect(normal.premiumDiscountPercent ?? 0).toBe(0);
+  });
+
+  it('safety net: when premium would not beat the normal sale price the member pays the normal price (never more than a normal buyer)', async () => {
+    const w = world([{ storeId: 'A', productId: 'pa', price: 90, compareAt: 100, productPct: 5 }], { ent: MEMBER });
+    const i = (await create(w)).data.checkout.items[0];
+    expect(i.totalPrice).toBe(90);
+    expect(i.premiumDiscountPercent ?? 0).toBe(0);
+    expect(i.premiumFeePercent ?? null).toBeNull();
+  });
+
   it('a NON-member pays exactly the same as without the premium module (identical items, no premium fields)', async () => {
-    const withSvc = world([{ storeId: 'A', productId: 'pa', price: 100, qty: 2 }], { ent: NON_PREMIUM });
-    const without = world([{ storeId: 'A', productId: 'pa', price: 100, qty: 2 }], { omitPremiumService: true });
+    const withSvc = world([{ storeId: 'A', productId: 'pa', price: 100, compareAt: 120, qty: 2 }], { ent: NON_PREMIUM, autoDiscount: true, subscriberPct: 10 });
+    const without = world([{ storeId: 'A', productId: 'pa', price: 100, compareAt: 120, qty: 2 }], { omitPremiumService: true, autoDiscount: true, subscriberPct: 10 });
     const a = (await create(withSvc)).data;
     const b = (await create(without)).data;
-    const strip = (it: any) => ({ price: it.price, totalPrice: it.totalPrice, originalPrice: it.originalPrice, premium: it.premiumDiscountUSD });
+    const strip = (it: any) => ({ price: it.price, totalPrice: it.totalPrice, originalPrice: it.originalPrice, premium: it.premiumDiscountUSD, auto: it.autoDiscountUSD, sub: it.subscriberDiscountUSD, platform: it.premiumPlatformDiscountUSD, fee: it.premiumFeePercent });
     expect(strip(a.checkout.items[0])).toEqual(strip(b.checkout.items[0]));
-    expect(a.checkout.subtotal).toBe(200);
+    expect(a.checkout.subtotal).toBe(b.checkout.subtotal);
     expect(a.checkout.isPremiumBuyer).toBe(false);
     expect(a.summary.premiumDiscountUSD).toBeUndefined();
+    expect(a.checkout.items[0].premiumFeePercent ?? null).toBeNull();
   });
 
   it('a store that has not enabled it gives nothing; a product override applies on its own', async () => {
-    const off = world([{ storeId: 'A', productId: 'pa' }], { ent: MEMBER, storePremium: { enabled: false, percent: 20 } });
-    expect((await create(off)).data.checkout.subtotal).toBe(100);
+    const off = world([{ storeId: 'A', productId: 'pa' }], { ent: MEMBER, storePremium: { enabled: false, percent: 20 }, platformOn: true });
+    expect((await create(off)).data.checkout.subtotal).toBe(100); // no seller premium = no platform offer either
     const override = world([{ storeId: 'A', productId: 'pa', productPct: 50 }, { storeId: 'A', productId: 'pb' }], { ent: MEMBER });
     const items = (await create(override)).data.checkout.items;
     expect(items.find((i: any) => i.productId === 'pa').totalPrice).toBe(50); // product 50% beats store 20%
     expect(items.find((i: any) => i.productId === 'pb').totalPrice).toBe(80);
   });
 
-  it('never stacks with an automatic seller discount: the line keeps the automatic discount only', async () => {
+  it('R1: the seller\'s automatic discount is NOT applied on top for a member (non-member still gets it)', async () => {
     const w = world([{ storeId: 'A', productId: 'pa', price: 100 }], { ent: MEMBER, autoDiscount: true });
     const i = (await create(w)).data.checkout.items[0];
-    expect(i.autoDiscountUSD).toBe(10);
-    expect(i.totalPrice).toBe(90); // not 90 * 0.8
-    expect(i.premiumDiscountUSD ?? 0).toBe(0);
+    expect(i.autoDiscountUSD ?? 0).toBe(0);
+    expect(i.totalPrice).toBe(80); // premium price only
+    const normal = (await create(world([{ storeId: 'A', productId: 'pa', price: 100 }], { ent: NON_PREMIUM, autoDiscount: true }))).data.checkout.items[0];
+    expect(normal.totalPrice).toBe(90);
   });
 
-  it('with a store-subscriber price: a lower member price replaces it, a better subscriber price stays (never both)', async () => {
+  it('R1: a store-subscriber price is replaced by a better premium price; a better subscriber price stays (never charged more)', async () => {
     const worse = world([{ storeId: 'A', productId: 'pa', price: 100 }], { ent: MEMBER, subscriberPct: 5 });
     const a = (await create(worse)).data;
     expect(a.checkout.items[0].totalPrice).toBe(80);
@@ -138,6 +169,50 @@ describe('Premium member price in createCheckout (seller-funded)', () => {
     expect(b.checkout.items[0].premiumDiscountUSD ?? 0).toBe(0);
   });
 
+  it('the premium fee % is frozen on the line from the admin setting at checkout time', async () => {
+    const w = world([{ storeId: 'A', productId: 'pa', price: 100 }], { ent: MEMBER });
+    expect((await create(w)).data.checkout.items[0].premiumFeePercent).toBe(5);
+  });
+  it('campaign BETTER than premium: the member line reverts to the normal pipeline (same as a normal buyer, no premium fields, no premium fee)', async () => {
+    const seeds = [{ storeId: 'A', productId: 'pa', price: 100 }];
+    const member = (await create(world(seeds, { ent: MEMBER, campaignPct: 30 }))).data; // premium 20% -> 80, campaign 30% -> 70
+    const normal = (await create(world(seeds, { ent: NON_PREMIUM, campaignPct: 30 }))).data;
+    const m = member.checkout.items[0];
+    expect(m.totalPrice).toBe(70);
+    expect(m).toMatchObject({ campaignDiscountUSD: 30, campaignSponsorType: 'platform' });
+    expect(m.premiumDiscountPercent ?? 0).toBe(0);
+    expect(m.premiumDiscountUSD ?? 0).toBe(0);
+    expect(m.premiumPlatformDiscountUSD ?? 0).toBe(0);
+    expect(m.premiumFeePercent ?? null).toBeNull();
+    expect(member.checkout.premiumDiscountTotalUSD).toBe(0);
+    expect(member.checkout.premiumPlatformDiscountTotalUSD).toBe(0);
+    expect(member.summary.campaignDiscountUSD).toBe(normal.summary.campaignDiscountUSD);
+    expect(member.checkout.subtotal).toBe(normal.checkout.subtotal);
+    expect(member.appliedCampaigns[0].discountUSD).toBe(30);
+  });
+  it('campaign equal to premium: ties go to the normal pipeline', async () => {
+    const m = (await create(world([{ storeId: 'A', productId: 'pa', price: 100 }], { ent: MEMBER, campaignPct: 20 }))).data.checkout.items[0];
+    expect(m.totalPrice).toBe(80);
+    expect(m.campaignDiscountUSD).toBe(20);
+    expect(m.premiumFeePercent ?? null).toBeNull();
+  });
+  it('premium BETTER than campaign: premium applies, the campaign discount is removed from the line and the totals', async () => {
+    const { data } = await create(world([{ storeId: 'A', productId: 'pa', price: 100 }], { ent: MEMBER, campaignPct: 10, platformOn: true })); // normal 90, premium 75
+    const i = data.checkout.items[0];
+    expect(i).toMatchObject({ totalPrice: 75, premiumDiscountPercent: 25, premiumFeePercent: 5, premiumPlatformDiscountUSD: 5 });
+    expect(i.campaignDiscountUSD ?? 0).toBe(0);
+    expect(i.campaignSponsorType ?? null).toBeNull();
+    expect(data.summary.campaignDiscountUSD).toBe(0);
+    expect(data.appliedCampaigns[0].discountUSD).toBe(0);
+    expect(data.checkout.campaignDiscountTotalUSD).toBe(0);
+  });
+  it('mixed cart: each line takes its better price (one reverts to the campaign, one keeps premium)', async () => {
+    const seeds = [{ storeId: 'A', productId: 'pa', price: 100 }, { storeId: 'A', productId: 'pb', price: 100, productPct: 50 }];
+    const items = (await create(world(seeds, { ent: MEMBER, campaignPct: 30 }))).data.checkout.items;
+    expect(items.find((i: any) => i.productId === 'pa').totalPrice).toBe(70); // campaign beats premium 20%
+    expect(items.find((i: any) => i.productId === 'pb').totalPrice).toBe(50); // premium 50% beats campaign
+    expect(items.find((i: any) => i.productId === 'pb').campaignDiscountUSD ?? 0).toBe(0);
+  });
   it('campaign early access: only a member asks for campaigns up to earlyAccessHours ahead (re-validated server-side)', async () => {
     const m = world([{ storeId: 'A', productId: 'pa' }], { ent: MEMBER });
     await create(m);
@@ -245,4 +320,43 @@ describe('seller credit math with Premium', () => {
     expect(so.subtotal).toBe(72);
     expect(payoutBasis(so)).toBe(80); // member price (100 - 20 own discount); the 8 coupon is the platform's
   });
-});
+  it('platform-funded premium offer: buyer pays 80, the seller is credited S=85 (platform covers 5), breakdown stored for reporting', async () => {
+    const [order] = await placeOrder([orderLine({ price: 80, totalPrice: 80, originalPrice: 100, premiumDiscountUSD: 15, premiumPlatformDiscountUSD: 5, premiumDiscountPercent: 20, premiumSellerPercent: 15, premiumPlatformPercent: 5, premiumFeePercent: 5 })]);
+    const so = order.sellerOrders[0];
+    expect(so.subtotal).toBe(80);
+    expect(so.platformSponsoredDiscountUSD).toBe(5);
+    expect(payoutBasis(so)).toBe(85);
+    expect(so.items[0]).toMatchObject({ premiumDiscountUSD: 15, premiumPlatformDiscountUSD: 5, premiumSellerPercent: 15, premiumPlatformPercent: 5, premiumFeePercent: 5 });
+    expect(order.platformSponsoredDiscountTotal).toBe(5);
+    expect(order.premiumDiscountTotal).toBe(15);
+    expect(order.premiumPlatformDiscountTotal).toBe(5);
+  });
+  it('platform premium offer + platform-funded PRM coupon together: the seller still gets S, never pays for either', async () => {
+    const [order] = await placeOrder([orderLine({ price: 80, totalPrice: 72, originalPrice: 100, premiumDiscountUSD: 15, premiumPlatformDiscountUSD: 5, premiumDiscountPercent: 20, premiumFeePercent: 5, couponDiscountUSD: 8, couponSponsorType: 'platform' })]);
+    const so = order.sellerOrders[0];
+    expect(so.subtotal).toBe(72);
+    expect(so.platformSponsoredDiscountUSD).toBe(13);
+    expect(payoutBasis(so)).toBe(85);
+    expect(order.platformSponsoredDiscountTotal).toBe(13);
+  });
+  it('a normal order has no premium fields set (fee % null, platform part 0)', async () => {
+    const [order] = await placeOrder([orderLine({ price: 90, totalPrice: 90 })]);
+    expect(order.sellerOrders[0].items[0]).toMatchObject({ premiumPlatformDiscountUSD: 0, premiumFeePercent: null });
+    expect(order.premiumPlatformDiscountTotal).toBe(0);
+  });  it('seller credit when the campaign beat premium (line reverted): platform-sponsored campaign restores the full price, normal fee path (no premium fee)', async () => {
+    const [order] = await placeOrder([orderLine({ price: 70, totalPrice: 70, originalPrice: 100, campaignId: 'c1', campaignDiscountUSD: 30, campaignSponsorType: 'platform', premiumFeePercent: null })]);
+    const so = order.sellerOrders[0];
+    expect(payoutBasis(so)).toBe(100);
+    expect(so.platformSponsoredDiscountUSD).toBe(30);
+    expect(so.items[0]).toMatchObject({ premiumPlatformDiscountUSD: 0, premiumFeePercent: null, premiumDiscountPercent: 0 });
+    expect(order.premiumPlatformDiscountTotal).toBe(0);
+    expect(order.premiumDiscountTotal).toBe(0);
+    expect(feeItemsFor(so)).toEqual([{ type: 'digital', totalPrice: 70, quantity: 1 }]); // normal per-type fee, no premium override
+  });
+  it('seller credit when premium beat the campaign: S = seller-side price, premium fee % carried to the fee items', async () => {
+    const [order] = await placeOrder([orderLine({ price: 75, totalPrice: 75, originalPrice: 100, premiumDiscountUSD: 20, premiumPlatformDiscountUSD: 5, premiumDiscountPercent: 25, premiumFeePercent: 5 })]);
+    const so = order.sellerOrders[0];
+    expect(payoutBasis(so)).toBe(80);
+    expect(so.platformSponsoredDiscountUSD).toBe(5);
+    expect(feeItemsFor(so)).toEqual([{ type: 'digital', totalPrice: 80, quantity: 1, feePercent: 5 }]);
+  });});

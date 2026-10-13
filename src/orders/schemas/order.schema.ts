@@ -99,6 +99,20 @@ export class OrderItem {
   @Prop({ type: Number, default: 0 })
   premiumDiscountPercent: number;
 
+  // Premium breakdown: premiumDiscountUSD = seller-funded part; this = platform-funded part (reimbursed to the seller).
+  @Prop({ type: Number, default: 0 })
+  premiumPlatformDiscountUSD: number;
+
+  @Prop({ type: Number, default: 0 })
+  premiumSellerPercent: number;
+
+  @Prop({ type: Number, default: 0 })
+  premiumPlatformPercent: number;
+
+  // Platform fee % charged on this line instead of the per-type fee (null = normal fee).
+  @Prop({ type: Number, default: null })
+  premiumFeePercent: number | null;
+
   // 'platform' = couponDiscountUSD on this line is platform-funded (reimbursed to the seller).
   @Prop({ type: String, enum: ['platform'], default: null })
   couponSponsorType: 'platform' | null;
@@ -454,6 +468,10 @@ export class Order {
 
   @Prop({ type: Number, default: 0 })
   premiumDiscountTotal: number;
+
+  // Platform-funded part of the premium price across the order (already included in platformSponsoredDiscountTotal).
+  @Prop({ type: Number, default: 0 })
+  premiumPlatformDiscountTotal: number;
 
   // Copied from Checkout at placeOrder — which promotional banner (if any)
   // the buyer clicked through before this order, for promotion analytics'

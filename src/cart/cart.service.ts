@@ -10,7 +10,7 @@ import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import { SUPPORTED_CURRENCIES } from 'src/exchange-rate/schemas/exchange-rate.schema';
 import { AddToCartDto, MAX_CART_LINE_QUANTITY } from './dto/add-to-cart.dto';
 import { PremiumEntitlementsService } from 'src/premium/premium-entitlements.service';
-import { premiumPercentFor, premiumUnitPrice } from 'src/premium/premium.util';
+import { premiumLinePrice, premiumPercentFor } from 'src/premium/premium.util';
 
 /** Per-user cap so a wishlist can't grow without bound. */
 const MAX_WISHLIST_ITEMS = 200;
@@ -257,10 +257,11 @@ export class CartService {
       const variants = variantIds.length
         ? await this.databaseService.repositories.productVariantModel
             .find({ _id: { $in: variantIds } })
-            .select('price currency')
+            .select('price currency compareAtPrice')
             .lean()
         : [];
       const livePriceByVariant = new Map((variants as any[]).map((v) => [v._id.toString(), v.price as number]));
+      const compareAtByVariant = new Map((variants as any[]).map((v) => [v._id.toString(), (v.compareAtPrice as number | null) ?? null]));
       const liveCurrencyByVariant = new Map((variants as any[]).map((v) => [v._id.toString(), (v.currency as string | null) ?? null]));
       // A store sells in ONE currency, so the cart has one: the currency every amount in this response is in.
       const cartCurrency: string =
@@ -311,6 +312,13 @@ export class CartService {
       // Premium early access: an active member's cart already prices a campaign that starts within their earlyAccessHours.
       const premiumEnt = this.premium ? await this.premium.getEntitlements(userId) : null;
       const now = premiumEnt?.isPremium && premiumEnt.earlyAccessHours > 0 ? new Date(realNow.getTime() + premiumEnt.earlyAccessHours * 3_600_000) : realNow;
+      // Edudeen Premium price per line (owner rules R1/R2): a member's line is priced at LIST x (1 - seller% - platform%) and gets
+      // no campaign / compare-at sale on top - checkout charges the same number and is the source of truth.
+      const premiumStores = this.premium ? await this.premium.loadStoreSettings([storeId]) : new Map<string, any>();
+      const premiumTerms = this.premium ? await this.premium.getTerms() : null;
+      const lineKey = (i: { productId: string; productVariantId: string }) => `${i.productId}:${i.productVariantId}`;
+      const premiumLines = new Map<string, { calc: ReturnType<typeof premiumLinePrice>; sellerPct: number }>();
+      const sellerPctOf = (productId: string) => (this.premium ? premiumPercentFor(productById.get(productId) as any, premiumStores.get(String(storeId))) : 0);
       const rawCampaigns = await this.databaseService.repositories.campaignModel
         .find({
           isDelete: false, status: 'active', startDate: { $lte: now }, endDate: { $gte: realNow },
@@ -326,25 +334,50 @@ export class CartService {
       );
       const inCampaign = (campaignId: string, productId: string) =>
         isProductInCampaign(campaignId, storeId, campaignIdsByProduct.get(productId), selection);
-      const campaignDiscount = await resolveCartCampaignDiscount(
-        rawCampaigns as any[], totalPrice, cartCurrency,
+      const resolveCampaign = (excluded: Set<string>) => resolveCartCampaignDiscount(
+        rawCampaigns as any[], excluded.size ? items.filter((i) => !excluded.has(lineKey(i))).reduce((s, i) => s + i.itemTotal, 0) : totalPrice, cartCurrency,
         this.exchangeRateService ? (amount, from, to) => this.exchangeRateService!.convert(amount, from, to) : undefined,
-        (campaignId) => items.filter((i) => inCampaign(campaignId, i.productId)).reduce((s, i) => s + i.itemTotal, 0),
+        (campaignId) => items.filter((i) => inCampaign(campaignId, i.productId) && !excluded.has(lineKey(i))).reduce((s, i) => s + i.itemTotal, 0),
       );
-      // Edudeen Premium: the seller's chosen member discount. Everyone gets the teaser `premiumPercent`; only an active
+      let campaignDiscount = await resolveCampaign(new Set());
+      // Premium competes with the normal pipeline: a member's line gets the premium price only when it is strictly lower than
+      // what a normal buyer pays for the same line (list price less this line's share of the running sale); otherwise the
+      // campaign price shows and no premium price is offered. Checkout makes the same comparison.
+      if (premiumEnt?.isPremium && premiumTerms) {
+        const eligibleTotal = campaignDiscount ? items.filter((i) => inCampaign(campaignDiscount!.campaignId, i.productId)).reduce((s, i) => s + i.itemTotal, 0) : 0;
+        for (const i of items) {
+          const sellerPct = sellerPctOf(i.productId);
+          if (!sellerPct) continue;
+          const calc = premiumLinePrice(i.unitPrice, compareAtByVariant.get(i.productVariantId), sellerPct, premiumTerms.platformPercent);
+          if (!calc.applies) continue;
+          const share = campaignDiscount && eligibleTotal > 0 && inCampaign(campaignDiscount.campaignId, i.productId) ? (campaignDiscount.amount ?? 0) * (i.itemTotal / eligibleTotal) : 0;
+          const normalUnit = i.unitPrice - (i.quantity > 0 ? share / i.quantity : 0);
+          if (calc.unit < normalUnit) premiumLines.set(lineKey(i), { calc, sellerPct });
+        }
+        if (premiumLines.size && campaignDiscount && [...premiumLines.keys()].some((k) => items.some((i) => lineKey(i) === k && inCampaign(campaignDiscount!.campaignId, i.productId)))) {
+          campaignDiscount = await resolveCampaign(new Set(premiumLines.keys()));
+        }
+      }      // Edudeen Premium: the seller's chosen member discount. Everyone gets the teaser `premiumPercent`; only an active
       // member gets `premiumUnitPrice` / `premiumDiscountPercent` (display only - checkout is the source of truth and
       // takes the best single seller-side discount per line, so lines on a campaign sale show no member price).
-      const premiumStores = this.premium ? await this.premium.loadStoreSettings([storeId]) : new Map<string, any>();
       let premiumSavings = 0;
+      let premiumPlatformFunded = 0;
       const itemsWithFlag = items.map((i) => {
-        const onCampaign = !!campaignDiscount && inCampaign(campaignDiscount.campaignId, i.productId);
-        const pct = this.premium ? premiumPercentFor(productById.get(i.productId) as any, premiumStores.get(String(storeId))) : 0;
+        const pl = premiumLines.get(lineKey(i));
+        const onCampaign = !pl && !!campaignDiscount && inCampaign(campaignDiscount.campaignId, i.productId);
+        const pct = sellerPctOf(i.productId);
         const base = { ...i, onCampaign };
         if (!pct) return base;
-        if (!premiumEnt?.isPremium || onCampaign) return { ...base, premiumPercent: pct };
-        const unit = premiumUnitPrice(i.unitPrice, pct);
+        // Teaser for everyone: seller% + platform% combined, with the breakdown.
+        const teaser = { premiumPercent: Math.round((pct + (premiumTerms?.platformPercent ?? 0)) * 100) / 100, premiumSellerPercent: pct, premiumPlatformPercent: premiumTerms?.platformPercent ?? 0 };
+        if (!pl) return { ...base, ...teaser };
+        const unit = pl.calc.unit;
         premiumSavings += (i.unitPrice - unit) * i.quantity;
-        return { ...base, premiumPercent: pct, premiumDiscountPercent: pct, premiumUnitPrice: unit, premiumItemTotal: Math.round(unit * i.quantity * 100) / 100 };
+        premiumPlatformFunded += pl.calc.platformUnitDiscount * i.quantity;
+        return {
+          ...base, ...teaser, premiumDiscountPercent: pl.calc.totalPercent, premiumUnitPrice: unit,
+          premiumItemTotal: Math.round(unit * i.quantity * 100) / 100, listPrice: pl.calc.listUnit,
+        };
       });
 
       // Final response
@@ -359,7 +392,7 @@ export class CartService {
           currency: cartCurrency,
           campaignDiscount,
           totalAfterDiscount: Math.round((totalPrice - (campaignDiscount?.amount ?? 0)) * 100) / 100,
-          ...(premiumEnt?.isPremium ? { isPremium: true, premiumSavings: Math.round(premiumSavings * 100) / 100 } : {}),
+          ...(premiumEnt?.isPremium ? { isPremium: true, premiumSavings: Math.round(premiumSavings * 100) / 100, premiumPlatformFunded: Math.round(premiumPlatformFunded * 100) / 100 } : {}),
         },
       };
     } catch (error: any) {

@@ -39,6 +39,7 @@ import { optionNameSet, optionsKey, validateOptions } from './variant-options.ut
 import { AttributesService } from 'src/attributes/attributes.service';
 import { PremiumEntitlementsService } from 'src/premium/premium-entitlements.service';
 import { cleanPremiumPercent } from 'src/premium/premium.util';
+import { assertPremiumGap } from 'src/premium/premium-gap';
 
 import { clampInt } from 'src/common/query-safety.util';
 import { resolveStoreNames } from './store-name.util';
@@ -117,7 +118,7 @@ export class ProductsService {
       const primary = campaigns.length ? pickPrimaryCampaignForBadge(campaigns) : null;
       // While the campaign's sale runs on this product, the seller's own markdown is hidden (it returns after).
       if (primary && primary.discountType != null && primary.discountValue != null) {
-        if (Array.isArray(p.variants)) p.variants = p.variants.map((v: any) => ({ ...v, compareAtPrice: null }));
+        if (Array.isArray(p.variants)) p.variants = p.variants.map((v: any) => ({ ...v, originalCompareAtPrice: v.compareAtPrice ?? null, compareAtPrice: null }));
         if (p.compareAtPrice != null) p.compareAtPrice = null;
       }
       return {
@@ -1319,14 +1320,20 @@ export class ProductsService {
     // Same rule as the listings: while the campaign's sale runs on this product the seller's own markdown is hidden.
     const badge: any = (productWithSeller as any)?.activeCampaign;
     if (badge && badge.discountType != null && badge.discountValue != null) {
-      variants = variants.map((v: any) => ({ ...v, compareAtPrice: null }));
+      variants = variants.map((v: any) => ({ ...v, originalCompareAtPrice: v.compareAtPrice ?? null, compareAtPrice: null })); // premium list price survives the hidden markdown
     }
 
     // Edudeen Premium: teaser percent for everyone, member price on the variants for active members.
     {
       const [decorated] = await this.withPremium([{ ...(productWithSeller as any), variants }], customerId);
       if (decorated) {
-        if (decorated.premiumPercent) (productWithSeller as any).premiumPercent = decorated.premiumPercent;
+        if (decorated.premiumPercent) {
+          (productWithSeller as any).premiumPercent = decorated.premiumPercent;
+          (productWithSeller as any).premiumSellerPercent = decorated.premiumSellerPercent;
+          (productWithSeller as any).premiumPlatformPercent = decorated.premiumPlatformPercent;
+        }
+        // A member with a premium price gets only that price: the campaign badge does not apply to them.
+        if ((productWithSeller as any).activeCampaign && decorated.activeCampaign === null) (productWithSeller as any).activeCampaign = null;
         variants = decorated.variants;
       }
     }
@@ -1523,6 +1530,9 @@ export class ProductsService {
 
     const categoryId = await this.resolveRootCategoryId(store.categoryId, body.categoryId);
 
+    // Owner rule R3: the normal sale must stay below the Premium discount by the admin's minimum gap.
+    await assertPremiumGap(this.premiumService, store as any, premiumFieldFromBody(body).premiumDiscountPercent, variants.map((v: any) => ({ price: v.price, compareAtPrice: v.compareAtPrice ?? null })));
+
     const campaignIds = body.campaignIds === undefined ? [] : await this.marketingService.resolveProductCampaignIds(String(store._id), body.campaignIds);
     const slug = await generateUniqueSlug(productModel, name);
 
@@ -1699,6 +1709,12 @@ export class ProductsService {
     const digitalConfig = digital ? await this.buildDigitalConfig(sellerId, digital, null) : null;
     const delivery = cleanDeliveryFormat(body, null);
     await this.assertCourseReady(null, delivery.deliveryFormat, status ? resolveSellerPublishStatus(status, null) : 'draft');
+
+    // Owner rule R3 (normal sale vs Premium discount), on the base price and every license tier.
+    await assertPremiumGap(this.premiumService, store as any, premiumFieldFromBody(body).premiumDiscountPercent, [
+      { price, compareAtPrice: compareAtPrice ?? null },
+      ...(Array.isArray(body.licenseTiers) ? body.licenseTiers.map((t: any) => ({ price: Number(t?.price), compareAtPrice: t?.compareAtPrice ?? null })).filter((t: any) => Number.isFinite(t.price)) : []),
+    ]);
 
     const campaignIds = body.campaignIds === undefined ? [] : await this.marketingService.resolveProductCampaignIds(String(store._id), body.campaignIds);
     const slug = await generateUniqueSlug(productModel, name);
@@ -1977,6 +1993,22 @@ export class ProductsService {
         productUpdate.customLevel = null;
         productUpdate.normalizedCustomLevel = null;
       }
+    }
+
+    // Owner rule R3 - only when this request touches prices / the Premium percent (never for unrelated edits of an
+    // existing product, so legacy listings stay editable).
+    if (this.premiumService && (price !== undefined || compareAtPrice !== undefined || body.premiumDiscountPercent !== undefined || body.licenseTiers !== undefined)) {
+      const gapStore = await this.databaseService.repositories.storeModel.findById(product.storeId).select('premiumDiscount').lean();
+      const own = body.premiumDiscountPercent !== undefined ? premiumFieldFromBody(body).premiumDiscountPercent : (product as any).premiumDiscountPercent;
+      const current: any[] = await productVariantModel.find({ productId, isDelete: false, status: 'active' }).select('price compareAtPrice isDefault options').lean();
+      const prices: Array<{ price: number; compareAtPrice?: number | null }> = current.map((v) =>
+        product.type !== 'physical' && v.isDefault
+          ? { price: price !== undefined ? price : v.price, compareAtPrice: compareAtPrice !== undefined ? compareAtPrice : v.compareAtPrice }
+          : { price: v.price, compareAtPrice: v.compareAtPrice });
+      if (Array.isArray(body.licenseTiers)) {
+        for (const t of body.licenseTiers) if (Number.isFinite(Number(t?.price))) prices.push({ price: Number(t.price), compareAtPrice: t?.compareAtPrice ?? null });
+      }
+      await assertPremiumGap(this.premiumService, gapStore as any, own, prices);
     }
 
     const updatedProduct =

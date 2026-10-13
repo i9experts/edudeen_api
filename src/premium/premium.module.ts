@@ -11,6 +11,7 @@ import { PremiumEntitlementsService } from './premium-entitlements.service';
 import { AdminPremiumController, PremiumController } from './premium.controller';
 import {
   PremiumCouponIssue, PremiumCouponIssueSchema, PremiumMembership, PremiumMembershipSchema, PremiumPayment, PremiumPaymentSchema, PremiumPlan, PremiumPlanSchema,
+  PremiumSettings, PremiumSettingsSchema,
 } from './premium.schemas';
 
 /**
@@ -27,6 +28,7 @@ import {
       { name: PremiumMembership.name, schema: PremiumMembershipSchema },
       { name: PremiumPayment.name, schema: PremiumPaymentSchema },
       { name: PremiumCouponIssue.name, schema: PremiumCouponIssueSchema },
+      { name: PremiumSettings.name, schema: PremiumSettingsSchema },
     ]),
   ],
   controllers: [PremiumController, AdminPremiumController],

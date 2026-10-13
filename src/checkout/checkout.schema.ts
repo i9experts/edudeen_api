@@ -144,6 +144,21 @@ export class CheckoutItem {
   @Prop({ type: Number, default: 0 })
   premiumDiscountPercent: number;
 
+  // Premium price breakdown (R2/R4). premiumDiscountUSD above = the SELLER-funded part (list x seller%); this is the
+  // PLATFORM-funded part (list x platform%), reimbursed to the seller through the platform-sponsored path.
+  @Prop({ type: Number, default: 0 })
+  premiumPlatformDiscountUSD: number;
+
+  @Prop({ type: Number, default: 0 })
+  premiumSellerPercent: number;
+
+  @Prop({ type: Number, default: 0 })
+  premiumPlatformPercent: number;
+
+  // Platform fee % charged to the seller on THIS line (admin premiumSellerFeePercent, frozen at checkout); null = normal per-type fee.
+  @Prop({ type: Number, default: null })
+  premiumFeePercent: number | null;
+
   // Who funds couponDiscountUSD: 'platform' only for platform-funded coupons (Premium monthly coupon) so the
   // seller is credited the full price (same reimbursement path as platform-sponsored campaigns).
   @Prop({ type: String, enum: ['platform'], default: null })
@@ -277,6 +292,10 @@ export class Checkout {
 
   @Prop({ default: 0 })
   premiumDiscountTotalUSD: number;
+
+  // The platform-funded part of the premium price across all items.
+  @Prop({ default: 0 })
+  premiumPlatformDiscountTotalUSD: number;
 
   // Set client-side from whichever promotional banner the buyer clicked
   // through (localStorage attribution token, short TTL) — copied onto the

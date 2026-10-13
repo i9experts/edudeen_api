@@ -1,7 +1,7 @@
 /* eslint-disable prettier/prettier */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/unbound-method -- mock-heavy tests */
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { FinanceService } from './finance.service';
+import { FinanceService, feeItemsFor } from './finance.service';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { CommissionRulesService } from '../commission-rules/commission-rules.service';
@@ -275,6 +275,87 @@ describe('FinanceService', () => {
     });
   });
 
+  describe('Premium sale fee (R4): seller credited on S = list x (1 - seller%), fee = premiumSellerFeePercent of S', () => {
+    const fees = (v: any) => { (adminConfigService as any).getPlatformFees = jest.fn().mockResolvedValue(v); };
+    const saleOf = (orderId: string) => txModel.created.find((t: any) => t.referenceId === orderId && t.type === 'sale');
+    const feeOf = (orderId: string) => txModel.created.find((t: any) => t.referenceId === orderId && t.type === 'fee');
+    // list 100, seller normal sale 10% (price 90), seller premium 15%, platform premium 5%.
+    const normalSo = { items: [{ type: 'digital', totalPrice: 90, quantity: 1 }] };
+    const premiumLine = { type: 'digital', totalPrice: 80, quantity: 1, premiumFeePercent: 5, premiumPlatformDiscountUSD: 5, premiumDiscountUSD: 15 };
+
+    it('NORMAL buyer: pays 90, per-type fee 10% -> wallet 81 (unchanged behaviour)', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      fees({ digital: { mode: 'percentage', value: 10 } });
+      await service.recordSale(STORE_ID, SELLER_ID, 'n1', 90, 'd', 0, null, 'USD', 'manual_bank_transfer', 'seller', 0, feeItemsFor(normalSo));
+      expect(feeOf('n1').amount).toBeCloseTo(-9, 2);
+      expect(saleOf('n1').metadata.netAmount).toBeCloseTo(81, 2);
+    });
+
+    it('PREMIUM buyer: pays 80, platform adds 5 -> seller credited on S=85, fee 5% of 85 = 4.25, wallet 80.75 (not the normal 10% fee)', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      fees({ digital: { mode: 'percentage', value: 10 } });
+      const so = { items: [premiumLine] };
+      const items = feeItemsFor(so);
+      expect(items).toEqual([{ type: 'digital', totalPrice: 85, quantity: 1, feePercent: 5 }]);
+      await service.recordSale(STORE_ID, SELLER_ID, 'p1', 85, 'd', 5, null, 'USD', 'manual_bank_transfer', 'seller', 0, items);
+      expect(feeOf('p1').amount).toBeCloseTo(-4.25, 2);
+      expect(saleOf('p1').metadata.netAmount).toBeCloseTo(80.75, 2);
+      expect(saleOf('p1').amount).toBe(85);
+      // the 5 the platform funded is recorded as a subsidy row, the seller never pays for it
+      expect(txModel.created.find((t: any) => t.referenceId === 'p1' && t.type === 'platform_subsidy').amount).toBe(5);
+    });
+
+    it('premium + platform-funded PRM coupon on the same line: the seller still gets S (coupon and platform offer are both platform money)', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      fees({ digital: { mode: 'percentage', value: 10 } });
+      const so = { items: [{ ...premiumLine, totalPrice: 72, couponDiscountUSD: 8, couponSponsorType: 'platform' }] };
+      const items = feeItemsFor(so);
+      expect(items[0].totalPrice).toBe(85); // 72 paid + 8 coupon + 5 platform offer
+      await service.recordSale(STORE_ID, SELLER_ID, 'p2', 85, 'd', 13, null, 'USD', 'manual_bank_transfer', 'seller', 0, items);
+      expect(feeOf('p2').amount).toBeCloseTo(-4.25, 2);
+      expect(saleOf('p2').metadata.netAmount).toBeCloseTo(80.75, 2);
+    });
+
+    it('premium fee is a percentage even when the per-type fee is FIXED; a premium fee of 0% charges nothing', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      fees({ digital: { mode: 'fixed', value: 3 } });
+      await service.recordSale(STORE_ID, SELLER_ID, 'p3', 85, 'd', 5, null, 'USD', 'manual_bank_transfer', 'seller', 0, feeItemsFor({ items: [premiumLine] }));
+      expect(feeOf('p3').amount).toBeCloseTo(-4.25, 2);
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      await service.recordSale(STORE_ID, SELLER_ID, 'p4', 85, 'd', 5, null, 'USD', 'manual_bank_transfer', 'seller', 0, feeItemsFor({ items: [{ ...premiumLine, premiumFeePercent: 0 }] }));
+      expect(feeOf('p4').amount).toBeCloseTo(0, 2);
+    });
+
+    it('mixed order: normal line pays the per-type fee, premium line the premium fee, on their own shares', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      fees({ digital: { mode: 'percentage', value: 10 }, physical: { mode: 'percentage', value: 20 } });
+      const items = feeItemsFor({ items: [{ type: 'physical', totalPrice: 60, quantity: 1 }, premiumLine] });
+      // sale = 60 + 85 = 145: physical 60 x 20% = 12, premium 85 x 5% = 4.25
+      await service.recordSale(STORE_ID, SELLER_ID, 'm1', 145, 'd', 5, null, 'USD', 'manual_bank_transfer', 'seller', 0, items);
+      expect(feeOf('m1').amount).toBeCloseTo(-16.25, 2);
+    });
+
+    it('premium fee applies even when platformFees is not configured (legacy commission is not used for the premium line)', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      fees(null);
+      await service.recordSale(STORE_ID, SELLER_ID, 'p5', 85, 'd', 5, null, 'USD', 'manual_bank_transfer', 'seller', 0, feeItemsFor({ items: [premiumLine] }));
+      expect(feeOf('p5').amount).toBeCloseTo(-4.25, 2);
+      expect(commissionRulesService.resolveRate).not.toHaveBeenCalled();
+    });
+
+    it('a seller-collected COD premium sale is debited the premium fee', async () => {
+      const balance = makeBalance();
+      balanceModel.findOne.mockResolvedValue(balance);
+      fees({ digital: { mode: 'percentage', value: 10 }, physical: { mode: 'percentage', value: 10 } });
+      await service.recordSale(STORE_ID, SELLER_ID, 'p6', 85, 'd', 5, null, 'USD', 'cash_on_delivery', 'seller', 0, feeItemsFor({ items: [{ ...premiumLine, type: 'physical' }] }));
+      expect(feeOf('p6').amount).toBeCloseTo(-4.25, 2);
+    });
+
+    it('feeItemsFor leaves NON-premium orders exactly as before (weights = totalPrice, no sponsored folded in, no feePercent)', () => {
+      const items = feeItemsFor({ items: [{ type: 'digital', totalPrice: 60, quantity: 1, campaignSponsorType: 'platform', campaignDiscountUSD: 10 }, { type: 'physical', totalPrice: 40, quantity: 2 }] });
+      expect(items).toEqual([{ type: 'digital', totalPrice: 60, quantity: 1 }, { type: 'physical', totalPrice: 40, quantity: 2 }]);
+    });
+  });
   describe('sale-credit outbox', () => {
     it('marks the job done after a successful credit', async () => {
       balanceModel.findOne.mockResolvedValue(makeBalance());

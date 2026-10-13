@@ -21,7 +21,7 @@ import { configuredHostedProviderIds } from 'src/payment/providers/hosted-provid
 import { DEFAULT_PK_ZONES, missingDefaultZones } from './default-pk-zones';
 import { sanitizeGiftOptions } from './gift-options.util';
 import { PremiumEntitlementsService } from 'src/premium/premium-entitlements.service';
-import { applyPremiumToLine, premiumPercentFor } from 'src/premium/premium.util';
+import { applyPremiumToLine, DEFAULT_PREMIUM_TERMS, premiumPercentFor } from 'src/premium/premium.util';
 
 // Shipping zones are a Pakistan-domestic geography feature (predates the
 // PKR/USD split entirely) — ShippingZone.shippingPrice has no currency
@@ -421,6 +421,7 @@ export class CheckoutService {
     // Premium member: campaigns open earlyAccessHours before their start date (re-validated here, server-side).
     const premiumEnt = this.premium ? await this.premium.getEntitlements(userId) : null;
     const isPremiumBuyer = !!premiumEnt?.isPremium;
+
     let campaignSavingsUSD = 0;
     const appliedCampaigns: Array<{
       campaignId: string;
@@ -545,22 +546,35 @@ export class CheckoutService {
       }
     }
 
-    // Pass 3.6: Edudeen Premium member price - a SELLER-FUNDED discount the seller chose (Store.premiumDiscount /
-    // Product.premiumDiscountPercent). Same "best single seller-side discount per line" rule as the passes above:
-    // lines on a campaign or an automatic discount are skipped, a subscriber price is replaced only when the member
-    // price is lower (never stacked). Buyers who are not active members never reach this loop.
-    let premiumSavingsUSD = 0;
+
+    // Pass 3.6: Edudeen Premium price (owner rules R1-R4). A member pays ONLY the premium price:
+    //   LIST x (1 - seller% - platform%)   (additive; LIST = compare-at when it is above the price, else the price)
+    // and it COMPETES with the whole normal pipeline above (subscriber / campaign / automatic discounts): a line is
+    // switched to the premium price only when that is strictly lower than what a normal buyer pays for the same line;
+    // otherwise the line stays exactly a normal line (the member never pays more than a normal buyer). When switched,
+    // the line's campaign / automatic / subscriber discount is removed from the totals. The platform's share is tagged
+    // platform-funded (PaymentService credits the seller as if only the seller's own premium discount existed).
+    let premiumSavingsUSD = 0; // seller-funded part
+    let premiumPlatformSavingsUSD = 0; // platform-funded part
     if (isPremiumBuyer) {
+      const terms = (this.premium as any)?.getTerms ? await this.premium!.getTerms() : DEFAULT_PREMIUM_TERMS;
       for (const item of checkoutItems) {
-        const pct = premiumPercentFor(productById.get(item.productId), storeDocById.get(String(item.storeId)));
-        const r = applyPremiumToLine(item, pct);
-        if (r.discount > 0) {
-          premiumSavingsUSD = this.round(premiumSavingsUSD + r.discount);
-          subscriberSavingsUSD = this.round(Math.max(0, subscriberSavingsUSD - r.replacedSubscriberDiscount));
+        const sellerPct = premiumPercentFor(productById.get(item.productId), storeDocById.get(String(item.storeId)));
+        const variant = variantById.get(String(item.variantId));
+        if (!sellerPct || !variant) continue;
+        const r = applyPremiumToLine(item, variant, sellerPct, terms);
+        if (!r.applied) continue;
+        premiumSavingsUSD = this.round(premiumSavingsUSD + r.sellerDiscount);
+        premiumPlatformSavingsUSD = this.round(premiumPlatformSavingsUSD + r.platformDiscount);
+        subscriberSavingsUSD = this.round(Math.max(0, subscriberSavingsUSD - r.replacedSubscriberDiscount));
+        if (r.replacedCampaignDiscount > 0) {
+          campaignSavingsUSD = this.round(Math.max(0, campaignSavingsUSD - r.replacedCampaignDiscount));
+          const ac = appliedCampaigns.find((c) => c.campaignId === r.replacedCampaignId && c.storeId === item.storeId);
+          if (ac) ac.discountUSD = this.round(Math.max(0, ac.discountUSD - r.replacedCampaignDiscount));
         }
+        if (r.replacedAutoDiscount > 0) autoDiscountSavingsUSD = this.round(Math.max(0, autoDiscountSavingsUSD - r.replacedAutoDiscount));
       }
     }
-
     let defaultAddressId: string | null = null;
 
     if (hasPhysical) {
@@ -707,6 +721,7 @@ export class CheckoutService {
       autoDiscountTotalUSD: autoDiscountSavingsUSD,
       isPremiumBuyer,
       premiumDiscountTotalUSD: premiumSavingsUSD,
+      premiumPlatformDiscountTotalUSD: premiumPlatformSavingsUSD,
       totalAmount,
       status: 'pending',
       attributionSource,
@@ -801,7 +816,7 @@ export class CheckoutService {
           subscriberSavingsUSD: this.round(subscriberSavingsUSD),
           campaignDiscountUSD: campaignSavingsUSD,
           autoDiscountUSD: autoDiscountSavingsUSD,
-          ...(isPremiumBuyer ? { premiumDiscountUSD: premiumSavingsUSD } : {}),
+          ...(isPremiumBuyer ? { premiumDiscountUSD: premiumSavingsUSD, premiumPlatformDiscountUSD: premiumPlatformSavingsUSD } : {}),
           ...this.splitSubtotalsByType(checkoutItems),
         },
         subscriptionSavingsHints,

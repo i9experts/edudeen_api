@@ -1,4 +1,6 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { PremiumEntitlementsService } from 'src/premium/premium-entitlements.service';
+import { assertPremiumGap } from 'src/premium/premium-gap';
 import { DatabaseService } from 'src/database/databaseservice';
 import { CreateVariantDto } from './dto/create-variant.dto';
 import { UpdateVariantDto } from './dto/update-variant.dto';
@@ -6,7 +8,11 @@ import { optionNameSet, optionsKey, VariantOptionInput } from '../products/varia
 
 @Injectable()
 export class ProductVariantsService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    // Optional: absent = no sale-vs-Premium rule (behaves exactly as before).
+    @Optional() private readonly premium?: PremiumEntitlementsService,
+  ) {}
 
   private async loadOwnedPhysicalProduct(sellerId: string, productId: string) {
     const { productModel } = this.databaseService.repositories;
@@ -75,6 +81,7 @@ export class ProductVariantsService {
     const options = dto.options ?? [];
     const existing = await this.getActiveVariants(productId);
     this.assertConsistentAndUnique(existing as any, options);
+    await assertPremiumGap(this.premium, store as any, (product as any).premiumDiscountPercent, [{ price: dto.price, compareAtPrice: dto.compareAtPrice ?? null }]);
 
     const sku =
       dto.sku ||
@@ -111,8 +118,8 @@ export class ProductVariantsService {
     variantId: string,
     dto: UpdateVariantDto,
   ) {
-    const { productVariantModel } = this.databaseService.repositories;
-    await this.loadOwnedPhysicalProduct(sellerId, productId);
+    const { productVariantModel, storeModel } = this.databaseService.repositories;
+    const ownedProduct = await this.loadOwnedPhysicalProduct(sellerId, productId);
 
     const variant = await productVariantModel.findOne({
       _id: variantId,
@@ -120,6 +127,14 @@ export class ProductVariantsService {
       isDelete: false,
     });
     if (!variant) throw new NotFoundException('Variant not found');
+
+    if (this.premium && (dto.price !== undefined || dto.compareAtPrice !== undefined)) {
+      const store = await storeModel.findOne({ _id: ownedProduct.storeId, isDelete: false }).select('premiumDiscount').lean();
+      await assertPremiumGap(this.premium, store as any, (ownedProduct as any).premiumDiscountPercent, [{
+        price: dto.price !== undefined ? dto.price : (variant as any).price,
+        compareAtPrice: dto.compareAtPrice !== undefined ? dto.compareAtPrice : (variant as any).compareAtPrice,
+      }]);
+    }
 
     if (dto.options !== undefined) {
       const others = await this.getActiveVariants(productId, variantId);

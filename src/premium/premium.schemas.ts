@@ -94,3 +94,15 @@ export class PremiumCouponIssue {
 export type PremiumCouponIssueDocument = PremiumCouponIssue & Document;
 export const PremiumCouponIssueSchema = SchemaFactory.createForClass(PremiumCouponIssue);
 PremiumCouponIssueSchema.index({ userId: 1, month: 1 }, { unique: true });
+/** Single admin-owned settings row (key 'default'): the platform-funded offer, the fee on premium sales and the sale/premium gap. */
+@Schema({ timestamps: true })
+export class PremiumSettings {
+  @Prop({ type: String, required: true, default: 'default' }) key: string;
+  @Prop({ type: Object, default: () => ({ enabled: true, percent: 5 }) }) platformDiscount: { enabled: boolean; percent: number };
+  @Prop({ type: Number, default: 5 }) premiumSellerFeePercent: number;
+  @Prop({ type: Number, default: 5 }) minGapPercent: number;
+  @Prop({ type: String, default: null }) updatedByAdminId: string | null;
+}
+export type PremiumSettingsDocument = PremiumSettings & Document;
+export const PremiumSettingsSchema = SchemaFactory.createForClass(PremiumSettings);
+PremiumSettingsSchema.index({ key: 1 }, { unique: true });

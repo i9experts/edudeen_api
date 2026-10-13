@@ -75,15 +75,35 @@ export interface SaleCreditArgs {
 
 /** One sold line, as the platform-fee computation needs it. `type` is the order item's fulfilment type
  *  ('physical' or 'digital' — educational/course items are stored as 'digital'). */
-export interface FeeItem { type: string; totalPrice: number; quantity: number }
+export interface FeeItem {
+  type: string; totalPrice: number; quantity: number;
+  /** Premium sale line (R4): the platform fee is THIS percent of the line's seller-side sale value, replacing the per-type fee. */
+  feePercent?: number | null;
+}
 
-/** The sold lines of a sub-order, for the per-product-type platform fee. Shipping is never part of it. */
-export function feeItemsFor(sellerOrder: { items?: Array<{ type?: string | null; totalPrice?: number | null; quantity?: number | null }> | null } | null | undefined): FeeItem[] {
-  return (sellerOrder?.items ?? []).map((i) => ({
-    type: i.type === 'physical' ? 'physical' : 'digital',
-    totalPrice: Number(i.totalPrice ?? 0),
-    quantity: Number(i.quantity ?? 1),
-  }));
+/** The sold lines of a sub-order, for the per-product-type platform fee. Shipping is never part of it.
+ *  When the order has Premium lines, every line's weight is its seller-side sale value (price paid + the part the
+ *  platform funded), so the premium fee is charged on what the seller is credited, not on what the buyer paid. */
+export function feeItemsFor(sellerOrder: { items?: Array<{
+  type?: string | null; totalPrice?: number | null; quantity?: number | null; premiumFeePercent?: number | null;
+  premiumPlatformDiscountUSD?: number | null; campaignSponsorType?: string | null; campaignDiscountUSD?: number | null;
+  couponSponsorType?: string | null; couponDiscountUSD?: number | null;
+}> | null } | null | undefined): FeeItem[] {
+  const items = sellerOrder?.items ?? [];
+  const hasPremium = items.some((i) => typeof i.premiumFeePercent === 'number');
+  return items.map((i) => {
+    const sponsored = hasPremium
+      ? (i.campaignSponsorType === 'platform' ? Number(i.campaignDiscountUSD ?? 0) : 0)
+        + (i.couponSponsorType === 'platform' ? Number(i.couponDiscountUSD ?? 0) : 0)
+        + Number(i.premiumPlatformDiscountUSD ?? 0)
+      : 0;
+    return {
+      type: i.type === 'physical' ? 'physical' : 'digital',
+      totalPrice: Number(i.totalPrice ?? 0) + sponsored,
+      quantity: Number(i.quantity ?? 1),
+      ...(typeof i.premiumFeePercent === 'number' ? { feePercent: i.premiumFeePercent } : {}),
+    };
+  });
 }
 
 function clearingDaysForRail(paymentMethodType: string): number {
@@ -1817,16 +1837,30 @@ export class FinanceService {
    *  percentage: the type's share of `saleAmount` (in the seller's currency) x value / 100.
    *  fixed: value (USD) x units sold, converted to `currency`. The result never exceeds `saleAmount`. */
   private async perTypePlatformFee(saleAmount: number, currency: string, feeItems?: FeeItem[], fxSnapshots?: any[]) {
-    if (!feeItems?.length || typeof this.adminConfigService?.getPlatformFees !== 'function') return null;
-    const fees = await this.adminConfigService.getPlatformFees().catch(() => null);
-    if (!fees) return null;
+    if (!feeItems?.length) return null;
+    const hasPremiumLines = feeItems.some((i) => typeof i.feePercent === 'number');
+    const canReadFees = typeof this.adminConfigService?.getPlatformFees === 'function';
+    if (!canReadFees && !hasPremiumLines) return null;
+    const fees: any = canReadFees ? await this.adminConfigService.getPlatformFees().catch(() => null) : null;
+    if (!fees && !hasPremiumLines) return null;
     const totalWeight = feeItems.reduce((s, i) => s + Math.max(0, i.totalPrice), 0);
     let fee = 0;
     const breakdown: Record<string, number> = {};
+    // Premium lines pay their own percent of their share of the sale (replaces the per-type fee, percentage OR fixed).
+    const premiumLines = feeItems.filter((i) => typeof i.feePercent === 'number');
+    if (premiumLines.length) {
+      const part = premiumLines.reduce((s, i) => {
+        const w = Math.max(0, i.totalPrice);
+        const share = totalWeight > 0 ? (saleAmount * w) / totalWeight : saleAmount / feeItems.length;
+        return s + (share * (i.feePercent as number)) / 100;
+      }, 0);
+      breakdown.premium = this.round(part);
+      fee += part;
+    }
     for (const type of ['digital', 'physical'] as const) {
-      const rule = fees[type];
+      const rule = fees?.[type];
       if (!rule) continue;
-      const lines = feeItems.filter((i) => i.type === type);
+      const lines = feeItems.filter((i) => i.type === type && typeof i.feePercent !== 'number');
       if (!lines.length) continue;
       let part = 0;
       if (rule.mode === 'percentage') {

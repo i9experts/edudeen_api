@@ -16,10 +16,10 @@ import { escapeHtml, notificationEmailShell } from '../notifications/templates/n
 import { clampInt, escapeRegex } from '../common/query-safety.util';
 import {
   PremiumBenefits, PremiumCouponIssue, PremiumCouponIssueDocument, PremiumMembership, PremiumMembershipDocument,
-  PremiumPayment, PremiumPaymentDocument, PremiumPlan, PremiumPlanDocument,
+  PremiumPayment, PremiumPaymentDocument, PremiumPlan, PremiumPlanDocument, PremiumSettings, PremiumSettingsDocument,
 } from './premium.schemas';
 import { PremiumEntitlementsService } from './premium-entitlements.service';
-import { addPeriod, DEFAULT_CHILDREN_LIMIT, monthKey } from './premium.util';
+import { addPeriod, cleanPremiumSettings, DEFAULT_CHILDREN_LIMIT, monthKey, normalSalePercent, premiumGapViolation, premiumPercentFor, termsFromSettings } from './premium.util';
 import {
   CreatePremiumPlanDto, GrantPremiumDto, SubmitPremiumProofDto, SubscribePremiumDto, UpdatePremiumPlanDto,
 } from './premium.dto';
@@ -54,6 +54,7 @@ export class PremiumService {
     @InjectModel(PremiumMembership.name) private readonly membershipModel: Model<PremiumMembershipDocument>,
     @InjectModel(PremiumPayment.name) private readonly paymentModel: Model<PremiumPaymentDocument>,
     @InjectModel(PremiumCouponIssue.name) private readonly couponIssueModel: Model<PremiumCouponIssueDocument>,
+    @InjectModel(PremiumSettings.name) private readonly settingsModel: Model<PremiumSettingsDocument>,
   ) {}
 
   getEntitlements(userId?: string | null) { return this.entitlements.getEntitlements(userId); }
@@ -144,6 +145,85 @@ export class PremiumService {
     } catch (err: any) {
       this.logger.warn(`premium notification to ${userId} failed: ${err?.message}`);
     }
+  }
+
+  // ── platform offer / fee / gap settings (R4) ─────────────────────────────
+
+  async adminGetSettings() {
+    const settings = await this.entitlements.getSettings();
+    return { success: true, data: { ...settings, effective: termsFromSettings(settings) } };
+  }
+
+  async adminUpdateSettings(adminId: string, body: any) {
+    const current = await this.entitlements.getSettings();
+    const next = cleanPremiumSettings(body, current);
+    await this.settingsModel.findOneAndUpdate(
+      { key: 'default' },
+      { $set: { platformDiscount: next.platformDiscount, premiumSellerFeePercent: next.premiumSellerFeePercent, minGapPercent: next.minGapPercent, updatedByAdminId: adminId }, $setOnInsert: { key: 'default' } },
+      { upsert: true, returnDocument: 'after' },
+    );
+    this.entitlements.invalidateSettings();
+    await this.audit(adminId, 'premium_settings_updated', `Premium settings: platform offer ${next.platformDiscount.enabled ? `ON ${next.platformDiscount.percent}%` : 'OFF'}, seller fee on premium sales ${next.premiumSellerFeePercent}%, min gap ${next.minGapPercent} points`, 'default', 'premium_settings', { before: current, after: next });
+    return { success: true, message: 'Premium settings saved', data: { ...next, effective: termsFromSettings(next) } };
+  }
+
+  /**
+   * Public / seller-readable: the numbers the seller's earnings calculator and the sale-vs-premium rule use.
+   * `type` (physical | digital | educational | course) adds the normal per-type platform fee; `currency` converts a fixed fee.
+   */
+  async getTerms(type?: string, currency?: string) {
+    const settings = await this.entitlements.getSettings();
+    const t = termsFromSettings(settings);
+    const feeType = type === 'physical' ? 'physical' : 'digital';
+    let normalFee: { type: string; mode: 'percentage' | 'fixed'; value: number; fixedAmountInCurrency: number | null; currency: string | null } | null = null;
+    try {
+      const fees: any = await this.adminConfig.getPlatformFees();
+      const rule = fees?.[feeType];
+      if (rule) {
+        let converted: number | null = null;
+        if (rule.mode === 'fixed') {
+          const cur = currency === 'PKR' ? 'PKR' : 'USD';
+          if (cur === 'USD') converted = rule.value;
+          else { const rate = await this.pkrRate(); converted = rate ? Math.round(rule.value * rate) : null; }
+          normalFee = { type: feeType, mode: 'fixed', value: rule.value, fixedAmountInCurrency: converted, currency: cur };
+        } else {
+          normalFee = { type: feeType, mode: 'percentage', value: rule.value, fixedAmountInCurrency: null, currency: null };
+        }
+      }
+    } catch { /* terms still useful without the normal fee */ }
+    return {
+      success: true,
+      data: {
+        platformDiscount: { enabled: t.platformEnabled, percent: t.platformPercent },
+        platformPercent: t.platformPercent,
+        premiumSellerFeePercent: t.sellerFeePercent,
+        minGapPercent: t.minGapPercent,
+        normalFee,
+      },
+    };
+  }
+
+  /** Seller: this store's products whose normal sale is too close to (or above) their Premium discount. Warning only - never blocks. */
+  async sellerPremiumConflicts(sellerId: string, storeId: string) {
+    if (!isValidObjectId(storeId)) throw new NotFoundException('Store not found');
+    const repos = this.db.repositories;
+    const store: any = await repos.storeModel.findOne({ _id: storeId, sellerId, isDelete: false }).select('premiumDiscount').lean();
+    if (!store) throw new NotFoundException('Store not found');
+    const gap = termsFromSettings(await this.entitlements.getSettings()).minGapPercent;
+    const products: any[] = await repos.productModel.find({ storeId, isDelete: false, status: { $ne: 'inactive' } }).select('name premiumDiscountPercent').limit(2000).lean();
+    const variants: any[] = products.length
+      ? await repos.productVariantModel.find({ productId: { $in: products.map((p) => String(p._id)) }, isDelete: false, status: 'active' }).select('productId price compareAtPrice').lean()
+      : [];
+    const byProduct = new Map<string, any[]>();
+    for (const v of variants) { const k = String(v.productId); if (!byProduct.has(k)) byProduct.set(k, []); byProduct.get(k)!.push(v); }
+    const conflicts: Array<{ productId: string; name: string; premiumPercent: number; salePercent: number; message: string }> = [];
+    for (const p of products) {
+      const pct = premiumPercentFor(p, store);
+      const vs = byProduct.get(String(p._id)) ?? [];
+      const message = premiumGapViolation(pct, vs, gap);
+      if (message) conflicts.push({ productId: String(p._id), name: p.name, premiumPercent: pct, salePercent: Math.round(Math.max(...vs.map((v) => normalSalePercent(v.price, v.compareAtPrice))) * 10) / 10, message });
+    }
+    return { success: true, data: { minGapPercent: gap, conflicts } };
   }
 
   // ── plans ────────────────────────────────────────────────────────────────
@@ -452,7 +532,7 @@ export class PremiumService {
       this.paymentModel.aggregate([{ $match: { status: 'approved' } }, { $group: { _id: null, usd: { $sum: '$amountUSD' }, n: { $sum: 1 } } }]),
       this.paymentModel.aggregate([{ $match: { status: 'approved', reviewedAt: { $gte: since30 } } }, { $group: { _id: null, usd: { $sum: '$amountUSD' }, n: { $sum: 1 } } }]),
       this.membershipModel.aggregate([{ $match: { status: 'active', currentPeriodEnd: { $gt: now } } }, { $group: { _id: '$interval', n: { $sum: 1 } } }]),
-      orderModel.aggregate([{ $match: { isPremiumOrder: true, isDelete: false } }, { $group: { _id: '$currency', orders: { $sum: 1 }, premiumDiscount: { $sum: '$premiumDiscountTotal' }, revenue: { $sum: '$totalAmount' } } }]),
+      orderModel.aggregate([{ $match: { isPremiumOrder: true, isDelete: false } }, { $group: { _id: '$currency', orders: { $sum: 1 }, premiumDiscount: { $sum: '$premiumDiscountTotal' }, platformPremiumDiscount: { $sum: '$premiumPlatformDiscountTotal' }, revenue: { $sum: '$totalAmount' } } }]),
     ]);
     return {
       success: true,
@@ -462,7 +542,7 @@ export class PremiumService {
         revenueLast30DaysUSD: round2(revenue30[0]?.usd ?? 0),
         activeByInterval: { monthly: byInterval.find((b: any) => b._id === 'monthly')?.n ?? 0, yearly: byInterval.find((b: any) => b._id === 'yearly')?.n ?? 0 },
         // Seller-funded member-price discount given on Premium orders, per order currency.
-        premiumOrders: premiumOrders.map((o: any) => ({ currency: o._id, orders: o.orders, premiumDiscount: round2(o.premiumDiscount), orderTotal: round2(o.revenue) })),
+        premiumOrders: premiumOrders.map((o: any) => ({ currency: o._id, orders: o.orders, premiumDiscount: round2(o.premiumDiscount), platformFundedPremiumDiscount: round2(o.platformPremiumDiscount ?? 0), orderTotal: round2(o.revenue) })),
       },
     };
   }

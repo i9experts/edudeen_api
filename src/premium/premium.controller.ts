@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import {
-  Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UploadedFile, UseGuards, UseInterceptors, UsePipes, ValidationPipe,
+  Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, UploadedFile, UseGuards, UseInterceptors, UsePipes, ValidationPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -25,6 +25,15 @@ export class PremiumController {
   /** Public: the plans a buyer can choose from (USD + PKR prices, benefits). */
   @Get('plans')
   plans() { return this.premium.listPublicPlans(); }
+
+  /** Public: platform offer %, fee on premium sales, min gap, and (with ?type=&currency=) the normal platform fee for that product type. */
+  @Get('terms')
+  terms(@Query('type') type?: string, @Query('currency') currency?: string) { return this.premium.getTerms(type, currency); }
+
+  /** Seller: products whose normal sale is too close to their Premium discount (warning list for the store settings card). */
+  @ApiBearerAuth() @UseGuards(JwtAuthGuard, RolesGuard) @Roles('seller')
+  @Get('seller/conflicts')
+  sellerConflicts(@Req() req: any, @Query('storeId') storeId: string) { return this.premium.sellerPremiumConflicts(req.user.userId, storeId); }
 
   @ApiBearerAuth() @UseGuards(JwtAuthGuard, RolesGuard) @Roles('user')
   @Get('me')
@@ -71,6 +80,10 @@ export class AdminPremiumController {
   constructor(private readonly premium: PremiumService) {}
 
   @Get('stats') stats() { return this.premium.adminStats(); }
+
+  @Get('settings') settings() { return this.premium.adminGetSettings(); }
+  @Put('settings')
+  updateSettings(@Req() req: any, @Body() body: any) { return this.premium.adminUpdateSettings(req.user.userId, body); }
 
   @Get('plans') plans() { return this.premium.adminListPlans(); }
   @UsePipes(PIPE) @Post('plans')

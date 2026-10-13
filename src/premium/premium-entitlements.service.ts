@@ -1,11 +1,11 @@
 /* eslint-disable prettier/prettier */
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model } from 'mongoose';
 import { DatabaseService } from '../database/databaseservice';
 import { RedisService } from '../redis/redis.service';
-import { PremiumMembership, PremiumMembershipDocument } from './premium.schemas';
-import { DEFAULT_CHILDREN_LIMIT, Entitlements, NON_PREMIUM, premiumPercentFor, premiumUnitPrice } from './premium.util';
+import { PremiumMembership, PremiumMembershipDocument, PremiumSettings, PremiumSettingsDocument } from './premium.schemas';
+import { DEFAULT_CHILDREN_LIMIT, DEFAULT_PREMIUM_SETTINGS, Entitlements, NON_PREMIUM, premiumLinePrice, PremiumSettingsShape, PremiumTerms, premiumPercentFor, termsFromSettings } from './premium.util';
 
 const CACHE_TTL_SECONDS = 60;
 const key = (userId: string) => `premium:ent:${userId}`;
@@ -23,7 +23,33 @@ export class PremiumEntitlementsService {
     private readonly db: DatabaseService,
     private readonly redis: RedisService,
     @InjectModel(PremiumMembership.name) private readonly membershipModel: Model<PremiumMembershipDocument>,
+    @Optional() @InjectModel(PremiumSettings.name) private readonly settingsModel?: Model<PremiumSettingsDocument>,
   ) {}
+
+  private settingsCache: { at: number; settings: PremiumSettingsShape } | null = null;
+
+  /** Admin settings (platform offer, premium sale fee, min gap). Defaults when never saved or the read fails. ~15s per-instance cache. */
+  async getSettings(): Promise<PremiumSettingsShape> {
+    if (this.settingsCache && Date.now() - this.settingsCache.at < 15_000) return this.settingsCache.settings;
+    let settings: PremiumSettingsShape = { ...DEFAULT_PREMIUM_SETTINGS, platformDiscount: { ...DEFAULT_PREMIUM_SETTINGS.platformDiscount } };
+    try {
+      const row: any = this.settingsModel ? await this.settingsModel.findOne({ key: 'default' }).lean() : null;
+      if (row) {
+        settings = {
+          platformDiscount: { enabled: row.platformDiscount?.enabled ?? true, percent: Number(row.platformDiscount?.percent ?? 5) },
+          premiumSellerFeePercent: Number(row.premiumSellerFeePercent ?? 5),
+          minGapPercent: Number(row.minGapPercent ?? 5),
+        };
+      }
+    } catch (err: any) { this.logger.warn(`premium settings read failed, using defaults: ${err?.message}`); }
+    this.settingsCache = { at: Date.now(), settings };
+    return settings;
+  }
+
+  /** Effective numbers for pricing/fees/validation (platformPercent is 0 when the offer is off). */
+  async getTerms(): Promise<PremiumTerms> { return termsFromSettings(await this.getSettings()); }
+
+  invalidateSettings() { this.settingsCache = null; }
 
   async getEntitlements(userId?: string | null): Promise<Entitlements> {
     if (!userId || typeof userId !== 'string') return NON_PREMIUM;
@@ -79,25 +105,38 @@ export class PremiumEntitlementsService {
 
   /**
    * Adds premium price info to shaped products (each with `variants`). EVERYONE gets the teaser `premiumPercent`
-   * (seller's chosen percent); only an active member also gets `premiumPrice` + `premiumDiscountPercent` on each
-   * variant. Products already on a campaign sale, or whose subscriber price is as good, get no premiumPrice
-   * (checkout takes the best single seller-side discount per line and is the source of truth).
+   * (seller% + platform% combined) plus the breakdown `premiumSellerPercent` / `premiumPlatformPercent`; only an
+   * active member also gets, per variant, `listPrice` (the original price to strike through), `premiumPrice` and the
+   * same percents. R1: for a member the normal sale, campaign badge and store-subscriber price are not applied on a
+   * line that has a premium price (checkout is the source of truth and charges the same number).
    */
   async decorateProducts<T extends Record<string, any>>(products: T[], userId?: string | null, opts: { storeSettings?: Map<string, any> } = {}): Promise<T[]> {
     if (!products.length) return products;
     try {
       const settings = opts.storeSettings ?? (await this.loadStoreSettings(products.map((p) => String(p.storeId))));
       const isMember = (await this.getEntitlements(userId)).isPremium;
+      const terms = await this.getTerms();
       return products.map((p) => {
-        const pct = premiumPercentFor(p as any, settings.get(String(p.storeId)));
-        if (!pct) return p;
-        const out: any = { ...p, premiumPercent: pct };
-        if (isMember && !p.activeCampaign && Array.isArray(p.variants)) {
+        const sellerPct = premiumPercentFor(p as any, settings.get(String(p.storeId)));
+        if (!sellerPct) return p;
+        const total = Math.round((sellerPct + terms.platformPercent) * 100) / 100;
+        const out: any = { ...p, premiumPercent: total, premiumSellerPercent: sellerPct, premiumPlatformPercent: terms.platformPercent };
+        if (isMember && Array.isArray(p.variants)) {
+          let applied = false;
           out.variants = p.variants.map((v: any) => {
-            const unit = premiumUnitPrice(v.price, pct);
-            if (typeof v.subscriberPrice === 'number' && v.subscriberPrice <= unit) return v;
-            return { ...v, premiumPrice: unit, premiumDiscountPercent: pct };
+            const calc = premiumLinePrice(v.price, v.originalCompareAtPrice ?? v.compareAtPrice, sellerPct, terms.platformPercent);
+            if (!calc.applies) return v;
+            // Premium competes with the normal price a buyer would pay on this variant (running % sale, store-subscriber price):
+            // when that is lower or equal, no premium price is offered and the sale / subscriber price stays visible.
+            const camp = p.activeCampaign;
+            const campUnit = camp?.discountType === 'percentage' && camp.discountValue ? Math.round(v.price * (1 - camp.discountValue / 100) * 100) / 100 : v.price;
+            const normalUnit = Math.min(campUnit, typeof v.subscriberPrice === 'number' ? v.subscriberPrice : Infinity);
+            if (!(calc.unit < normalUnit)) return v;
+            applied = true;
+            const { subscriberPrice: _a, youSaveUSD: _b, discountPercent: _c, subscriberPlanName: _d, minOrderValueUSD: _e, ...rest } = v;
+            return { ...rest, listPrice: calc.listUnit, premiumPrice: calc.unit, premiumDiscountPercent: calc.totalPercent, premiumSellerPercent: calc.sellerPercent, premiumPlatformPercent: calc.platformPercent };
           });
+          if (applied && out.activeCampaign) out.activeCampaign = null;
         }
         return out as T;
       });
@@ -105,5 +144,4 @@ export class PremiumEntitlementsService {
       this.logger.warn(`premium decoration skipped: ${err?.message}`);
       return products;
     }
-  }
-}
+  }}
