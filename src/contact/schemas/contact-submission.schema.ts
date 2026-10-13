@@ -24,6 +24,10 @@ export class ContactSubmission {
   @Prop({ enum: ['new', 'read', 'resolved'], default: 'new' })
   status: ContactSubmissionStatus;
 
+  // Edudeen Premium priority support: the sender's email belongs to an active premium member.
+  @Prop({ type: Boolean, default: false })
+  priority: boolean;
+
   createdAt?: Date;
   updatedAt?: Date;
 }

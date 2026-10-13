@@ -1789,7 +1789,9 @@ export class PaymentService {
             s +
             (i.campaignSponsorType === 'platform'
               ? (i.campaignDiscountUSD ?? 0)
-              : 0),
+              : 0) +
+            // Platform-funded coupon (Edudeen Premium monthly coupon): reimbursed to the seller like a sponsored campaign.
+            (i.couponSponsorType === 'platform' ? (i.couponDiscountUSD ?? 0) : 0),
           0,
         );
         // Settlement basis: `storeCurrency` IS this seller's own
@@ -1847,6 +1849,9 @@ export class PaymentService {
             campaignId: i.campaignId ?? null,
             campaignDiscountUSD: convFrom(i.campaignDiscountUSD ?? 0, storeCurrency),
             campaignSponsorType: i.campaignSponsorType ?? null,
+            couponSponsorType: i.couponSponsorType ?? null,
+            premiumDiscountUSD: convFrom(i.premiumDiscountUSD ?? 0, storeCurrency),
+            premiumDiscountPercent: i.premiumDiscountPercent ?? 0,
             autoDiscountId: i.autoDiscountId ?? null,
             autoDiscountUSD: convFrom(i.autoDiscountUSD ?? 0, storeCurrency),
             status: 'pending',
@@ -1893,9 +1898,11 @@ export class PaymentService {
       const giftCardDiscountTotal = convertedSum(physicalItems, 'giftCardDiscountUSD');
       const autoDiscountTotal = convertedSum(physicalItems, 'autoDiscountUSD');
       const campaignDiscountTotal = convertedSum(physicalItems, 'campaignDiscountUSD');
-      const platformSponsoredDiscountTotal = convertedSum(
-        physicalItems, 'campaignDiscountUSD', (i) => i.campaignSponsorType === 'platform',
+      const platformSponsoredDiscountTotal = this.round(
+        convertedSum(physicalItems, 'campaignDiscountUSD', (i) => i.campaignSponsorType === 'platform') +
+        convertedSum(physicalItems, 'couponDiscountUSD', (i) => i.couponSponsorType === 'platform'),
       );
+      const premiumDiscountTotal = convertedSum(physicalItems, 'premiumDiscountUSD');
 
       const physicalOrder = await orderModel.create({
         orderNumber: genOrderNumber(),
@@ -1917,6 +1924,8 @@ export class PaymentService {
         campaignDiscountTotal,
         autoDiscountTotal,
         platformSponsoredDiscountTotal,
+        isPremiumOrder: !!checkout.isPremiumBuyer,
+        premiumDiscountTotal,
         totalAmount: this.round(subtotal + shippingFee),
         giftMessage: checkout.giftMessage ?? null,
         giftWrap: !!checkout.giftWrap,
@@ -1942,9 +1951,11 @@ export class PaymentService {
       const giftCardDiscountTotal = convertedSum(digitalItems, 'giftCardDiscountUSD');
       const autoDiscountTotal = convertedSum(digitalItems, 'autoDiscountUSD');
       const campaignDiscountTotal = convertedSum(digitalItems, 'campaignDiscountUSD');
-      const platformSponsoredDiscountTotal = convertedSum(
-        digitalItems, 'campaignDiscountUSD', (i) => i.campaignSponsorType === 'platform',
+      const platformSponsoredDiscountTotal = this.round(
+        convertedSum(digitalItems, 'campaignDiscountUSD', (i) => i.campaignSponsorType === 'platform') +
+        convertedSum(digitalItems, 'couponDiscountUSD', (i) => i.couponSponsorType === 'platform'),
       );
+      const premiumDiscountTotal = convertedSum(digitalItems, 'premiumDiscountUSD');
 
       const digitalOrder = await orderModel.create({
         orderNumber: genOrderNumber(),
@@ -1965,6 +1976,8 @@ export class PaymentService {
         campaignDiscountTotal,
         autoDiscountTotal,
         platformSponsoredDiscountTotal,
+        isPremiumOrder: !!checkout.isPremiumBuyer,
+        premiumDiscountTotal,
         totalAmount: subtotal,
         paymentType: digitalPayment.paymentType,
         paymentStatus: digitalPayment.paymentStatus ?? (digitalPayment.isPaid ? 'paid' : 'unpaid'),

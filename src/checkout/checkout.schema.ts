@@ -135,6 +135,19 @@ export class CheckoutItem {
   // lookup, whether to restore the seller's payout for this line.
   @Prop({ type: String, enum: ['seller', 'platform'], default: null })
   campaignSponsorType: 'seller' | 'platform' | null;
+
+  // Edudeen Premium member price (seller-funded, chosen by the seller via Store/Product premium discount).
+  // price/totalPrice above already reflect it; this is kept for receipt display and seller reporting.
+  @Prop({ type: Number, default: 0 })
+  premiumDiscountUSD: number;
+
+  @Prop({ type: Number, default: 0 })
+  premiumDiscountPercent: number;
+
+  // Who funds couponDiscountUSD: 'platform' only for platform-funded coupons (Premium monthly coupon) so the
+  // seller is credited the full price (same reimbursement path as platform-sponsored campaigns).
+  @Prop({ type: String, enum: ['platform'], default: null })
+  couponSponsorType: 'platform' | null;
 }
 
 export const CheckoutItemSchema = SchemaFactory.createForClass(CheckoutItem);
@@ -256,6 +269,14 @@ export class Checkout {
   // can have a different seller automatic discount per store).
   @Prop({ default: 0 })
   autoDiscountTotalUSD: number;
+
+  // Edudeen Premium: the buyer was an active member when this checkout was created, and the seller-funded
+  // member-price discount across all items (item.price/totalPrice already reflect it).
+  @Prop({ type: Boolean, default: false })
+  isPremiumBuyer: boolean;
+
+  @Prop({ default: 0 })
+  premiumDiscountTotalUSD: number;
 
   // Set client-side from whichever promotional banner the buyer clicked
   // through (localStorage attribution token, short TTL) — copied onto the

@@ -1,5 +1,5 @@
 import { escapeHtml } from 'src/notifications/templates/notification-email.template';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import {
@@ -11,6 +11,7 @@ import {
   UpdateContactStatusDto,
 } from './dto/contact.dto';
 import { EmailService } from '../otp/services/email.service';
+import { PremiumEntitlementsService } from '../premium/premium-entitlements.service';
 
 const APP_NAME = process.env.APP_NAME || 'Edudeen';
 
@@ -44,14 +45,19 @@ export class ContactService {
     @InjectModel(ContactSubmission.name)
     private readonly contactModel: Model<ContactSubmissionDocument>,
     private readonly emailService: EmailService,
+    @Optional() private readonly premium?: PremiumEntitlementsService,
   ) {}
 
   async submit(dto: CreateContactSubmissionDto) {
+    const email = dto.email.trim().toLowerCase();
+    // Edudeen Premium priority support: the typed email belongs to an active member -> flagged for the admin queue.
+    const priority = this.premium ? await this.premium.isPremiumEmail(email) : false;
     const submission = await this.contactModel.create({
       name: dto.name.trim(),
-      email: dto.email.trim().toLowerCase(),
+      email,
       topic: dto.topic,
       message: dto.message.trim(),
+      ...(priority ? { priority: true } : {}),
     });
 
     // The acknowledgement goes to an address the (unauthenticated) submitter typed — cap it per address so the form
@@ -76,10 +82,12 @@ export class ContactService {
     };
   }
 
-  async findAll() {
+  async findAll(opts: { priority?: boolean } = {}) {
     // Bounded: the admin list used to load EVERY submission (a flood of spam made it unbounded) and count in memory.
+    // Premium (priority) submissions sort first; `?priority=true` shows only those.
+    const filter = opts.priority ? { priority: true } : {};
     const [submissions, byStatus] = await Promise.all([
-      this.contactModel.find().sort({ createdAt: -1 }).limit(500).exec(),
+      this.contactModel.find(filter).sort({ priority: -1, createdAt: -1 }).limit(500).exec(),
       this.contactModel.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
     ]);
     const countOf = (status: string) => (byStatus.find((r: { _id: string; n: number }) => r._id === status)?.n as number | undefined) ?? 0;

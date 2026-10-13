@@ -530,6 +530,11 @@ export class Store {
   @Prop({ type: Boolean, default: true })
   codEnabled: boolean;
 
+  // Seller-funded "Edudeen Premium" member price. enabled + percent (1-50) apply to every product that has no
+  // own Product.premiumDiscountPercent. The seller chooses this; the platform never discounts on their behalf.
+  @Prop({ type: Object, default: null })
+  premiumDiscount: { enabled: boolean; percent: number } | null;
+
   // Who ships this store's PHYSICAL orders. 'seller' (default — every existing
   // store): the seller's own courier delivers and collects any COD cash, and
   // the seller manages shipping status/tracking. 'platform': the platform ships

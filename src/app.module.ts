@@ -73,6 +73,7 @@ import { StoreDashboardModule } from './store-dashboard/store-dashboard.module';
 import { CouriersModule } from './couriers/couriers.module';
 import { RetentionModule } from './retention/retention.module';
 import { ChildrenModule } from './children/children.module';
+import { PremiumModule } from './premium/premium.module';
 import { PhoneVerificationModule } from './phone-verification/phone-verification.module';
 
 @Module({
@@ -154,6 +155,7 @@ import { PhoneVerificationModule } from './phone-verification/phone-verification
     CouriersModule,
     RetentionModule,
     ChildrenModule,
+    PremiumModule,
     PhoneVerificationModule,
   ],
   controllers: [AppController],

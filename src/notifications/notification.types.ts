@@ -50,6 +50,12 @@ export const NOTIFICATION_TYPES = {
   WISHLIST_PRICE_DROP: 'wishlist_price_drop',
   REFERRAL_REWARD: 'referral_reward',
   DOWNLOAD_LINK_RESENT: 'download_link_resent',
+  PREMIUM_PAYMENT_SUBMITTED: 'premium_payment_submitted',
+  PREMIUM_ACTIVATED: 'premium_activated',
+  PREMIUM_PAYMENT_REJECTED: 'premium_payment_rejected',
+  PREMIUM_EXPIRING_SOON: 'premium_expiring_soon',
+  PREMIUM_EXPIRED: 'premium_expired',
+  PREMIUM_COUPON: 'premium_coupon',
 } as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[keyof typeof NOTIFICATION_TYPES];
@@ -104,4 +110,10 @@ export const NOTIFICATION_CATEGORY: Record<string, 'orders' | 'messages' | 'prom
   [NOTIFICATION_TYPES.WISHLIST_PRICE_DROP]: 'promotions',
   [NOTIFICATION_TYPES.REFERRAL_REWARD]: 'loyalty',
   [NOTIFICATION_TYPES.DOWNLOAD_LINK_RESENT]: 'orders',
+  [NOTIFICATION_TYPES.PREMIUM_PAYMENT_SUBMITTED]: 'subscriptions',
+  [NOTIFICATION_TYPES.PREMIUM_ACTIVATED]: 'subscriptions',
+  [NOTIFICATION_TYPES.PREMIUM_PAYMENT_REJECTED]: 'subscriptions',
+  [NOTIFICATION_TYPES.PREMIUM_EXPIRING_SOON]: 'subscriptions',
+  [NOTIFICATION_TYPES.PREMIUM_EXPIRED]: 'subscriptions',
+  [NOTIFICATION_TYPES.PREMIUM_COUPON]: 'promotions',
 };

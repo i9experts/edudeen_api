@@ -3,6 +3,7 @@ import { DatabaseService } from 'src/database/databaseservice';
 import { AnalyticsService } from 'src/analytics/analytics.service';
 import { hasDirectPayment } from 'src/common/direct-payment.util';
 import { buildOnboardingChecklist } from './onboarding-checklist.util';
+import { storePremiumStats } from 'src/premium/premium-stats.util';
 
 const SHELF_SIZE = 6;
 
@@ -43,7 +44,11 @@ export class StoreDashboardService {
         shippingZoneModel.countDocuments({ isDelete: false, status: { $ne: 'inactive' } }),
       ]);
 
-    // Shelf rows: same shape the inventory list gives (productId, name, type, status, price, image).
+    // Edudeen Premium (additive): member orders + the member discount this store gave, last 30 days. Never breaks the summary.
+    const premium = await storePremiumStats(this.db.repositories.orderModel, storeId, new Date(Date.now() - 30 * 86_400_000))
+      .catch(() => ({ premiumOrders: 0, byCurrency: [] as any[] }));
+
+    // Shelf rows: same shape the inventory list gives    // Shelf rows: same shape the inventory list gives (productId, name, type, status, price, image).
     const ids = (shelfDocs as any[]).map((p) => String(p._id));
     const variants = ids.length
       ? await productVariantModel.find({ productId: { $in: ids }, isDelete: false }).select('productId price isDefault').lean()
@@ -83,6 +88,7 @@ export class StoreDashboardService {
         activeProducts,
         shelf,
         checklist,
+        premium: { ...premium, windowDays: 30 },
       },
     };
   }

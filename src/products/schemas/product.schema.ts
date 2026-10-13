@@ -306,6 +306,11 @@ export class Product {
   @Prop({ type: [String], default: [] })
   campaignIds: string[];
 
+  // Seller-funded Edudeen Premium price: optional per-product override of Store.premiumDiscount.percent
+  // (1-50). null = follow the store setting. Premium members only; the seller bears this discount.
+  @Prop({ type: Number, default: null })
+  premiumDiscountPercent: number | null;
+
   // admin marketplace-management toggle — highlights the listing on the
   // marketplace homepage, separate from seller-controlled fields above
   @Prop({ default: false })

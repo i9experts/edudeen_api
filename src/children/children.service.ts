@@ -1,10 +1,11 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model } from 'mongoose';
 import { EducationLevel } from '../products/schemas/product.schema';
 import { canonicalClass, levelForClass } from '../products/class-levels';
 import { ChildProfile, ChildProfileDocument } from './children.schema';
+import { PremiumEntitlementsService } from '../premium/premium-entitlements.service';
 
 export const MAX_CHILDREN = 8;
 const LEVELS = new Set<string>(Object.values(EducationLevel));
@@ -52,7 +53,11 @@ export function cleanChildInput(body: ChildInput, partial = false): Partial<Clea
 
 @Injectable()
 export class ChildrenService {
-  constructor(@InjectModel(ChildProfile.name) private readonly model: Model<ChildProfileDocument>) {}
+  constructor(
+    @InjectModel(ChildProfile.name) private readonly model: Model<ChildProfileDocument>,
+    // Edudeen Premium raises the limit (default 15 vs 8). Absent = the standard limit.
+    @Optional() private readonly premium?: PremiumEntitlementsService,
+  ) {}
 
   async list(userId: string) {
     const rows = await this.model.find({ userId }).sort({ createdAt: 1 }).lean();
@@ -61,8 +66,9 @@ export class ChildrenService {
 
   async create(userId: string, body: ChildInput) {
     const data = cleanChildInput(body);
-    if ((await this.model.countDocuments({ userId })) >= MAX_CHILDREN) {
-      throw new BadRequestException(`You can save up to ${MAX_CHILDREN} children`);
+    const limit = this.premium ? (await this.premium.getEntitlements(userId)).childrenLimit : MAX_CHILDREN;
+    if ((await this.model.countDocuments({ userId })) >= limit) {
+      throw new BadRequestException(`You can save up to ${limit} children`);
     }
     const row = await this.model.create({ ...data, userId });
     return { success: true, data: row.toObject ? row.toObject() : row };

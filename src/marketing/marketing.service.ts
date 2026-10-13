@@ -290,12 +290,14 @@ export class MarketingService {
    *  (marketplace, store products) must call it once for the whole page of
    *  storeIds, never per-product, to keep it O(1) queries regardless of
    *  result-set size. */
-  async getActiveCampaignsForStores(storeIds: string[]): Promise<Map<string, ActiveCampaignForStore[]>> {
+  async getActiveCampaignsForStores(storeIds: string[], opts: { earlyAccessHours?: number } = {}): Promise<Map<string, ActiveCampaignForStore[]>> {
     const map = new Map<string, ActiveCampaignForStore[]>();
     if (storeIds.length === 0) return map;
 
     const uniqueIds = [...new Set(storeIds)];
-    const now = new Date();
+    const realNow = new Date();
+    // Premium early access: the start boundary moves earlier by earlyAccessHours (non-premium: 0 = unchanged).
+    const now = opts.earlyAccessHours && opts.earlyAccessHours > 0 ? new Date(realNow.getTime() + opts.earlyAccessHours * 3_600_000) : realNow;
     const campaigns = await this.r.campaignModel
       .find({
         isDelete: false,
@@ -307,7 +309,7 @@ export class MarketingService {
           { participatingStoreIds: { $in: uniqueIds } },
         ],
       })
-      .select('name endDate discountType discountValue currency participatingStoreIds sponsorType')
+      .select('name endDate discountType discountValue currency participatingStoreIds sponsorType startDate')
       .lean();
 
     for (const c of campaigns) {
@@ -319,6 +321,8 @@ export class MarketingService {
         currency: c.currency ?? 'USD',
         endDate: c.endDate,
         sponsorType: c.sponsorType ?? 'seller',
+        // Only set for a Premium member looking at a campaign that has not started yet.
+        ...(c.startDate && new Date(c.startDate) > realNow ? { earlyAccess: true } : {}),
       };
       const applicableStoreIds = summary.sponsorType === 'platform'
         ? uniqueIds
@@ -343,8 +347,10 @@ export class MarketingService {
   // participating store of that type — used by EducationMarketplace so a
   // physical/digital-only seller's campaign never shows there. Platform-
   // sponsored campaigns are unaffected: they apply store-wide regardless.
-  async getPublicActiveCampaigns(storeType?: string) {
-    const now = new Date();
+  async getPublicActiveCampaigns(storeType?: string, opts: { earlyAccessHours?: number } = {}) {
+    const realNow = new Date();
+    // Premium early access (see getActiveCampaignsForStores): non-premium callers pass nothing and see no change.
+    const now = opts.earlyAccessHours && opts.earlyAccessHours > 0 ? new Date(realNow.getTime() + opts.earlyAccessHours * 3_600_000) : realNow;
 
     let eligibleStoreIds: string[] | null = null;
     if (storeType) {
@@ -407,6 +413,7 @@ export class MarketingService {
         currency: c.currency ?? 'USD',
         sponsorType: c.sponsorType ?? 'seller',
         storeCount: c.sponsorType === 'platform' ? activeStoreCount : (c.participatingStoreIds ?? []).length,
+        ...(new Date(c.startDate) > realNow ? { earlyAccess: true, startDate: c.startDate } : {}),
       });
     }
     return { success: true, data };

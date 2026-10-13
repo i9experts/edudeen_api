@@ -7,6 +7,7 @@ import {
   NotFoundException,
   HttpException,
   HttpStatus,
+  Optional,
 } from '@nestjs/common';
 import { checkVerifiedPurchase } from 'src/rating/verified-purchase.util';
 import { isValidObjectId } from 'mongoose';
@@ -36,6 +37,8 @@ import {
 } from './constants/preview.constants';
 import { optionNameSet, optionsKey, validateOptions } from './variant-options.util';
 import { AttributesService } from 'src/attributes/attributes.service';
+import { PremiumEntitlementsService } from 'src/premium/premium-entitlements.service';
+import { cleanPremiumPercent } from 'src/premium/premium.util';
 
 import { clampInt } from 'src/common/query-safety.util';
 import { resolveStoreNames } from './store-name.util';
@@ -54,6 +57,12 @@ function assertValidPrice(value: unknown, field: string, { nullable = false } = 
   }
 }
 
+/** { premiumDiscountPercent } when the body carries it (validated 1-50 / null), else {} so nothing changes. */
+function premiumFieldFromBody(body: any): { premiumDiscountPercent?: number | null } {
+  const v = cleanPremiumPercent(body?.premiumDiscountPercent);
+  return v === undefined ? {} : { premiumDiscountPercent: v };
+}
+
 @Injectable()
 export class ProductsService {
   constructor(
@@ -67,6 +76,7 @@ export class ProductsService {
     private redisService: RedisService,
     private attributesService: AttributesService,
     private uploadedAssets: UploadedAssetsService,
+    @Optional() private premiumService?: PremiumEntitlementsService,
   ) {}
 
   /** Attaches an `activeCampaign` badge summary (or null) to each product,
@@ -76,12 +86,15 @@ export class ProductsService {
    *  One batched query for the whole page, not per-product. */
   private async attachCampaignBadges<T extends { storeId?: string }>(
     products: T[],
+    customerId?: string | null,
   ): Promise<T[]> {
     const storeIds = [
       ...new Set(products.map((p) => p.storeId).filter(Boolean)),
     ] as string[];
+    // Premium early access: an active member also sees a campaign starting within their earlyAccessHours.
+    const ent = customerId && this.premiumService ? await this.premiumService.getEntitlements(customerId) : null;
     const campaignsByStore = storeIds.length
-      ? await this.marketingService.getActiveCampaignsForStores(storeIds)
+      ? await this.marketingService.getActiveCampaignsForStores(storeIds, ent?.isPremium ? { earlyAccessHours: ent.earlyAccessHours } : {})
       : new Map();
 
     // Per-product participation (marketing/campaign-eligibility.util.ts): a product only carries the sale when it is
@@ -117,10 +130,16 @@ export class ProductsService {
               discountValue: primary.discountValue,
               currency: primary.currency,
               endDate: primary.endDate,
+              ...(primary.earlyAccess ? { earlyAccess: true } : {}),
             }
           : null,
       };
     });
+  }
+
+  /** Edudeen Premium decoration (no-op when the premium module is absent). See PremiumEntitlementsService.decorateProducts. */
+  private async withPremium<T extends Record<string, any>>(products: T[], customerId?: string | null): Promise<T[]> {
+    return this.premiumService ? this.premiumService.decorateProducts(products, customerId ?? null) : products;
   }
 
   /** Stamps a fresh product with an early-access window if the store has any active plan configuring one — non-subscribers can't see it until this passes. */
@@ -869,7 +888,7 @@ export class ProductsService {
       storeIds as string[],
     );
 
-    const productsWithVariants = await this.attachCampaignBadges(
+    const productsWithVariants = await this.withPremium(await this.attachCampaignBadges(
       products.map((p) => {
         const seller = sellerMap.get(p.sellerId?.toString());
         return this.sanitizeDigitalForPublicView({
@@ -884,7 +903,8 @@ export class ProductsService {
           ),
         });
       }),
-    );
+      customerId,
+    ), customerId);
 
     return {
       message: 'Products fetched successfully',
@@ -948,7 +968,7 @@ export class ProductsService {
       storeIds as string[],
     );
 
-    return this.attachCampaignBadges(
+    return this.withPremium(await this.attachCampaignBadges(
       products.map((p) => {
         const seller = sellerMap.get(p.sellerId?.toString());
         return this.sanitizeDigitalForPublicView({
@@ -963,7 +983,8 @@ export class ProductsService {
           ),
         });
       }),
-    );
+      customerId,
+    ), customerId);
   }
 
   /** Keyword search over active products (name/description, case-insensitive).
@@ -1274,7 +1295,7 @@ export class ProductsService {
         storeLogo: store ? store.logo : null,
         storeFollowersCount: store ? (store.followersCount ?? 0) : 0,
       }),
-    ]);
+    ], customerId);
 
     // 4️⃣ Get variants — must key off the resolved document's real _id, not
     // the route param (which may be a slug string, not the product's id).
@@ -1299,6 +1320,15 @@ export class ProductsService {
     const badge: any = (productWithSeller as any)?.activeCampaign;
     if (badge && badge.discountType != null && badge.discountValue != null) {
       variants = variants.map((v: any) => ({ ...v, compareAtPrice: null }));
+    }
+
+    // Edudeen Premium: teaser percent for everyone, member price on the variants for active members.
+    {
+      const [decorated] = await this.withPremium([{ ...(productWithSeller as any), variants }], customerId);
+      if (decorated) {
+        if (decorated.premiumPercent) (productWithSeller as any).premiumPercent = decorated.premiumPercent;
+        variants = decorated.variants;
+      }
     }
 
     const defaultVariant =
@@ -1502,6 +1532,7 @@ export class ProductsService {
       name,
       slug,
       campaignIds,
+      ...premiumFieldFromBody(body),
       description: description ?? null,
       productType: 'physical',
       type: 'physical',
@@ -1678,6 +1709,7 @@ export class ProductsService {
       name,
       slug,
       campaignIds,
+      ...premiumFieldFromBody(body),
       description: description ?? null,
       productType: finalProductType,
       type: 'digital',
@@ -1881,6 +1913,7 @@ export class ProductsService {
       productUpdate.isListedOnEdudeen = isListedOnEdudeen;
     if (body.campaignIds !== undefined)
       productUpdate.campaignIds = await this.marketingService.resolveProductCampaignIds(product.storeId, body.campaignIds);
+    Object.assign(productUpdate, premiumFieldFromBody(body)); // seller-funded Premium member price override (1-50 or null)
     if (status !== undefined) {
       assertSellerStatus(status);
       productUpdate.status = resolveSellerPublishStatus(status, product);

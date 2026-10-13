@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -41,8 +42,8 @@ export class ContactController {
   @Roles('admin')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all contact submissions (admin)' })
-  getAll() {
-    return this.contactService.findAll();
+  getAll(@Query('priority') priority?: string) {
+    return this.contactService.findAll({ priority: priority === 'true' });
   }
 
   @Patch('admin/:id/status')

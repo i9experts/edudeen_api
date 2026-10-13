@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model } from 'mongoose';
@@ -10,6 +10,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NOTIFICATION_TYPES } from '../notifications/notification.types';
 import { escapeHtml, notificationEmailShell } from '../notifications/templates/notification-email.template';
 import { ProductsService } from '../products/products.service';
+import { PremiumEntitlementsService } from '../premium/premium-entitlements.service';
 import { sanitizeDigitalForPublicView } from '../products/product-public-view.util';
 import {
   CartReminder, CartReminderDocument, Referral, ReferralCode, ReferralCodeDocument, ReferralDocument,
@@ -41,6 +42,8 @@ export class RetentionService {
     @InjectModel(ReferralCode.name) private readonly codeModel: Model<ReferralCodeDocument>,
     @InjectModel(Referral.name) private readonly referralModel: Model<ReferralDocument>,
     @InjectModel(RetentionSettings.name) private readonly settingsModel: Model<RetentionSettingsDocument>,
+    // Edudeen Premium: members are alerted first (processing order only - everyone still gets the same alert).
+    @Optional() private readonly premium?: PremiumEntitlementsService,
   ) {}
 
   // ── shared helpers ────────────────────────────────────────────────────────
@@ -184,7 +187,13 @@ export class RetentionService {
 
   private async dispatchWishlistEvents(variantId: string, product: any, variant: any, events: ('back_in_stock' | 'price_drop')[]): Promise<number> {
     const rows: any[] = await this.db.repositories.wishListModel.find({ productVariantId: variantId }).select('userId').limit(2000).lean();
-    const userIds = [...new Set(rows.map((r) => r.userId))];
+    let userIds = [...new Set(rows.map((r) => r.userId))];
+    if (this.premium && userIds.length > 1) {
+      try {
+        const members = await this.premium.premiumUserIdSet(userIds as string[]);
+        userIds = [...userIds.filter((u) => members.has(String(u))), ...userIds.filter((u) => !members.has(String(u)))];
+      } catch { /* ordering is best-effort */ }
+    }
     const path = `/product/${product.slug || product._id}`;
     const link = `${WEB()}${path}`;
     const name = String(product.name ?? 'An item');

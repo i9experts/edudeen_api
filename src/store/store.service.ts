@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { promises as dns } from 'dns';
 import { DatabaseService } from 'src/database/databaseservice';
+import { cleanStorePremiumDiscount } from 'src/premium/premium.util';
 import { SellerType, resolveTools, SELECTABLE_STORE_PRODUCT_TYPES, BUSINESS_TYPES, ID_DOCUMENT_TYPES, VERIFICATION_DOCUMENT_TYPES, determineVerificationLevel, assertValidVerificationTransition, type BusinessType, type VerificationDocumentType, type VerificationDocument, type VerificationStatus, STORE_ANNOUNCEMENT_TYPES } from './schemas/store.schema';
 import { getVerificationRequirements, isFieldSatisfied } from './verification-requirements.config';
 import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
@@ -959,6 +960,11 @@ export class StoreService {
     if (contactPhone !== undefined) updateData.contactPhone = contactPhone;
     if (sellerType !== undefined) updateData.sellerType = sellerType;
     if (codEnabled !== undefined) updateData.codEnabled = !!codEnabled;
+    // Seller-funded Edudeen Premium member price { enabled, percent 1-50 }; null clears it.
+    {
+      const pd = cleanStorePremiumDiscount(body.premiumDiscount);
+      if (pd !== undefined) updateData.premiumDiscount = pd;
+    }
     if (fulfillmentMode !== undefined) {
       if (fulfillmentMode !== 'seller' && fulfillmentMode !== 'platform') {
         throw new BadRequestException("fulfillmentMode must be 'seller' or 'platform'");

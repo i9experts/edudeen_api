@@ -14,6 +14,8 @@ export interface ActiveCampaignForStore {
   endDate:       Date;
   /** Who bears the cost of this campaign's discount — see Campaign.sponsorType. */
   sponsorType:   'seller' | 'platform';
+  /** true when the campaign has not started yet and is only visible/buyable because the buyer is Premium (early access). */
+  earlyAccess?:  boolean;
 }
 
 function round(n: number) {

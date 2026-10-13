@@ -59,6 +59,14 @@ export class Coupon {
 
   @Prop({ type: Boolean, default: false })
   isDelete: boolean;
+
+  // Personal coupon: only this buyer may redeem it (Edudeen Premium monthly coupon). null = anyone.
+  @Prop({ type: String, default: null })
+  ownerUserId: string | null;
+
+  // true = the discount is funded by the platform; the seller is credited the full price.
+  @Prop({ type: Boolean, default: false })
+  platformFunded: boolean;
 }
 
 export const CouponSchema = SchemaFactory.createForClass(Coupon);

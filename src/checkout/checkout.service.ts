@@ -4,6 +4,7 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { isValidObjectId } from 'mongoose';
 import { licenseFromVariant } from 'src/products/product-input.util';
@@ -19,6 +20,8 @@ import { DiscountsService } from 'src/discounts/discounts.service';
 import { configuredHostedProviderIds } from 'src/payment/providers/hosted-providers.registry';
 import { DEFAULT_PK_ZONES, missingDefaultZones } from './default-pk-zones';
 import { sanitizeGiftOptions } from './gift-options.util';
+import { PremiumEntitlementsService } from 'src/premium/premium-entitlements.service';
+import { applyPremiumToLine, premiumPercentFor } from 'src/premium/premium.util';
 
 // Shipping zones are a Pakistan-domestic geography feature (predates the
 // PKR/USD split entirely) — ShippingZone.shippingPrice has no currency
@@ -42,6 +45,8 @@ export class CheckoutService {
     private readonly exchangeRateService: ExchangeRateService,
     private readonly giftCardsService: GiftCardsService,
     private readonly discountsService: DiscountsService,
+    // Edudeen Premium (member price + campaign early access). Optional: absent = everything behaves as before.
+    @Optional() private readonly premium?: PremiumEntitlementsService,
   ) {}
 
   private round(n: number) {
@@ -244,7 +249,7 @@ export class CheckoutService {
     const prefetchStoreIds = [...new Set([...pricedProducts.map((p: any) => String(p.storeId)), String(storeId)])];
     const sellerIds = [...new Set(pricedProducts.map((p: any) => p.sellerId).filter(Boolean))];
     const [storeDocs, benefitsByStore, sellers] = await Promise.all([
-      storeModel.find({ _id: { $in: prefetchStoreIds } }).select('status isDelete codEnabled directPayment name slug').lean(),
+      storeModel.find({ _id: { $in: prefetchStoreIds } }).select('status isDelete codEnabled directPayment name slug premiumDiscount').lean(),
       this.subscriptionBenefits.getActiveBenefitsBatch(userId, prefetchStoreIds),
       sellerIds.length
         ? this.databaseService.repositories.sellerModel.find({ _id: { $in: sellerIds } }).select('name isVerified').lean()
@@ -413,6 +418,9 @@ export class CheckoutService {
     // (already subscriber-priced) subtotal wins (see pickBestCampaign).
     // Applied on top of subscriber pricing, same as a "sale on top of your
     // membership price" would read to a buyer — never on the raw list price.
+    // Premium member: campaigns open earlyAccessHours before their start date (re-validated here, server-side).
+    const premiumEnt = this.premium ? await this.premium.getEntitlements(userId) : null;
+    const isPremiumBuyer = !!premiumEnt?.isPremium;
     let campaignSavingsUSD = 0;
     const appliedCampaigns: Array<{
       campaignId: string;
@@ -423,7 +431,10 @@ export class CheckoutService {
     }> = [];
     const cartStoreIds = [...new Set(checkoutItems.map((i) => i.storeId))];
     const activeCampaignsByStore =
-      await this.marketingService.getActiveCampaignsForStores(cartStoreIds);
+      await this.marketingService.getActiveCampaignsForStores(
+        cartStoreIds,
+        isPremiumBuyer ? { earlyAccessHours: premiumEnt!.earlyAccessHours } : {},
+      );
 
     // Per-product participation (campaign-eligibility.util.ts): each campaign is valued on ITS eligible lines only and
     // the discount is spread over those lines; other lines keep full price and stay open to the seller's own sale.
@@ -531,6 +542,22 @@ export class CheckoutService {
       if (best) {
         this.distributeAutoDiscount(best.items, best.amount, String(best.discount._id));
         autoDiscountSavingsUSD = this.round(autoDiscountSavingsUSD + best.amount);
+      }
+    }
+
+    // Pass 3.6: Edudeen Premium member price - a SELLER-FUNDED discount the seller chose (Store.premiumDiscount /
+    // Product.premiumDiscountPercent). Same "best single seller-side discount per line" rule as the passes above:
+    // lines on a campaign or an automatic discount are skipped, a subscriber price is replaced only when the member
+    // price is lower (never stacked). Buyers who are not active members never reach this loop.
+    let premiumSavingsUSD = 0;
+    if (isPremiumBuyer) {
+      for (const item of checkoutItems) {
+        const pct = premiumPercentFor(productById.get(item.productId), storeDocById.get(String(item.storeId)));
+        const r = applyPremiumToLine(item, pct);
+        if (r.discount > 0) {
+          premiumSavingsUSD = this.round(premiumSavingsUSD + r.discount);
+          subscriberSavingsUSD = this.round(Math.max(0, subscriberSavingsUSD - r.replacedSubscriberDiscount));
+        }
       }
     }
 
@@ -678,6 +705,8 @@ export class CheckoutService {
       subscriberSavingsUSD: this.round(subscriberSavingsUSD),
       campaignDiscountTotalUSD: campaignSavingsUSD,
       autoDiscountTotalUSD: autoDiscountSavingsUSD,
+      isPremiumBuyer,
+      premiumDiscountTotalUSD: premiumSavingsUSD,
       totalAmount,
       status: 'pending',
       attributionSource,
@@ -772,6 +801,7 @@ export class CheckoutService {
           subscriberSavingsUSD: this.round(subscriberSavingsUSD),
           campaignDiscountUSD: campaignSavingsUSD,
           autoDiscountUSD: autoDiscountSavingsUSD,
+          ...(isPremiumBuyer ? { premiumDiscountUSD: premiumSavingsUSD } : {}),
           ...this.splitSubtotalsByType(checkoutItems),
         },
         subscriptionSavingsHints,
@@ -1075,6 +1105,16 @@ export class CheckoutService {
     if (coupon.usageLimit != null && coupon.usageCount >= coupon.usageLimit) {
       throw new BadRequestException('This coupon has reached its usage limit');
     }
+    // A personal (Premium member) coupon belongs to one buyer and needs an active membership; anyone else
+    // gets the same message as an unknown code.
+    if (coupon.ownerUserId) {
+      if (coupon.ownerUserId !== userId) {
+        throw new BadRequestException('This coupon code is invalid or not applicable to items in your cart');
+      }
+      if (coupon.platformFunded && this.premium && !(await this.premium.getEntitlements(userId)).isPremium) {
+        throw new BadRequestException('This coupon is for active Edudeen Premium members');
+      }
+    }
 
     // Revert any previously-applied coupon first so re-applying (or
     // switching codes) always computes from a clean, undiscounted baseline.
@@ -1180,6 +1220,12 @@ export class CheckoutService {
       );
     } else {
       this.distributeCouponDiscount(eligibleItems, totalDiscount);
+    }
+
+    // Platform-funded coupon (Premium monthly coupon): the platform, not the seller, bears this discount - tag the
+    // lines so PaymentService credits the seller the full price (same path as platform-sponsored campaigns).
+    if (coupon.platformFunded) {
+      for (const i of eligibleItems) if ((i.couponDiscountUSD ?? 0) > 0) i.couponSponsorType = 'platform';
     }
 
     const newSubtotal = this.convertedSubtotal(items, checkout.currency, checkout.fxSnapshots as any);
@@ -1566,6 +1612,7 @@ export class CheckoutService {
         item.priceBeforeCoupon = null;
         item.totalPriceBeforeCoupon = null;
         item.couponDiscountUSD = 0;
+        item.couponSponsorType = null;
       }
     }
   }

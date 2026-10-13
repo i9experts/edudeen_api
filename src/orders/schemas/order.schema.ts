@@ -92,6 +92,17 @@ export class OrderItem {
   @Prop({ type: String, enum: ['seller', 'platform'], default: null })
   campaignSponsorType: 'seller' | 'platform' | null;
 
+  // Edudeen Premium member price given on this line (seller-funded) - see CheckoutItem.premiumDiscountUSD.
+  @Prop({ type: Number, default: 0 })
+  premiumDiscountUSD: number;
+
+  @Prop({ type: Number, default: 0 })
+  premiumDiscountPercent: number;
+
+  // 'platform' = couponDiscountUSD on this line is platform-funded (reimbursed to the seller).
+  @Prop({ type: String, enum: ['platform'], default: null })
+  couponSponsorType: 'platform' | null;
+
   // cancel/refund item-level pe
   @Prop({
     type: String,
@@ -435,6 +446,14 @@ export class Order {
   // order is sponsorType: 'platform'.
   @Prop({ default: 0 })
   platformSponsoredDiscountTotal: number;
+
+  // Edudeen Premium analytics: the buyer was an active Premium member when this order was placed, and the
+  // seller-funded member-price discount given across it (0 when none).
+  @Prop({ type: Boolean, default: false })
+  isPremiumOrder: boolean;
+
+  @Prop({ type: Number, default: 0 })
+  premiumDiscountTotal: number;
 
   // Copied from Checkout at placeOrder — which promotional banner (if any)
   // the buyer clicked through before this order, for promotion analytics'

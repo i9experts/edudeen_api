@@ -9,6 +9,8 @@ import { DatabaseService } from 'src/database/databaseservice';
 import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import { SUPPORTED_CURRENCIES } from 'src/exchange-rate/schemas/exchange-rate.schema';
 import { AddToCartDto, MAX_CART_LINE_QUANTITY } from './dto/add-to-cart.dto';
+import { PremiumEntitlementsService } from 'src/premium/premium-entitlements.service';
+import { premiumPercentFor, premiumUnitPrice } from 'src/premium/premium.util';
 
 /** Per-user cap so a wishlist can't grow without bound. */
 const MAX_WISHLIST_ITEMS = 200;
@@ -19,7 +21,11 @@ const MAX_UNIFIED_CART_STORES = 100;
 @Injectable()
 export class CartService {
   // ExchangeRateService is optional so unit tests can build the service with only the database.
-  constructor(private readonly databaseService: DatabaseService, @Optional() private readonly exchangeRateService?: ExchangeRateService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    @Optional() private readonly exchangeRateService?: ExchangeRateService,
+    @Optional() private readonly premium?: PremiumEntitlementsService,
+  ) {}
 
   async addToCart(userId: string, requestedStoreId: string | undefined, dto: AddToCartDto) {
     try {
@@ -217,7 +223,7 @@ export class CartService {
       const products = productIds.length
         ? await this.databaseService.repositories.productModel
             .find({ _id: { $in: productIds } })
-            .select('images sellerId status isDelete')
+            .select('images sellerId status isDelete storeId premiumDiscountPercent')
             .lean()
         : [];
       const productById = new Map(
@@ -301,10 +307,13 @@ export class CartService {
       // The store's running sale (admin campaign) — the same rule checkout applies (best single
       // campaign on the subtotal), so the cart shows the discount instead of revealing it only
       // at the last checkout step. Coupons / gift cards / membership prices are applied at checkout.
-      const now = new Date();
+      const realNow = new Date();
+      // Premium early access: an active member's cart already prices a campaign that starts within their earlyAccessHours.
+      const premiumEnt = this.premium ? await this.premium.getEntitlements(userId) : null;
+      const now = premiumEnt?.isPremium && premiumEnt.earlyAccessHours > 0 ? new Date(realNow.getTime() + premiumEnt.earlyAccessHours * 3_600_000) : realNow;
       const rawCampaigns = await this.databaseService.repositories.campaignModel
         .find({
-          isDelete: false, status: 'active', startDate: { $lte: now }, endDate: { $gte: now },
+          isDelete: false, status: 'active', startDate: { $lte: now }, endDate: { $gte: realNow },
           $or: [{ sponsorType: 'platform' }, { participatingStoreIds: { $in: [storeId] } }],
         })
         .select('name endDate discountType discountValue currency sponsorType')
@@ -322,10 +331,21 @@ export class CartService {
         this.exchangeRateService ? (amount, from, to) => this.exchangeRateService!.convert(amount, from, to) : undefined,
         (campaignId) => items.filter((i) => inCampaign(campaignId, i.productId)).reduce((s, i) => s + i.itemTotal, 0),
       );
-      const itemsWithFlag = items.map((i) => ({
-        ...i,
-        onCampaign: !!campaignDiscount && inCampaign(campaignDiscount.campaignId, i.productId),
-      }));
+      // Edudeen Premium: the seller's chosen member discount. Everyone gets the teaser `premiumPercent`; only an active
+      // member gets `premiumUnitPrice` / `premiumDiscountPercent` (display only - checkout is the source of truth and
+      // takes the best single seller-side discount per line, so lines on a campaign sale show no member price).
+      const premiumStores = this.premium ? await this.premium.loadStoreSettings([storeId]) : new Map<string, any>();
+      let premiumSavings = 0;
+      const itemsWithFlag = items.map((i) => {
+        const onCampaign = !!campaignDiscount && inCampaign(campaignDiscount.campaignId, i.productId);
+        const pct = this.premium ? premiumPercentFor(productById.get(i.productId) as any, premiumStores.get(String(storeId))) : 0;
+        const base = { ...i, onCampaign };
+        if (!pct) return base;
+        if (!premiumEnt?.isPremium || onCampaign) return { ...base, premiumPercent: pct };
+        const unit = premiumUnitPrice(i.unitPrice, pct);
+        premiumSavings += (i.unitPrice - unit) * i.quantity;
+        return { ...base, premiumPercent: pct, premiumDiscountPercent: pct, premiumUnitPrice: unit, premiumItemTotal: Math.round(unit * i.quantity * 100) / 100 };
+      });
 
       // Final response
       return {
@@ -339,6 +359,7 @@ export class CartService {
           currency: cartCurrency,
           campaignDiscount,
           totalAfterDiscount: Math.round((totalPrice - (campaignDiscount?.amount ?? 0)) * 100) / 100,
+          ...(premiumEnt?.isPremium ? { isPremium: true, premiumSavings: Math.round(premiumSavings * 100) / 100 } : {}),
         },
       };
     } catch (error: any) {
