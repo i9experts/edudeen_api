@@ -6,6 +6,7 @@ import { DatabaseService } from '../database/databaseservice';
 import { ProductsService } from '../products/products.service';
 import { sanitizeDigitalForPublicView } from '../products/product-public-view.util';
 import { CURRICULA } from '../products/schemas/product.schema';
+import { getDescendantIds } from '../categories/category-tree.util';
 import { CuratedCollection, CuratedCollectionDocument } from './schemas/curated-collection.schema';
 
 export const MAX_PICKED = 60;
@@ -86,7 +87,10 @@ export class CuratedCollectionsService {
       const filter: any = { status: 'active', isDelete: false, _id: { $nin: products.map((p: any) => p._id) } };
       if (c.rule.educationLevel) filter.educationLevel = c.rule.educationLevel;
       if (c.rule.curriculum) filter.curricula = c.rule.curriculum;
-      if (c.rule.categoryId) filter.$or = [{ categoryId: c.rule.categoryId }, { subCategoryId: c.rule.categoryId }];
+      if (c.rule.categoryId) {
+        const catIds = isValidObjectId(c.rule.categoryId) ? await getDescendantIds(this.databaseService.repositories.categoryModel, String(c.rule.categoryId)) : [String(c.rule.categoryId)];
+        filter.$or = [{ categoryId: c.rule.categoryId }, { subCategoryId: { $in: catIds } }];
+      }
       if (c.rule.tags?.length) filter.tags = { $in: c.rule.tags };
       const ids = (await this.databaseService.repositories.productModel.find(filter).sort({ purchaseCount: -1, averageRating: -1 }).limit(limit - products.length).select('_id').lean()).map((p: any) => String(p._id));
       products = [...products, ...(await this.productsService.getShapedProductsByIds(ids, viewerId ?? null))];

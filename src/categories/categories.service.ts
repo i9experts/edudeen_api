@@ -15,6 +15,13 @@ import { UpdateCategoryDto } from './dto/update-category.dto';
 import { ReorderCategoriesDto } from './dto/reorder-categories.dto';
 import { generateUniqueSlug } from 'src/common/slug.util';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
+import {
+  MAX_CATEGORY_DEPTH,
+  getAncestorChain,
+  getDescendantIds,
+  invalidateCategoryTreeCache,
+  nestCategories,
+} from './category-tree.util';
 
 export interface AdminAuditMeta { adminId: string; ip?: string; userAgent?: string }
 
@@ -44,7 +51,7 @@ export class CategoriesService {
   // ── Admin: update / reorder / soft-delete ─────────────────────────────
 
   /** Admin-only edit. Only the fields below can change — slug stays fixed
-   *  (it's a public URL) and parentId can't be moved here. */
+   *  (it's a public URL) and parentId can't be moved here. Works at any depth. */
   async updateCategory(id: string, dto: UpdateCategoryDto, meta: AdminAuditMeta) {
     if (!isValidObjectId(id)) throw new BadRequestException('Invalid category id');
     const categoryModel = this.databaseService.repositories.categoryModel;
@@ -72,7 +79,7 @@ export class CategoriesService {
     return { success: true, message: 'Category updated successfully', data: updated };
   }
 
-  /** Bulk display-order update (admin drag-and-drop). */
+  /** Bulk display-order update (admin drag-and-drop / up-down). Works for siblings at any depth. */
   async reorderCategories(dto: ReorderCategoriesDto, meta: AdminAuditMeta) {
     const categoryModel = this.databaseService.repositories.categoryModel;
     const ids = dto.items.map((i) => i.id);
@@ -87,22 +94,26 @@ export class CategoriesService {
     return { success: true, message: 'Categories reordered successfully', data: { updated: ids.length } };
   }
 
-  /** Soft delete. Refuses while the category still has subcategories or is
-   *  referenced by products/stores; `reassignTo` (a same-level category)
-   *  moves those references first instead. */
-  async deleteCategory(id: string, reassignTo: string | undefined, meta: AdminAuditMeta) {
+  /** Soft delete. Refuses while the category still has subcategories (at any depth) unless
+   *  `deleteChildren` is set, and while products/stores use it (or anything below it) unless
+   *  `reassignTo` names a category to move them to first. */
+  async deleteCategory(id: string, reassignTo: string | undefined, meta: AdminAuditMeta, deleteChildren = false) {
     if (!isValidObjectId(id)) throw new BadRequestException('Invalid category id');
     const repos = this.databaseService.repositories;
     const category = await repos.categoryModel.findOne({ _id: id, isDelete: false });
     if (!category) throw new NotFoundException('Category not found');
 
-    const children = await repos.categoryModel.countDocuments({ parentId: id, isDelete: false });
-    if (children > 0) {
-      throw new ConflictException(`Category has ${children} subcategor${children === 1 ? 'y' : 'ies'} — delete or move them first`);
+    invalidateCategoryTreeCache();
+    const subtree = await getDescendantIds(repos.categoryModel, id); // includes id itself
+    const descendantCount = subtree.length - 1;
+    if (descendantCount > 0 && !deleteChildren) {
+      throw new ConflictException(
+        `Category has ${descendantCount} subcategor${descendantCount === 1 ? 'y' : 'ies'} below it — delete or move them first, or confirm deleting them together`,
+      );
     }
 
     const isRoot = !category.parentId;
-    const productFilter = isRoot ? { categoryId: id } : { subCategoryId: id };
+    const productFilter = isRoot ? { categoryId: id } : { subCategoryId: { $in: subtree } };
     const storeFilter = { categoryId: id, isDelete: false };
     const [productCount, storeCount] = await Promise.all([
       repos.productModel.countDocuments({ ...productFilter, isDelete: false }),
@@ -119,45 +130,57 @@ export class CategoriesService {
       if (!isValidObjectId(reassignTo) || reassignTo === id) throw new BadRequestException('Invalid reassignTo category');
       const target = await repos.categoryModel.findOne({ _id: reassignTo, isDelete: false, status: 'active' });
       if (!target) throw new BadRequestException('reassignTo category not found or inactive');
-      // Same level, and a subcategory may only move within its own root so a
-      // product's subCategoryId always stays a child of its categoryId.
-      if ((target.parentId ?? null) !== (category.parentId ?? null)) {
-        throw new BadRequestException(
-          isRoot ? 'reassignTo must be another main category' : 'reassignTo must be a subcategory of the same main category',
-        );
+
+      let productSet: Record<string, any>;
+      if (isRoot) {
+        // A main category's products can only move to another main category.
+        if (target.parentId) throw new BadRequestException('reassignTo must be another main category');
+        productSet = { categoryId: reassignTo, subCategoryId: null };
+      } else {
+        // Inside one main category: the target may be any node of the same root that is not being deleted
+        // (a sibling, the parent, or the main category itself = "no subcategory"), so a product's
+        // subCategoryId always stays a descendant of its categoryId.
+        if (subtree.includes(reassignTo)) throw new BadRequestException('reassignTo cannot be inside the category being deleted');
+        const [myChain, targetChain] = await Promise.all([
+          getAncestorChain(repos.categoryModel, id),
+          getAncestorChain(repos.categoryModel, reassignTo),
+        ]);
+        const myRoot = myChain[myChain.length - 1] ?? String(category.parentId);
+        const targetRoot = targetChain[targetChain.length - 1] ?? String(target.parentId ?? reassignTo);
+        if (myRoot !== targetRoot) throw new BadRequestException('reassignTo must be in the same main category');
+        productSet = { subCategoryId: target.parentId ? reassignTo : null };
       }
-      const field = isRoot ? 'categoryId' : 'subCategoryId';
-      const p = await repos.productModel.updateMany({ ...productFilter, isDelete: false }, { $set: { [field]: reassignTo } });
+      const p = await repos.productModel.updateMany({ ...productFilter, isDelete: false }, { $set: productSet });
       const st = isRoot
         ? await repos.storeModel.updateMany(storeFilter, { $set: { categoryId: reassignTo } })
         : { modifiedCount: 0 };
       reassigned = { products: p.modifiedCount, stores: st.modifiedCount };
     }
 
-    await repos.categoryModel.updateOne({ _id: id }, { $set: { isDelete: true, status: 'inactive' } });
-    this.audit('category_deleted', `Deleted category "${category.name}"`, meta, id, { reassignTo: reassignTo ?? null, reassigned });
-    return { success: true, message: 'Category deleted successfully', data: { reassigned } };
+    if (descendantCount > 0) {
+      await repos.categoryModel.updateMany({ _id: { $in: subtree } }, { $set: { isDelete: true, status: 'inactive' } });
+    } else {
+      await repos.categoryModel.updateOne({ _id: id }, { $set: { isDelete: true, status: 'inactive' } });
+    }
+    invalidateCategoryTreeCache();
+    this.audit('category_deleted', `Deleted category "${category.name}"${descendantCount ? ` and ${descendantCount} subcategories` : ''}`, meta, id, {
+      reassignTo: reassignTo ?? null, reassigned, deletedChildren: descendantCount,
+    });
+    return { success: true, message: 'Category deleted successfully', data: { reassigned, deletedChildren: descendantCount } };
   }
 
   /** Admin view of the whole taxonomy: every non-deleted category, active or
-   *  inactive (so a deactivated one can be found and re-enabled), nested two
-   *  levels and ordered by sortOrder — the same order the public tree uses. */
+   *  inactive (so a deactivated one can be found and re-enabled), nested to any
+   *  depth and ordered by sortOrder — the same order the public tree uses. */
   async getAdminCategoryTree() {
     const categoryModel = this.databaseService.repositories.categoryModel;
-    const [all, countMap] = await Promise.all([
+    const [all, counts] = await Promise.all([
       categoryModel.find({ isDelete: false }).sort({ sortOrder: 1, _id: 1 }).lean(),
-      this.getActiveProductCountsByCategory(),
+      this.getActiveProductCounts(),
     ]);
-    const nodes = new Map<string, any>();
-    for (const c of all as any[]) nodes.set(String(c._id), { ...c, children: [] });
-    const roots: any[] = [];
-    for (const node of nodes.values()) {
-      const parent = node.parentId ? nodes.get(String(node.parentId)) : null;
-      if (parent) parent.children.push(node);
-      else if (!node.parentId) roots.push(node);
-      // A child whose parent was deleted is orphaned — not shown, matching the public tree.
-    }
-    this.attachProductCounts(roots, countMap);
+    // A child whose parent was deleted is orphaned — not shown, matching the public tree.
+    const roots = nestCategories(all as any[]);
+    this.attachProductCounts(roots, counts, true);
     return { success: true, message: 'Admin category tree fetched successfully', data: roots };
   }
 
@@ -201,9 +224,9 @@ export class CategoriesService {
       // 🔒 Permission model:
       // - Main categories (no parentId) → admin only. This is the curated
       //   top-level taxonomy sellers pick from when creating a store.
-      // - Subcategories (parentId set) → admin OR seller, optionally, and
-      //   only nested one level under an existing main category (no
-      //   sub-of-a-sub — keeps the tree exactly 2 levels deep).
+      // - Subcategories (parentId set) → admin OR seller, nested under any
+      //   active category as long as the whole chain stays within
+      //   MAX_CATEGORY_DEPTH levels (main > sub > sub-sub > sub-sub-sub).
       let parent: any = null;
       if (!parentId) {
         if (role !== 'admin') {
@@ -220,15 +243,22 @@ export class CategoriesService {
         if (!parent) {
           throw new BadRequestException('Parent category not found');
         }
-        if (parent.parentId) {
+        // Depth of the parent = number of nodes from it up to its root.
+        let depth = 1;
+        let cursor: any = parent;
+        while (cursor?.parentId && depth <= MAX_CATEGORY_DEPTH) {
+          cursor = await categoryModel.findOne({ _id: cursor.parentId, isDelete: false });
+          depth++;
+        }
+        if (depth + 1 > MAX_CATEGORY_DEPTH) {
           throw new BadRequestException(
-            'Categories can only be nested one level deep — pick a main category as the parent',
+            `Categories can be nested at most ${MAX_CATEGORY_DEPTH} levels deep — "${parent.name}" is already at level ${depth}, so it cannot have subcategories`,
           );
         }
       }
 
       // check duplicate category — scoped to the same parent, so the same
-      // name can exist under different main categories without colliding.
+      // name can exist under different parents without colliding.
       const existingCategory = await categoryModel.findOne({
         name,
         parentId: parentId ?? null,
@@ -254,6 +284,7 @@ export class CategoriesService {
         createdBy: userId,
         createdByRole: role,
       });
+      invalidateCategoryTreeCache();
 
       return {
         success: true,
@@ -274,171 +305,70 @@ export class CategoriesService {
     }
   }
 
-  // async getChildCategories(parentId: string) {
-
-  //   const categoryModel = this.databaseService.repositories.categoryModel;
-
-  //   const children = await categoryModel.find({ parentId });
-
-  //  let ids: string[] = [];
-
-  // for (let child of children) {
-
-  //   ids.push(child._id.toString());
-
-  //   const subChildren = await this.getChildCategories(child._id.toString());
-
-  //   ids = ids.concat(subChildren);
-
-  // }
-
-  //   return ids;
-  // }
-
-  // async getCategoryTree(categoryId: string) {
-
-  //   const categoryModel = this.databaseService.repositories.categoryModel;
-
-  //   // parent category
-  //   const parentCategory = await categoryModel.findById(categoryId);
-
-  //   if (!parentCategory) {
-  //     throw new UnauthorizedException('Category not found');
-  //   }
-
-  //   // saare child ids
-  //   const childIds = await this.getChildCategories(categoryId);
-
-  //   // parent + child
-  //   const allIds = [categoryId, ...childIds];
-
-  //   // saari categories ka data
-  //   const categories = await categoryModel.find({
-  //     _id: { $in: allIds }
-  //   });
-
-  //   return {
-  //     message: "Category tree fetched successfully",
-  //     data: categories
-  //   };
-  // }
-
+  /** Public tree: every ACTIVE category nested to any depth. One query (not one per node), so it stays fast
+   *  however many categories exist. A node under an inactive/deleted parent is hidden with it. */
   async getCategoryTreeNested(categoryId?: string) {
     const categoryModel = this.databaseService.repositories.categoryModel;
 
-    const countMap = await this.getActiveProductCountsByCategory();
-
-    // 🔹 CASE 1: agar id di hui hai
-    if (categoryId) {
-      // A non-ObjectId string (e.g. a category name leaking in from stale
-      // data) would otherwise throw an unhandled Mongoose CastError here,
-      // which Nest surfaces as an opaque 500 — fail with a clear 400 instead.
-      if (!isValidObjectId(categoryId)) {
-        throw new BadRequestException('Invalid category id');
-      }
-
-      const category = await categoryModel.findOne({
-        _id: categoryId,
-        status: 'active',
-        isDelete: false,
-      });
-
-      if (!category) {
-        throw new NotFoundException('Category not found');
-      }
-
-      const children = await this.getChildrenRecursive(categoryId);
-      const node = { ...category.toObject(), children };
-      await this.ensureSlug(node);
-      this.attachProductCounts([node], countMap);
-
-      return {
-        success: true,
-        message: 'Category tree fetched successfully',
-        data: node,
-      };
+    // A non-ObjectId string (e.g. a category name leaking in from stale data) would otherwise throw an
+    // unhandled Mongoose CastError, which Nest surfaces as an opaque 500 — fail with a clear 400 instead.
+    if (categoryId && !isValidObjectId(categoryId)) {
+      throw new BadRequestException('Invalid category id');
     }
 
-    // 🔹 CASE 2: agar id NA ho → sab root categories lao
-    const rootCategories = await categoryModel
-      .find({
-        parentId: null,
-        status: 'active',
-        isDelete: false,
-      })
-      .sort({ sortOrder: 1, _id: 1 })
-      .lean();
-
-    const result: any[] = [];
-
-    for (const cat of rootCategories) {
-      await this.ensureSlug(cat);
-      const children = await this.getChildrenRecursive(cat._id.toString());
-
-      result.push({
-        ...cat,
-        children,
-      });
-    }
-
-    this.attachProductCounts(result, countMap);
-
-    return {
-      success: true,
-      message: 'All category trees fetched successfully',
-      data: result,
-    };
-  }
-
-  /** One aggregation over all buyer-visible products, grouped by category — the
-   *  building block `attachProductCounts` uses instead of a per-node query. */
-  private async getActiveProductCountsByCategory(): Promise<Map<string, number>> {
-    const productModel = this.databaseService.repositories.productModel;
-    const rows = await productModel.aggregate([
-      { $match: { status: 'active', isDelete: false } },
-      { $group: { _id: '$categoryId', count: { $sum: 1 } } },
+    const [rows, counts] = await Promise.all([
+      categoryModel.find({ status: 'active', isDelete: false }).sort({ sortOrder: 1, _id: 1 }).lean(),
+      this.getActiveProductCounts(),
     ]);
-    return new Map(rows.map((r: { _id: string; count: number }) => [r._id, r.count]));
+    const roots = nestCategories(rows as any[]);
+
+    // Backfill a permanent slug for any pre-migration category found without one.
+    const walk = (nodes: any[], fn: (n: any) => void) => { for (const n of nodes) { fn(n); walk(n.children, fn); } };
+    const missingSlug: any[] = [];
+    walk(roots, (n) => { if (!n.slug) missingSlug.push(n); });
+    for (const n of missingSlug) await this.ensureSlug(n);
+
+    this.attachProductCounts(roots, counts, true);
+
+    if (categoryId) {
+      let found: any = null;
+      walk(roots, (n) => { if (!found && String(n._id) === categoryId) found = n; });
+      if (!found) throw new NotFoundException('Category not found');
+      return { success: true, message: 'Category tree fetched successfully', data: found };
+    }
+
+    return { success: true, message: 'All category trees fetched successfully', data: roots };
   }
 
-  /** Mutates each node (and its nested `children`) in place, setting
-   *  `productCount` to that category's own direct products plus every
-   *  descendant's — so a parent category's chip reflects its whole subtree. */
-  private attachProductCounts(nodes: any[], countMap: Map<string, number>): number {
+  /** One aggregation pass over all buyer-visible products. `root` counts per main category (every product has one);
+   *  `sub` counts per exact subCategoryId (any depth). */
+  private async getActiveProductCounts(): Promise<{ root: Map<string, number>; sub: Map<string, number> }> {
+    const productModel = this.databaseService.repositories.productModel;
+    const [rootRows, subRows] = await Promise.all([
+      productModel.aggregate([
+        { $match: { status: 'active', isDelete: false } },
+        { $group: { _id: '$categoryId', count: { $sum: 1 } } },
+      ]),
+      productModel.aggregate([
+        { $match: { status: 'active', isDelete: false, subCategoryId: { $ne: null } } },
+        { $group: { _id: '$subCategoryId', count: { $sum: 1 } } },
+      ]),
+    ]);
+    const toMap = (rows: { _id: string; count: number }[]) => new Map<string, number>((rows ?? []).map((r) => [String(r._id), r.count]));
+    return { root: toMap(rootRows), sub: toMap(subRows) };
+  }
+
+  /** Mutates each node (and its nested `children`) in place, setting `productCount`: for a main category every
+   *  product filed under it; for a subcategory its own products plus every descendant's. */
+  private attachProductCounts(nodes: any[], counts: { root: Map<string, number>; sub: Map<string, number> }, isRoot = false): number {
     let total = 0;
     for (const node of nodes) {
-      const ownCount = countMap.get(String(node._id)) ?? 0;
-      const childrenCount = node.children?.length
-        ? this.attachProductCounts(node.children, countMap)
-        : 0;
-      node.productCount = ownCount + childrenCount;
+      const id = String(node._id);
+      const childrenCount = node.children?.length ? this.attachProductCounts(node.children, counts, false) : 0;
+      node.productCount = isRoot ? (counts.root.get(id) ?? 0) : (counts.sub.get(id) ?? 0) + childrenCount;
       total += node.productCount;
     }
     return total;
-  }
-  private async getChildrenRecursive(parentId: string): Promise<any[]> {
-    const categoryModel = this.databaseService.repositories.categoryModel;
-
-    const children = await categoryModel.find({
-      parentId,
-      status: 'active',
-      isDelete: false,
-    }).sort({ sortOrder: 1, _id: 1 });
-
-    const result: any[] = [];
-
-    for (const child of children) {
-      const childObj = child.toObject();
-      await this.ensureSlug(childObj);
-      const subChildren = await this.getChildrenRecursive(childObj._id.toString());
-
-      result.push({
-        ...childObj,
-        children: subChildren, // nested inside each child
-      });
-    }
-
-    return result;
   }
 
   /** Lazily backfills a permanent, persisted slug for any pre-migration

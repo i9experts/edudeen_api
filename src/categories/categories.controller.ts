@@ -68,7 +68,7 @@ export class CategoriesController {
   @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @Delete('category/:id')
-  async remove(@Req() req: AdminRequest, @Param('id') id: string, @Query('reassignTo') reassignTo?: string) {
-    return this.categoriesService.deleteCategory(id, reassignTo, auditMeta(req));
+  async remove(@Req() req: AdminRequest, @Param('id') id: string, @Query('reassignTo') reassignTo?: string, @Query('deleteChildren') deleteChildren?: string) {
+    return this.categoriesService.deleteCategory(id, reassignTo, auditMeta(req), deleteChildren === 'true' || deleteChildren === '1');
   }
 }

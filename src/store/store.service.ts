@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { isValidObjectId } from 'mongoose';
+import { getDescendantIds } from '../categories/category-tree.util';
 import { sanitizeDigitalForPublicView, clampInt, queryString } from 'src/products/product-public-view.util';
 import { assertSafePublicJson, escapeRegex, searchTerm } from 'src/common/query-safety.util';
 import {
@@ -1371,7 +1372,12 @@ export class StoreService {
     // since a seller only ever picks from their store's subcategories, but
     // it must be matched against `subCategoryId` here to actually filter
     // anything (a real, previously-silent no-op bug, not a new behavior).
-    if (qCategory && qCategory !== 'all') filter.subCategoryId = qCategory;
+    if (qCategory && qCategory !== 'all') {
+      // A category chip also covers everything filed under its deeper sub-categories.
+      filter.subCategoryId = isValidObjectId(qCategory)
+        ? { $in: await getDescendantIds(this.databaseService.repositories.categoryModel, qCategory) }
+        : qCategory;
+    }
     if (qTag && qTag !== 'all') filter.tags = qTag;
     if (queryString(query.search) && queryString(query.search)!.trim()) {
       filter.name = { $regex: queryString(query.search)!.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };

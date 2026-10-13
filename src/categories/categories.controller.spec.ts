@@ -17,6 +17,6 @@ describe('CategoriesController — admin routes pass the actor to the service', 
     await controller.reorder(req, { items: [] });
     expect(service.reorderCategories).toHaveBeenCalledWith({ items: [] }, meta);
     await controller.remove(req, 'c1', 'c2');
-    expect(service.deleteCategory).toHaveBeenCalledWith('c1', 'c2', meta);
+    expect(service.deleteCategory).toHaveBeenCalledWith('c1', 'c2', meta, false);
   });
 });

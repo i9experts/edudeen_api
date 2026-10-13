@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { isValidObjectId } from 'mongoose';
+import { getAncestorChain } from 'src/categories/category-tree.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { CreateAttributeDefinitionDto } from './dto/create-attribute-definition.dto';
 import { UpdateAttributeDefinitionDto } from './dto/update-attribute-definition.dto';
@@ -20,16 +21,31 @@ export class AttributesService {
     if (!isValidObjectId(categoryId)) {
       throw new BadRequestException('Invalid category id');
     }
-    const definitions = await this.databaseService.repositories.attributeDefinitionModel
-      .find({ categoryId, isDelete: false })
-      .sort({ sortOrder: 1, createdAt: 1 })
-      .lean();
+    const definitions = await this.definitionsWithFallback(categoryId);
 
     return {
       success: true,
       message: 'Attribute definitions fetched successfully',
       data: definitions,
     };
+  }
+
+  /** Attributes defined on this category, else on the nearest ancestor that has any (a deep sub-sub-category
+   *  inherits its parent's fields instead of showing none). */
+  private async definitionsWithFallback(categoryId: string): Promise<any[]> {
+    const model = this.databaseService.repositories.attributeDefinitionModel;
+    const load = async (id: string): Promise<any[]> => {
+      const rows: any[] = await model.find({ categoryId: id, isDelete: false }).lean();
+      return rows.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || +new Date(a.createdAt ?? 0) - +new Date(b.createdAt ?? 0));
+    };
+    const own = await load(categoryId);
+    if (own.length) return own;
+    const chain = await getAncestorChain(this.databaseService.repositories.categoryModel, categoryId);
+    for (const id of chain.slice(1)) {
+      const defs = await load(id);
+      if (defs.length) return defs;
+    }
+    return own;
   }
 
   async createDefinition(
@@ -199,10 +215,7 @@ export class AttributesService {
     // resolve "the product's category" everywhere else.
     const effectiveCategoryId = product.subCategoryId || product.categoryId;
 
-    const definitionModel = this.databaseService.repositories.attributeDefinitionModel;
-    const definitions = await definitionModel
-      .find({ categoryId: effectiveCategoryId, isDelete: false })
-      .lean();
+    const definitions = await this.definitionsWithFallback(String(effectiveCategoryId));
     const definitionMap = new Map(
       definitions.map((d) => [d._id.toString(), d]),
     );

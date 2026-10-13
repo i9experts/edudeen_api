@@ -335,8 +335,8 @@ describe('ProductsService digital config + sub-category', () => {
     ).rejects.toThrow(/must be an object/);
   });
 
-  it("subCategoryId must be an active child of the product's root category", async () => {
-    const good = make(null, { _id: '64f0c0ffee0c0ffee0c0ff01' });
+  it("subCategoryId must be an active descendant of the product's root category", async () => {
+    const good = make(null, { _id: '64f0c0ffee0c0ffee0c0ff01', parentId: 'root1' });
     await expect(
       good.resolveSubCategoryId('root1', '64f0c0ffee0c0ffee0c0ff01'),
     ).resolves.toBe('64f0c0ffee0c0ffee0c0ff01');
@@ -344,7 +344,6 @@ describe('ProductsService digital config + sub-category', () => {
       good.databaseService.repositories.categoryModel.findOne,
     ).toHaveBeenCalledWith({
       _id: '64f0c0ffee0c0ffee0c0ff01',
-      parentId: 'root1',
       status: 'active',
       isDelete: false,
     });
@@ -360,8 +359,47 @@ describe('ProductsService digital config + sub-category', () => {
     ).rejects.toThrow(BadRequestException);
     await expect(bad.resolveSubCategoryId('root1', null)).resolves.toBeNull();
   });
-});
 
+  describe('deep sub-categories', () => {
+    const A = '64f0c0ffee0c0ffee0c0ffa1'; // sub of root
+    const B = '64f0c0ffee0c0ffee0c0ffa2'; // sub-sub
+    const C = '64f0c0ffee0c0ffee0c0ffa3'; // sub-sub-sub
+    const OTHER = '64f0c0ffee0c0ffee0c0ffa4'; // sub of a different root
+    const rows: Record<string, any> = {
+      [A]: { _id: A, parentId: 'root1', status: 'active' },
+      [B]: { _id: B, parentId: A, status: 'active' },
+      [C]: { _id: C, parentId: B, status: 'active' },
+      [OTHER]: { _id: OTHER, parentId: 'root2', status: 'active' },
+    };
+    const makeDeep = (overrides: Record<string, any> = {}) => {
+      const svc: any = Object.create(ProductsService.prototype);
+      const data = { ...rows, ...overrides };
+      svc.databaseService = { repositories: { categoryModel: { findOne: jest.fn(async (q: any) => {
+        const r = data[q._id];
+        return r && r.status === q.status && !r.isDelete ? r : null;
+      }) } } };
+      return svc;
+    };
+
+    it('accepts a sub-sub and sub-sub-sub category that walk up to the chosen root', async () => {
+      const svc = makeDeep();
+      await expect(svc.resolveSubCategoryId('root1', B)).resolves.toBe(B);
+      await expect(svc.resolveSubCategoryId('root1', C)).resolves.toBe(C);
+    });
+
+    it('rejects a node under another root, and a chain broken by an inactive ancestor', async () => {
+      await expect(makeDeep().resolveSubCategoryId('root1', OTHER)).rejects.toThrow(/active subcategory/);
+      await expect(makeDeep({ [A]: { _id: A, parentId: 'root1', status: 'inactive' } }).resolveSubCategoryId('root1', C))
+        .rejects.toThrow(/active subcategory/);
+    });
+
+    it('rejects the main category itself as a subcategory', async () => {
+      const R = '64f0c0ffee0c0ffee0c0ffa9';
+      const svc = makeDeep({ [R]: { _id: R, parentId: null, status: 'active' } });
+      await expect(svc.resolveSubCategoryId(R, R)).rejects.toThrow(/active subcategory/);
+    });
+  });
+});
 describe('ProductsService root category choice', () => {
   const ROOT = '64f0c0ffee0c0ffee0c0ff09';
   const make = (found: any) => {
@@ -393,10 +431,8 @@ describe('ProductsService root category choice', () => {
   });
 
   it('sub-category is validated against the chosen root', async () => {
-    const svc = make({ _id: '64f0c0ffee0c0ffee0c0ff01' });
+    const svc = make({ _id: '64f0c0ffee0c0ffee0c0ff01', parentId: ROOT });
     await svc.resolveSubCategoryId(ROOT, '64f0c0ffee0c0ffee0c0ff01');
-    expect(svc.databaseService.repositories.categoryModel.findOne).toHaveBeenCalledWith(
-      expect.objectContaining({ parentId: ROOT }),
-    );
+    expect(svc.databaseService.repositories.categoryModel.findOne).toHaveBeenCalledTimes(1);
   });
 });

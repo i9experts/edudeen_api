@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { MAX_CATEGORY_DEPTH, getDescendantIds } from 'src/categories/category-tree.util';
 import {
   Injectable,
   UnauthorizedException,
@@ -205,10 +206,17 @@ export class ProductsService {
     if (typeof subCategoryId !== 'string' || !isValidObjectId(subCategoryId)) {
       throw new BadRequestException('subCategoryId is not a valid category id');
     }
-    const sub = await this.databaseService.repositories.categoryModel.findOne({
-      _id: subCategoryId, parentId: rootCategoryId, status: 'active', isDelete: false,
-    });
-    if (!sub) throw new BadRequestException('subCategoryId must be an active subcategory of the selected category');
+    // Any ACTIVE descendant of the chosen root at any depth is allowed: walk parents up from the node and
+    // require every step to be active and the chain to end at `rootCategoryId` (max MAX_CATEGORY_DEPTH hops).
+    const categoryModel = this.databaseService.repositories.categoryModel;
+    let node: any = await categoryModel.findOne({ _id: subCategoryId, status: 'active', isDelete: false });
+    let reachedRoot = false;
+    for (let hops = 0; node && hops < MAX_CATEGORY_DEPTH; hops++) {
+      if (!node.parentId) break;
+      if (String(node.parentId) === String(rootCategoryId)) { reachedRoot = true; break; }
+      node = await categoryModel.findOne({ _id: node.parentId, status: 'active', isDelete: false });
+    }
+    if (!node || !reachedRoot) throw new BadRequestException('subCategoryId must be an active subcategory of the selected category');
     return subCategoryId;
   }
 
@@ -630,8 +638,8 @@ export class ProductsService {
     // A `Product` stores its category as two separate flat fields, not a
     // nested chain: `categoryId` (always the seller's store's main category)
     // and an optional `subCategoryId`. Categories are also capped at exactly
-    // 2 levels (main → sub, enforced in CategoriesService), so there's no
-    // deeper tree to walk here.
+    // up to 4 levels (enforced in CategoriesService); subCategoryId may be any
+    // depth, so a sub-category browse expands to all of its descendants.
     //
     // So: browsing a MAIN category means "any product under it, with or
     // without a subcategory" → filter by `categoryId`. Browsing a
@@ -646,7 +654,8 @@ export class ProductsService {
         });
 
       if (category?.parentId) {
-        query.subCategoryId = parentCategoryId;
+        // A sub-category page also lists everything filed under its deeper sub-categories.
+        query.subCategoryId = { $in: await getDescendantIds(this.databaseService.repositories.categoryModel, String(parentCategoryId)) };
       } else {
         query.categoryId = parentCategoryId;
       }

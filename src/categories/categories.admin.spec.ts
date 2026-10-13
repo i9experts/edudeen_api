@@ -2,6 +2,7 @@
 /* eslint-disable prettier/prettier */
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { CategoriesService } from './categories.service';
+import { invalidateCategoryTreeCache } from './category-tree.util';
 
 const ID = '64f0c0ffee0c0ffee0c0ff01';
 const OTHER = '64f0c0ffee0c0ffee0c0ff02';
@@ -9,10 +10,15 @@ const META = { adminId: 'admin-1', ip: '1.1.1.1', userAgent: 'jest' };
 
 describe('CategoriesService — admin management', () => {
   let categoryModel: any, productModel: any, storeModel: any, activity: any, service: CategoriesService;
+  let rows: any[] = [];
   const cat = (o: any = {}) => ({ _id: ID, name: 'Math', parentId: null, isDelete: false, status: 'active', ...o });
 
   beforeEach(() => {
+    rows = [];
+    invalidateCategoryTreeCache();
     categoryModel = {
+      find: jest.fn(() => ({ lean: jest.fn().mockResolvedValue(rows) })),
+      updateMany: jest.fn().mockResolvedValue({}),
       findOne: jest.fn(), findByIdAndUpdate: jest.fn().mockResolvedValue({ _id: ID }),
       countDocuments: jest.fn().mockResolvedValue(0), updateOne: jest.fn().mockResolvedValue({}), bulkWrite: jest.fn().mockResolvedValue({}),
     };
@@ -83,11 +89,20 @@ describe('CategoriesService — admin management', () => {
       expect(activity.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'category_deleted' }));
     });
 
-    it('refuses while subcategories exist', async () => {
+    it('refuses while subcategories exist (any depth) and deletes nothing', async () => {
       categoryModel.findOne.mockResolvedValue(cat());
-      categoryModel.countDocuments.mockResolvedValue(2);
-      await expect(service.deleteCategory(ID, undefined, META)).rejects.toThrow(/subcategor/);
+      rows = [{ _id: ID, parentId: null }, { _id: OTHER, parentId: ID }, { _id: 'deep', parentId: OTHER }];
+      await expect(service.deleteCategory(ID, undefined, META)).rejects.toThrow(/2 subcategories/);
       expect(categoryModel.updateOne).not.toHaveBeenCalled();
+      expect(categoryModel.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('deleteChildren soft-deletes the whole subtree in one write', async () => {
+      categoryModel.findOne.mockResolvedValue(cat());
+      rows = [{ _id: ID, parentId: null }, { _id: OTHER, parentId: ID }, { _id: 'deep', parentId: OTHER }];
+      const res: any = await service.deleteCategory(ID, undefined, META, true);
+      expect(categoryModel.updateMany).toHaveBeenCalledWith({ _id: { $in: [ID, OTHER, 'deep'] } }, { $set: { isDelete: true, status: 'inactive' } });
+      expect(res.data.deletedChildren).toBe(2);
     });
 
     it('refuses while products still reference it and nothing is deleted', async () => {
@@ -103,13 +118,27 @@ describe('CategoriesService — admin management', () => {
       productModel.countDocuments.mockResolvedValue(3);
       storeModel.countDocuments.mockResolvedValue(1);
       const res: any = await service.deleteCategory(ID, OTHER, META);
-      expect(productModel.updateMany).toHaveBeenCalledWith({ categoryId: ID, isDelete: false }, { $set: { categoryId: OTHER } });
+      expect(productModel.updateMany).toHaveBeenCalledWith({ categoryId: ID, isDelete: false }, { $set: { categoryId: OTHER, subCategoryId: null } });
       expect(storeModel.updateMany).toHaveBeenCalledWith({ categoryId: ID, isDelete: false }, { $set: { categoryId: OTHER } });
       expect(res.data.reassigned).toEqual({ products: 3, stores: 1 });
       expect(categoryModel.updateOne).toHaveBeenCalled();
     });
 
-    it('will not move a subcategory under a different main category, or reassign across levels', async () => {
+    it('a deep subtree moves its products (subCategoryId in subtree) to a node of the same main category', async () => {
+      // root R > ID (to delete) > child ; sibling OTHER under R
+      rows = [{ _id: 'R', parentId: null }, { _id: ID, parentId: 'R' }, { _id: 'child', parentId: ID }, { _id: OTHER, parentId: 'R' }];
+      categoryModel.findOne
+        .mockResolvedValueOnce(cat({ parentId: 'R' }))
+        .mockResolvedValueOnce(cat({ _id: OTHER, parentId: 'R' }));
+      productModel.countDocuments.mockResolvedValue(4);
+      await service.deleteCategory(ID, OTHER, META, true);
+      expect(productModel.updateMany).toHaveBeenCalledWith(
+        { subCategoryId: { $in: [ID, 'child'] }, isDelete: false }, { $set: { subCategoryId: OTHER } },
+      );
+    });
+
+    it('will not move products to a different main category, into the deleted subtree, or across levels', async () => {
+      rows = [{ _id: 'rootA', parentId: null }, { _id: ID, parentId: 'rootA' }, { _id: 'rootB', parentId: null }, { _id: OTHER, parentId: 'rootB' }];
       categoryModel.findOne
         .mockResolvedValueOnce(cat({ parentId: 'rootA' }))
         .mockResolvedValueOnce(cat({ _id: OTHER, parentId: 'rootB' }));
@@ -124,6 +153,57 @@ describe('CategoriesService — admin management', () => {
       productModel.countDocuments.mockResolvedValue(1);
       await expect(service.deleteCategory(ID, ID, META)).rejects.toThrow(BadRequestException);
       await expect(service.deleteCategory(ID, 'bad', META)).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('addCategory depth limit', () => {
+    const adminDb = () => {
+      (service as any).databaseService.repositories.adminModel = { findOne: jest.fn().mockResolvedValue({ _id: 'admin-1' }) };
+      categoryModel.create = jest.fn(async (d: any) => d);
+    };
+    // chain: L1 <- L2 <- L3 <- L4
+    const chain: Record<string, any> = {
+      L1: { _id: 'L1', name: 'L1', parentId: null },
+      L2: { _id: 'L2', name: 'L2', parentId: 'L1' },
+      L3: { _id: 'L3', name: 'L3', parentId: 'L2' },
+      L4: { _id: 'L4', name: 'L4', parentId: 'L3' },
+    };
+    beforeEach(() => {
+      adminDb();
+      categoryModel.findOne.mockImplementation(async (q: any) => (q._id ? chain[q._id] ?? null : null));
+    });
+
+    it('allows nesting under levels 1, 2 and 3', async () => {
+      for (const p of ['L1', 'L2', 'L3']) {
+        await expect(service.addCategory('admin-1', 'admin', { name: 'New', parentId: p } as any)).resolves.toMatchObject({ success: true });
+      }
+    });
+
+    it('refuses a 5th level with a clear message', async () => {
+      await expect(service.addCategory('admin-1', 'admin', { name: 'Too deep', parentId: 'L4' } as any)).rejects.toThrow(/at most 4 levels/);
+      expect(categoryModel.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getCategoryTreeNested', () => {
+    it('returns the full nested tree with one category query and hides subtrees of inactive parents', async () => {
+      const all = [
+        { _id: '64f0c0ffee0c0ffee0c0ff33', name: 'R', slug: 'r', parentId: null, status: 'active' },
+        { _id: '64f0c0ffee0c0ffee0c0ff16', name: 'A', slug: 'a', parentId: '64f0c0ffee0c0ffee0c0ff33', status: 'active' },
+        { _id: '64f0c0ffee0c0ffee0c0ff17', name: 'B', slug: 'b', parentId: '64f0c0ffee0c0ffee0c0ff16', status: 'active' },
+        { _id: '64f0c0ffee0c0ffee0c0ff18', name: 'C', slug: 'c', parentId: '64f0c0ffee0c0ffee0c0ff17', status: 'active' },
+        { _id: '64f0c0ffee0c0ffee0c0ff39', name: 'X', slug: 'x', parentId: 'inactive-parent', status: 'active' },
+      ];
+      const sort = jest.fn(() => ({ lean: jest.fn().mockResolvedValue(all) }));
+      categoryModel.find = jest.fn(() => ({ sort }));
+      productModel.aggregate = jest.fn().mockResolvedValue([]);
+      const res: any = await service.getCategoryTreeNested();
+      expect(categoryModel.find).toHaveBeenCalledTimes(1);
+      expect(res.data).toHaveLength(1);
+      expect(res.data[0].children[0].children[0].children[0]._id).toBe('64f0c0ffee0c0ffee0c0ff18');
+      const one: any = await service.getCategoryTreeNested('64f0c0ffee0c0ffee0c0ff17');
+      expect(one.data.children.map((n: any) => n._id)).toEqual(['64f0c0ffee0c0ffee0c0ff18']);
+      await expect(service.getCategoryTreeNested('64f0c0ffee0c0ffee0c0ff39')).rejects.toThrow(NotFoundException);
     });
   });
 });
