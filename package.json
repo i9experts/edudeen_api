@@ -7,6 +7,8 @@
   "license": "UNLICENSED",
   "scripts": {
     "admin:change-email": "node --env-file=.env --experimental-strip-types src/scripts/change-admin-email.ts",
+    "seed:categories": "node --env-file=.env --experimental-strip-types src/scripts/seed-education-categories.ts",
+    "seed:categories:apply": "node --env-file=.env --experimental-strip-types src/scripts/seed-education-categories.ts --apply",
     "backup:db": "node --env-file=.env scripts/backup-db.mjs",
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
