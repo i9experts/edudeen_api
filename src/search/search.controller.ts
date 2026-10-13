@@ -22,7 +22,7 @@ export class SearchController {
     const limit = clampInt(query.limit, 20, 1, 50);
     // suggest=1 = search-as-you-type preview: don't save half-typed terms to the buyer's history.
     const userId = query.suggest === '1' ? null : req.user?.userId ?? null;
-    return this.searchService.searchProducts(queryString(query.q, 100) ?? '', page, limit, userId, req.user?.userId ?? null);
+    return this.searchService.searchProducts(queryString(query.q, 100) ?? '', page, limit, userId, req.user?.userId ?? null, query.exact === '1');
   }
 
   /** Public: popular search terms across all buyers (for the search box). */

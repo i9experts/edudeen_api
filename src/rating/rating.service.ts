@@ -158,6 +158,7 @@ export class RatingService {
       media: media || [],
       isAnonymous: isAnonymous ?? false,
       isVerifiedPurchase,
+      usedFor: dto.usedFor ?? null,
       comments: [],
     };
 
@@ -191,6 +192,7 @@ export class RatingService {
     const update: any = {};
     if (dto.rating !== undefined) update.rating = dto.rating;
     if (dto.media !== undefined) update.media = dto.media;
+    if (dto.usedFor !== undefined) update.usedFor = dto.usedFor;
 
     if (dto.comment !== undefined) {
       if (review.comments.length > 0) {
@@ -372,6 +374,7 @@ export class RatingService {
           comments: r.comments,
           media: r.media,
           isVerifiedPurchase: r.isVerifiedPurchase,
+          usedFor: r.usedFor ?? null,
           sellerReply: r.sellerReply || null,
           helpfulCount: r.helpfulUserIds?.length ?? 0,
           helpfulByMe:

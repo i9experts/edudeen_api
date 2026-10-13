@@ -64,6 +64,10 @@ export class Rating {
   @Prop({ default: false })
   isVerifiedPurchase!: boolean;
 
+  // Optional: where the buyer used the resource (home | classroom | school).
+  @Prop({ type: String, enum: ['home', 'classroom', 'school'], default: null })
+  usedFor!: 'home' | 'classroom' | 'school' | null;
+
   // Buyers who marked this review "helpful" — count is derived, not stored,
   // so it's always consistent with the array (no separate counter to drift).
   @Prop({ type: [String], default: [] })

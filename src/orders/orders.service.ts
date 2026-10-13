@@ -20,7 +20,7 @@ import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 import { round } from 'src/common/number.util';
 import { PaymentService } from 'src/payment/payment.service';
-import { orderStatusEmail } from 'src/notifications/templates/notification-email.template';
+import { orderStatusEmail, downloadLinkEmail } from 'src/notifications/templates/notification-email.template';
 
 import {
   clampInt,
@@ -214,7 +214,7 @@ export class OrdersService {
       .find({ userId, isDelete: false, 'sellerOrders.items.type': 'digital' })
       .sort({ createdAt: -1 })
       .limit(500)
-      .select('orderNumber isPaid paymentStatus orderStatus createdAt sellerOrders')
+      .select('orderNumber isPaid paymentStatus orderStatus createdAt paidAt sellerOrders')
       .lean();
 
     const seen = new Map<string, any>();
@@ -227,7 +227,7 @@ export class OrdersService {
           seen.set(it.productId, {
             orderId: String(o._id), orderNumber: o.orderNumber, itemId: String(it._id), productId: it.productId,
             name: it.name, image: it.image ?? null, licenseType: it.licenseType ?? null, storeId: so.storeId,
-            isPaid: !!o.isPaid, purchasedAt: o.createdAt, downloadCount: it.downloadCount ?? 0,
+            isPaid: !!o.isPaid, purchasedAt: o.createdAt, paidAt: o.paidAt ?? null, downloadCount: it.downloadCount ?? 0,
             reviewable: !!o.isPaid && (['delivered', 'completed'].includes(it.status) || ['delivered', 'completed'].includes(so.status) || o.orderStatus === 'completed'),
           });
         }
@@ -236,7 +236,7 @@ export class OrdersService {
     const rows = [...seen.values()];
     const productIds = rows.map(r => r.productId).filter((id) => isValidObjectId(id));
     const products: any[] = productIds.length
-      ? await productModel.find({ _id: { $in: productIds } }).select('slug categoryId subCategoryId educationLevel customLevel curricula ageMin ageMax digital.files removedByAdmin deliveryFormat liveSession.startsAt liveSession.durationMinutes').lean()
+      ? await productModel.find({ _id: { $in: productIds } }).select('slug categoryId subCategoryId educationLevel customLevel curricula ageMin ageMax digital.files digital.linkExpiryDays digital.downloadLimit removedByAdmin deliveryFormat liveSession.startsAt liveSession.durationMinutes').lean()
       : [];
     const productById = new Map(products.map(p => [String(p._id), p]));
     const catIds = [...new Set(products.flatMap(p => [p.categoryId, p.subCategoryId]).filter(Boolean))];
@@ -251,8 +251,11 @@ export class OrdersService {
     const items = rows
       .map(r => {
         const p = productById.get(r.productId);
-        // An admin takedown also ends access (see ProductsService / downloads).
-        if (p?.removedByAdmin) return null;
+        // An admin takedown also ends access (see ProductsService / downloads) - kept in the list so the buyer sees why.
+        const removed = !!p?.removedByAdmin || !p;
+        let expiresAt: Date | null = null;
+        if (p?.digital?.linkExpiryDays && r.paidAt) { expiresAt = new Date(r.paidAt); expiresAt.setDate(expiresAt.getDate() + p.digital.linkExpiryDays); }
+        const expired = !!expiresAt && expiresAt.getTime() < Date.now();
         const store: any = storeById.get(String(r.storeId));
         return {
           ...r,
@@ -263,13 +266,16 @@ export class OrdersService {
           customLevel: p?.customLevel ?? null,
           curricula: p?.curricula ?? [],
           fileCount: p?.digital?.files?.length ?? 0,
+          fileTypes: [...new Set(((p?.digital?.files ?? []) as any[]).map((f) => String(f?.name ?? '').split('.').pop()?.toLowerCase()).filter((e): e is string => !!e && e.length <= 5))],
+          totalSize: ((p?.digital?.files ?? []) as any[]).reduce((s, f) => s + (Number(f?.size) || 0), 0),
+          unavailable: removed ? 'removed' : expired ? 'expired' : null,
+          expiresAt,
           deliveryFormat: p?.deliveryFormat ?? 'download',
           liveStartsAt: p?.liveSession?.startsAt ?? null,
           storeName: store?.name ?? null,
           storeSlug: store?.slug ?? null,
         };
-      })
-      .filter(Boolean);
+      });
     return { success: true, data: { items } };
   }
 
@@ -1860,6 +1866,24 @@ export class OrdersService {
         remaining: limit === null ? 'unlimited' : `${Math.max(limit - used, 0)} remaining`,
       },
     };
+  }
+
+  /** "Re-send my download link": emails (and notifies) the account owner a link to My Library. No file token is
+   *  sent - a fresh one is issued on click - so a forwarded email never leaks a file. Ownership, paid/refund/expiry
+   *  and takedown rules are the same as every download (resolveDigitalAccess). */
+  async resendDownloadLink(userId: string, orderId: string, productId: string) {
+    const { order, product } = await this.resolveDigitalAccess(userId, orderId, productId);
+    const mail = downloadLinkEmail(String(product.name ?? 'your resource'), String(order.orderNumber ?? orderId));
+    await this.notificationsService.notify({
+      recipientId: userId,
+      recipientRole: 'user',
+      type: NOTIFICATION_TYPES.DOWNLOAD_LINK_RESENT,
+      title: 'Your download link',
+      body: `Open My Library to download "${product.name}".`,
+      data: { link: '/account/downloads', orderId, productId },
+      email: mail,
+    });
+    return { success: true, message: 'We sent the download link to your email.' };
   }
 
   async getDownloadLink(userId: string, orderId: string, productId: string, fileIndex: number) {

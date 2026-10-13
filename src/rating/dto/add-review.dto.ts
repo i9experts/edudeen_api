@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsNumber, Min, Max, IsOptional, IsBoolean, IsArray } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, Min, Max, IsOptional, IsBoolean, IsArray, IsIn } from 'class-validator';
 
 export class AddReviewDto {
 
@@ -41,5 +41,10 @@ export class AddReviewDto {
   @IsArray()
   @IsString({ each: true })
   media?: string[];
+
+  @ApiProperty({ required: false, enum: ['home', 'classroom', 'school'] })
+  @IsOptional()
+  @IsIn(['home', 'classroom', 'school'])
+  usedFor?: 'home' | 'classroom' | 'school';
 
 }

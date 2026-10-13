@@ -118,6 +118,7 @@ describe('wishlist', () => {
     });
     expect(res.data.product.digital).toEqual({
       fileCount: 1,
+      fileFormats: [],
       previewAvailable: false,
       sampleAvailable: false,
       sampleName: null,

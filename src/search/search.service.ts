@@ -30,9 +30,10 @@ export class SearchService {
 
   /** Runs the search and, for logged-in callers, records the term (fire-and-
    *  forget — a history write must never fail the search itself). */
-  async searchProducts(q: string, page: number, limit: number, userId: string | null, viewerId: string | null = userId) {
+  async searchProducts(q: string, page: number, limit: number, userId: string | null, viewerId: string | null = userId, exact = false) {
     // viewerId (for member pricing) can be set without recording history (userId null).
-    let result: any = await this.productsService.searchProducts(q, page, limit, viewerId);
+    // Synonym expansion happens inside productsService.searchProducts; withSpellFix adds typo tolerance.
+    let result: any = await this.productsService.withSpellFix(q, exact, (t) => this.productsService.searchProducts(t ?? '', page, limit, viewerId));
 
     // Zero hits on the first full results page: let smart search interpret the query (cached rewrites, keyword fallback).
     if (this.smartSearch && page === 1 && limit >= 8 && result?.data?.total === 0 && (q || '').trim().length >= 3) {

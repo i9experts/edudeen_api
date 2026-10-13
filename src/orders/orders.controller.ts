@@ -11,6 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Response } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -172,6 +173,15 @@ export class OrdersController {
       req.ip,
       req.headers['user-agent'],
     );
+  }
+
+  // Lost link? Re-send the "your download is ready" email (My Library link) to the buyer's own account email.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('user')
+  @Throttle({ default: { limit: 5, ttl: 600_000 } })
+  @Post('resend-download-link')
+  async resendDownloadLink(@Req() req: any, @Body() body: { orderId?: string; productId?: string }) {
+    return this.ordersService.resendDownloadLink(req.user.userId, String(body?.orderId ?? ''), String(body?.productId ?? ''));
   }
 
   // Step 1: JWT se download link lo (10 min valid)

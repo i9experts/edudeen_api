@@ -342,6 +342,7 @@ describe('public product view helpers', () => {
     expect(out.digital).toEqual({
       downloadLimit: '3',
       fileCount: 2,
+      fileFormats: [],
       previewAvailable: true,
       sampleAvailable: false,
       sampleName: null,

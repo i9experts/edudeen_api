@@ -37,6 +37,7 @@ import { AttributesService } from 'src/attributes/attributes.service';
 
 import { clampInt } from 'src/common/query-safety.util';
 import { resolveStoreNames } from './store-name.util';
+import { FuzzyIndex, buildSearchRegex } from 'src/search/search-terms.util';
 const EDUCATION_LEVEL_VALUES: string[] = Object.values(EducationLevel);
 
 /** Prices arrive on `body: any` endpoints, so they are checked here rather
@@ -586,7 +587,7 @@ export class ProductsService {
 
     const term = typeof search === 'string' ? search.trim().slice(0, 100) : '';
     if (term) {
-      const rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const rx = buildSearchRegex(term); // term + Roman-Urdu/Urdu synonym variants
       query.$or = [{ name: rx }, { tags: rx }, { description: rx }];
     }
 
@@ -953,8 +954,7 @@ export class ProductsService {
 
     // User input goes into a regex — escape it so "c++" or "50% off" can't
     // break the query or turn into a pathological pattern.
-    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(escaped, 'i');
+    const regex = buildSearchRegex(term); // escapes input + adds Roman-Urdu/Urdu synonym variants
 
     const query: any = {
       status: 'active',
@@ -1026,6 +1026,57 @@ export class ProductsService {
       if (!rows.length) basis = 'similar';
     }
     return { success: true, data: { basis, products: picked.map(p => this.sanitizeDigitalForPublicView(p)) } };
+  }
+
+  // ── Typo tolerance: in-memory word index of product names/tags, rebuilt lazily every 10 minutes ──
+  private fuzzy = new FuzzyIndex();
+  private fuzzyLoading: Promise<void> | null = null;
+
+  private async ensureFuzzyIndex() {
+    if (this.fuzzy.size && Date.now() - this.fuzzy.builtAt < 10 * 60 * 1000) return;
+    if (!this.fuzzyLoading) {
+      this.fuzzyLoading = (async () => {
+        const rows = await this.databaseService.repositories.productModel
+          .find({ status: 'active', isDelete: false }).select('name tags').limit(20000).lean();
+        this.fuzzy.build(rows.map((r: any) => [r.name, ...(Array.isArray(r.tags) ? r.tags : [])].join(' ')));
+      })().catch(() => { this.fuzzy.builtAt = Date.now(); }).finally(() => { this.fuzzyLoading = null; });
+    }
+    await this.fuzzyLoading;
+  }
+
+  /** A spell-corrected version of a search term (null when nothing to fix). Never throws. */
+  async suggestCorrection(term: string): Promise<string | null> {
+    try {
+      const t = (typeof term === 'string' ? term : '').trim().slice(0, 100);
+      if (t.length < 4) return null;
+      await this.ensureFuzzyIndex();
+      const fixed = this.fuzzy.correct(t);
+      return fixed && fixed.toLowerCase() !== t.toLowerCase() ? fixed : null;
+    } catch { return null; }
+  }
+
+  /** Runs a keyword search; with no hits retries once with a spell-corrected term ("Showing results for X"),
+   *  and with very few hits just suggests it ("Did you mean X"). `exact` turns this off ("Search instead for Y"). */
+  async withSpellFix(term: string | undefined, exact: boolean, run: (t: string | undefined) => Promise<any>): Promise<any> {
+    const res = await run(term);
+    const q = typeof term === 'string' ? term.trim() : '';
+    const total = res?.data?.total;
+    if (!q || exact || typeof total !== 'number' || total > 2) return res;
+    const fixed = await this.suggestCorrection(q);
+    if (!fixed) return res;
+    if (total === 0) {
+      const res2 = await run(fixed);
+      if ((res2?.data?.total ?? 0) > 0) return { ...res2, correctedQuery: fixed, originalQuery: q };
+      return { ...res, didYouMean: fixed };
+    }
+    return { ...res, didYouMean: fixed };
+  }
+
+  /** Public side-by-side data for the Compare page: up to 4 active products, same shaping/sanitising as listings. */
+  async getCompareProducts(ids: string[], customerId?: string | null) {
+    const clean = Array.from(new Set((ids ?? []).filter((i) => typeof i === 'string' && isValidObjectId(i)))).slice(0, 4);
+    const products = await this.getShapedProductsByIds(clean, customerId);
+    return { success: true, message: 'Products fetched successfully', data: { products } };
   }
 
   async getShapedProductsByIds(

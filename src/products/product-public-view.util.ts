@@ -25,12 +25,24 @@ export function sanitizeDigitalForPublicView<T extends { digital?: unknown }>(
     digital: {
       ...safeDigital,
       fileCount: Array.isArray(files) ? files.length : 0,
+      // Short upper-case extensions (PDF, DOCX, MP4...) so the page can say what the buyer gets without the manifest.
+      fileFormats: fileFormatsOf(files),
       previewAvailable: !!preview?.enabled,
       // The sample itself is fetched through GET /api/products/:id/sample.
       sampleAvailable: !!sample,
       sampleName: sample?.name ?? null,
     },
   } as T;
+}
+
+function fileFormatsOf(files: unknown): string[] {
+  if (!Array.isArray(files)) return [];
+  const out = new Set<string>();
+  for (const f of files as { name?: unknown }[]) {
+    const m = typeof f?.name === 'string' ? /\.([a-z0-9]{1,5})$/i.exec(f.name) : null;
+    if (m) out.add(m[1].toUpperCase());
+  }
+  return [...out].slice(0, 6);
 }
 
 /** The admin-only AI pre-moderation result never goes into public views. */

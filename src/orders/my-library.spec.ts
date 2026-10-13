@@ -42,12 +42,22 @@ describe('My Library', () => {
     }));
   });
 
-  it('drops a resource an admin took down', async () => {
+  it('keeps a resource an admin took down but marks it removed (friendly state, no download)', async () => {
     const { svc } = make(
       [order('o1', '2026-09-01', [{ _id: 'i1', productId: P1, name: 'Copied Book', type: 'digital', status: 'completed' }])],
       [{ _id: P1, removedByAdmin: true }],
     );
     const res: any = await svc.getMyLibrary('u1');
-    expect(res.data.items).toEqual([]);
+    expect(res.data.items).toHaveLength(1);
+    expect(res.data.items[0].unavailable).toBe('removed');
+  });
+
+  it('marks an expired link, and reports file types and total size', async () => {
+    const { svc } = make(
+      [order('o1', '2026-01-01', [{ _id: 'i1', productId: P1, name: 'Old Pack', type: 'digital', status: 'completed' }], { paidAt: new Date('2026-01-01') })],
+      [{ _id: P1, digital: { linkExpiryDays: 30, files: [{ name: 'a.PDF', size: 100 }, { name: 'b.docx', size: 50 }] } }],
+    );
+    const res: any = await svc.getMyLibrary('u1');
+    expect(res.data.items[0]).toEqual(expect.objectContaining({ unavailable: 'expired', fileTypes: ['pdf', 'docx'], totalSize: 150 }));
   });
 });

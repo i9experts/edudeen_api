@@ -47,6 +47,7 @@ export class productController {
     @Query('curriculum') curriculumQuery?: string,
     @Query('age') ageQuery?: string,
     @Query('featured') featuredQuery?: string,
+    @Query('exact') exactQuery?: string,
   ) {
     // Express/qs hands back arrays and objects for ?x[]=1 / ?x[$ne]=1 even though these are typed as strings.
     id = queryString(id);
@@ -95,7 +96,7 @@ export class productController {
       }
     }
 
-    return this.ProductsService.getProductsByCategoryId(
+    const run = (term: string | undefined) => this.ProductsService.getProductsByCategoryId(
       id,
       page,
       limit,
@@ -109,13 +110,23 @@ export class productController {
       parseNum(minRatingQuery),
       sortBy,
       attributesFilter,
-      searchQuery,
+      term,
       {
         curriculum: CURRICULA.includes(curriculumQuery as any) ? curriculumQuery : undefined,
         age: ageQuery !== undefined && /^\d{1,2}$/.test(String(ageQuery)) ? Number(ageQuery) : undefined,
         featured: featuredQuery === '1' || featuredQuery === 'true',
       },
     );
+    // Typo tolerance only for real keyword searches (?exact=1 = "search instead for what I typed").
+    return this.ProductsService.withSpellFix(searchQuery, exactQuery === '1' || exactQuery === 'true', run);
+  }
+
+  /** Public: up to 4 products for the Compare page (?ids=a,b,c) — same shaping/sanitising as listings. */
+  @UseGuards(OptionalJwtAuthGuard)
+  @Get('compare')
+  async compareProducts(@Req() req: any, @Query('ids') ids?: string) {
+    const list = (queryString(ids, 400) ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    return this.ProductsService.getCompareProducts(list, req.user?.userId ?? null);
   }
 
   @Get('education/facets')

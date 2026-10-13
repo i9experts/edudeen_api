@@ -49,6 +49,7 @@ export const NOTIFICATION_TYPES = {
   WISHLIST_BACK_IN_STOCK: 'wishlist_back_in_stock',
   WISHLIST_PRICE_DROP: 'wishlist_price_drop',
   REFERRAL_REWARD: 'referral_reward',
+  DOWNLOAD_LINK_RESENT: 'download_link_resent',
 } as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[keyof typeof NOTIFICATION_TYPES];
@@ -102,4 +103,5 @@ export const NOTIFICATION_CATEGORY: Record<string, 'orders' | 'messages' | 'prom
   [NOTIFICATION_TYPES.WISHLIST_BACK_IN_STOCK]: 'promotions',
   [NOTIFICATION_TYPES.WISHLIST_PRICE_DROP]: 'promotions',
   [NOTIFICATION_TYPES.REFERRAL_REWARD]: 'loyalty',
+  [NOTIFICATION_TYPES.DOWNLOAD_LINK_RESENT]: 'orders',
 };

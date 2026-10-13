@@ -56,6 +56,17 @@ export function orderPlacedEmail(order: {
   };
 }
 
+/** "Re-send my download link" — points at My Library (a fresh short-lived token is issued on click, so no file token is ever emailed). */
+export function downloadLinkEmail(productName: string, orderNumber: string): { subject: string; html: string } {
+  return {
+    subject: `Your download is ready — ${productName}`,
+    html: notificationEmailShell(
+      'Your download is ready',
+      `<p>You asked us to re-send the link for <strong>${escapeHtml(productName)}</strong> (order <strong>#${escapeHtml(orderNumber)}</strong>).</p><p>Open My Library and tap Download — your files are always there.</p>`,
+      { label: 'Open My Library', url: `${WEB_APP_URL}/account/downloads` },
+    ),
+  };
+}
 /** Buyer update when a seller ships / delivers their part of an order. */
 export function orderStatusEmail(
   orderNumber: string,
