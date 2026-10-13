@@ -50,6 +50,8 @@ const EDUCATION_CATEGORIES: SeedCategory[] = [
     subs: ['Quran & Islamic Classes', 'Academic Tutoring', 'Skill Courses', 'Live Classes & Webinars', 'Teacher Training'] },
   { name: 'Homeschool & Parenting', description: 'Curriculum plans, study guides and parenting resources for learning at home.',
     subs: ['Homeschool Curriculum', 'Study Skills & Planners', 'Parenting Guides', 'Special Education Support'] },
+  { name: 'Others', description: 'Educational resources that do not fit any other category.',
+    subs: ['Other Educational Resources', 'Other Books & Materials', 'Other Courses & Services'] },
 ];
 
 const slugify = (s: string) =>
