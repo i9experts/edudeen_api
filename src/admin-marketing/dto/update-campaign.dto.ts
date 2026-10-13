@@ -54,4 +54,9 @@ export class UpdateCampaignDto {
   @Min(0)
   @Max(1000)
   order?: number;
+
+  @ApiProperty({ enum: ['draft', 'active', 'ended'], required: false, description: 'Change the status in the SAME write as the other fields (all-or-nothing).' })
+  @IsOptional()
+  @IsEnum(['draft', 'active', 'ended'])
+  status?: 'draft' | 'active' | 'ended';
 }

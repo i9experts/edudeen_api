@@ -230,14 +230,29 @@ export class AdminMarketingService {
     if (dto.order !== undefined && dto.order !== existing.order) {
       await this.assertOrderAvailable(dto.order, id);
     }
+    // A status change in the same request is validated up front too, so the whole edit is applied or none of it.
+    const statusChange = dto.status !== undefined && dto.status !== existing.status ? dto.status : undefined;
+    if (statusChange === 'active') {
+      if (new Date(dto.endDate ?? existing.endDate) <= new Date()) {
+        throw new BadRequestException('This campaign has already ended — extend its end date before activating it');
+      }
+      const effectiveOrder = dto.order !== undefined ? dto.order : existing.order;
+      if (effectiveOrder != null) await this.assertOrderAvailable(effectiveOrder, id);
+    }
 
     const update: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(dto)) {
-      if (value === undefined) continue;
+      if (value === undefined || key === 'status') continue;
       update[key] = key === 'startDate' || key === 'endDate' ? new Date(value as string) : value;
+    }
+    if (statusChange) {
+      update.status = statusChange;
+      if (statusChange === 'ended') update.order = 0;
     }
     const campaign = await this.r.campaignModel.findByIdAndUpdate(id, { $set: update }, { returnDocument: 'after' });
     this.log('campaign_updated', `Campaign "${campaign!.name}" updated`, meta, id);
+    if (statusChange === 'active') this.announceCampaignLive(campaign as any);
+    if (statusChange === 'ended' && existing.status === 'active') this.announceCampaignEnded(campaign as any);
     return { success: true, message: 'Campaign updated', data: campaign };
   }
 
