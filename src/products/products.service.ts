@@ -40,6 +40,7 @@ import { AttributesService } from 'src/attributes/attributes.service';
 import { PremiumEntitlementsService } from 'src/premium/premium-entitlements.service';
 import { assertOfferExclusive, premiumFieldsFromBody } from './offers.util';
 import { assertPremiumGap } from 'src/premium/premium-gap';
+import { premiumPercentFor } from 'src/premium/premium.util';
 
 import { clampInt } from 'src/common/query-safety.util';
 import { resolveStoreNames } from './store-name.util';
@@ -1135,6 +1136,51 @@ export class ProductsService {
     return { success: true, message: 'Products fetched successfully', data: { products } };
   }
 
+  private premiumDealsPool: { at: number; docs: any[] } | null = null;
+
+  /**
+   * Members-only "Premium Deals": the products with the biggest effective Premium percent (seller% + platform%),
+   * decorated with the same public view as listings (so a member sees the member price + `premiumDiscountPercent`).
+   * The ranked candidate pool is cached ~60s per instance; non-members get an empty list.
+   */
+  async getPremiumDeals(limit = 12, customerId?: string | null) {
+    const lim = Math.min(24, Math.max(1, Math.floor(limit) || 12));
+    const empty = { success: true, message: 'Premium deals', data: { isPremium: false, products: [] as any[] } };
+    if (!this.premiumService || !customerId) return empty;
+    const ent = await this.premiumService.getEntitlements(customerId);
+    if (!ent.isPremium) return empty;
+
+    if (!this.premiumDealsPool || Date.now() - this.premiumDealsPool.at > 60_000) {
+      const { productModel, storeModel } = this.databaseService.repositories as any;
+      const stores: any[] = await storeModel.find({ status: 'active', isDelete: false }).select('premiumDiscount').lean();
+      const storeById = new Map(stores.map((s) => [String(s._id), s]));
+      const enabledStoreIds = stores.filter((s) => s.premiumDiscount?.enabled).map((s) => String(s._id));
+      const docs: any[] = await productModel.find({
+        status: 'active', isDelete: false, premiumOptOut: { $ne: true },
+        storeId: { $in: [...storeById.keys()] },
+        $or: [{ premiumDiscountPercent: { $gt: 0 } }, { storeId: { $in: enabledStoreIds } }],
+      }).sort({ purchaseCount: -1, _id: -1 }).limit(300).lean();
+      const ranked = docs
+        .map((p) => ({ p, pct: premiumPercentFor(p, storeById.get(String(p.storeId))) }))
+        .filter((x) => x.pct > 0)
+        .sort((a, b) => b.pct - a.pct)
+        .slice(0, 60)
+        .map((x) => x.p);
+      this.premiumDealsPool = { at: Date.now(), docs: ranked };
+    }
+
+    const shaped: any[] = await this.attachVariantsAndPricing(this.premiumDealsPool.docs, customerId);
+    const products = shaped
+      .map((p) => {
+        const dv = (p.variants ?? []).find((v: any) => v.isDefault && v.premiumPrice != null) ?? (p.variants ?? []).find((v: any) => v.premiumPrice != null);
+        return { p, pct: dv?.premiumDiscountPercent ?? 0 };
+      })
+      .filter((x) => x.pct > 0)
+      .sort((a, b) => b.pct - a.pct)
+      .slice(0, lim)
+      .map((x) => x.p);
+    return { success: true, message: 'Premium deals', data: { isPremium: true, products } };
+  }
   async getShapedProductsByIds(
     productIds: string[],
     customerId?: string | null,

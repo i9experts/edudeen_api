@@ -134,6 +134,13 @@ export class productController {
     return this.ProductsService.getCompareProducts(list, req.user?.userId ?? null);
   }
 
+  /** Members-only: the products with the biggest Premium discount (empty list for everyone else). */
+  @UseGuards(OptionalJwtAuthGuard)
+  @Get('premium-deals')
+  async premiumDeals(@Req() req: any, @Query('limit') limit?: string) {
+    return this.ProductsService.getPremiumDeals(clampInt(limit, 12, 1, 24), req.user?.userId ?? null);
+  }
+
   @Get('education/facets')
   async getEducationFacets() {
     return this.ProductsService.getEducationFacets();
