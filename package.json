@@ -11,6 +11,8 @@
     "seed:categories:apply": "node --env-file=.env --experimental-strip-types src/scripts/seed-education-categories.ts --apply",
     "seed:premium-demo": "node --env-file=.env --experimental-strip-types src/scripts/seed-premium-demo-products.ts",
     "seed:premium-demo:apply": "node --env-file=.env --experimental-strip-types src/scripts/seed-premium-demo-products.ts --apply",
+    "fix:premium-conflicts": "node --env-file=.env --experimental-strip-types src/scripts/fix-premium-offer-conflicts.ts",
+    "fix:premium-conflicts:apply": "node --env-file=.env --experimental-strip-types src/scripts/fix-premium-offer-conflicts.ts --apply",
     "backfill:pdf-pages": "node --env-file=.env --experimental-strip-types src/scripts/backfill-pdf-page-counts.ts",
     "backfill:pdf-pages:apply": "node --env-file=.env --experimental-strip-types src/scripts/backfill-pdf-page-counts.ts --apply",
     "backup:db": "node --env-file=.env scripts/backup-db.mjs",
