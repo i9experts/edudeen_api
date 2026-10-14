@@ -1,4 +1,4 @@
-import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
+import { OptionalParseObjectIdPipe, ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import {
   Body,
   Controller,
@@ -107,7 +107,8 @@ export class CartController {
   async removeFromWishlist(
     @Req() req: any,
     @Body('wishlistId', ParseObjectIdPipe) wishlistId: string,
-    @Body('storeId', ParseObjectIdPipe) storeId: string,
+    // Optional: the marketplace wishlist is account-wide (no store), a store's own storefront passes its storeId.
+    @Body('storeId', OptionalParseObjectIdPipe) storeId?: string,
   ) {
     const { userId } = req.user;
     return await this.cartService.removeFromWishlist(userId, storeId, wishlistId);
@@ -115,7 +116,7 @@ export class CartController {
 
   @UseGuards(JwtAuthGuard)
   @Post('clear-wishlist')
-  async clearWishlist(@Req() req: any, @Body('storeId', ParseObjectIdPipe) storeId: string) {
+  async clearWishlist(@Req() req: any, @Body('storeId', OptionalParseObjectIdPipe) storeId?: string) {
     const { userId } = req.user;
     return this.cartService.clearWishlist(userId, storeId);
   }
