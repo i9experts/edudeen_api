@@ -26,8 +26,10 @@ export function addPeriod(from: Date, interval: 'monthly' | 'yearly'): Date {
   return d;
 }
 
-/** The percent the seller gives premium members on a product: product override first, else the store setting. 0 = none. */
-export function premiumPercentFor(product: { premiumDiscountPercent?: number | null } | null | undefined, store: { premiumDiscount?: { enabled?: boolean; percent?: number } | null } | null | undefined): number {
+/** The percent the seller gives premium members on a product: product override first, else the store setting. 0 = none.
+ *  `premiumOptOut` (the seller turned Premium off for this product, e.g. to join a platform sale) = always 0. */
+export function premiumPercentFor(product: { premiumDiscountPercent?: number | null; premiumOptOut?: boolean | null } | null | undefined, store: { premiumDiscount?: { enabled?: boolean; percent?: number } | null } | null | undefined): number {
+  if (product?.premiumOptOut === true) return 0;
   const own = product?.premiumDiscountPercent;
   if (typeof own === 'number' && own >= PREMIUM_MIN_PERCENT && own <= PREMIUM_MAX_PERCENT) return own;
   const s = store?.premiumDiscount;

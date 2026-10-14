@@ -11,11 +11,11 @@ const chain = (v: any) => {
   return c;
 };
 
-function cartSvc(opts: { member: boolean; platformOn: boolean; price: number; compareAt?: number | null; productPct?: number | null; storePct?: number; campaignPct?: number }) {
+function cartSvc(opts: { member: boolean; platformOn: boolean; price: number; compareAt?: number | null; productPct?: number | null; storePct?: number; campaignPct?: number; unticked?: boolean; optOut?: boolean }) {
   const cart = { userId: 'u1', storeId: STORE, isDelete: false, items: [{ productId: P1, productVariantId: V1, name: 'Item', quantity: 2, price: opts.price, currency: 'USD', images: [], options: [] }] };
   const repos: any = {
     cartModel: { findOne: jest.fn().mockResolvedValue(cart) },
-    productModel: { aggregate: jest.fn().mockResolvedValue([]), find: jest.fn(() => chain([{ _id: P1, images: [], status: 'active', isDelete: false, storeId: STORE, premiumDiscountPercent: opts.productPct ?? null }])) },
+    productModel: { aggregate: jest.fn().mockResolvedValue([]), find: jest.fn(() => chain([{ _id: P1, images: [], status: 'active', isDelete: false, storeId: STORE, premiumDiscountPercent: opts.productPct ?? null, campaignIds: opts.campaignPct && !opts.unticked ? ['c1'] : [], premiumOptOut: !!opts.optOut }])) },
     sellerModel: { find: jest.fn(() => chain([])) },
     productVariantModel: { find: jest.fn(() => chain([{ _id: V1, price: opts.price, compareAtPrice: opts.compareAt ?? null, currency: 'USD' }])) },
     campaignModel: { find: jest.fn(() => chain(opts.campaignPct ? [{ _id: 'c1', name: 'Flash', endDate: new Date(Date.now() + 1e7), discountType: 'percentage', discountValue: opts.campaignPct, currency: null, sponsorType: 'platform' }] : [])) },
@@ -66,3 +66,28 @@ describe('cart premium display = checkout price (R2/R6)', () => {
     expect(data.items[0].onCampaign).toBe(false);
     expect(data.campaignDiscount).toBeNull();
   });});
+
+describe('cart campaign price: LIST-price base + strict per-product opt-in (owner rules R1/R2/R6)', () => {
+  it('10% mega sale on price 500 / compare 550 => 495 per unit (not 450), discount 5 each', async () => {
+    const { data } = await cartSvc({ member: false, platformOn: false, price: 500, compareAt: 550, campaignPct: 10 }).getCart('u1', STORE) as any;
+    expect(data.items[0]).toMatchObject({ onCampaign: true, campaignUnitPrice: 495, campaignItemTotal: 990, listPrice: 550 });
+    expect(data.campaignDiscount.amount).toBe(10); // (500 - 495) x 2
+    expect(data.totalAfterDiscount).toBe(990);
+  });
+  it('5% on 500 / 550 => 522.5 is not cheaper than 500: no campaign on the line', async () => {
+    const { data } = await cartSvc({ member: false, platformOn: false, price: 500, compareAt: 550, campaignPct: 5 }).getCart('u1', STORE) as any;
+    expect(data.items[0].onCampaign).toBe(false);
+    expect(data.campaignDiscount).toBeNull();
+    expect(data.totalAfterDiscount).toBe(1000);
+  });
+  it('regression: a product the seller never ticked gets NO campaign price in a participating store', async () => {
+    const { data } = await cartSvc({ member: false, platformOn: false, price: 100, campaignPct: 30, unticked: true }).getCart('u1', STORE) as any;
+    expect(data.items[0].onCampaign).toBe(false);
+    expect(data.campaignDiscount).toBeNull();
+  });
+  it('premiumOptOut: no premium offer (teaser / price) even with a store-wide default', async () => {
+    const { data } = await cartSvc({ member: true, platformOn: false, price: 100, storePct: 20, optOut: true }).getCart('u1', STORE) as any;
+    expect(data.items[0].premiumPercent).toBeUndefined();
+    expect(data.items[0].premiumUnitPrice).toBeUndefined();
+  });
+});

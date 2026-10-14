@@ -27,8 +27,8 @@ import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 import { RedisService } from 'src/redis/redis.service';
 import { MarketingService } from 'src/marketing/marketing.service';
-import { pickPrimaryCampaignForBadge } from 'src/marketing/campaign-pricing.util';
-import { campaignsForProduct, loadCampaignContext } from 'src/marketing/campaign-eligibility.util';
+import { applyCampaignsToVariants, pickPrimaryCampaignForBadge } from 'src/marketing/campaign-pricing.util';
+import { campaignsForProduct } from 'src/marketing/campaign-eligibility.util';
 import { AdminConfigService } from 'src/admin-config/admin-config.service';
 import { StoreThemeService } from '../store-theme/store-theme.service';
 import { StorePagesService } from '../store-pages/store-pages.service';
@@ -1492,17 +1492,14 @@ export class StoreService {
     // lookup for the whole page, not per-product — same active-campaign
     // resolution checkout pricing uses.
     const storeCampaigns = await this.marketingService.getActiveCampaignsForStore(storeId);
-    // Per-product participation (marketing/campaign-eligibility.util.ts): only products in the campaign carry it.
-    const campaignCtx = await loadCampaignContext(
-      this.databaseService.repositories.productModel, [storeId],
-      storeCampaigns.map((c) => c.campaignId), [],
-    );
-
+    // Strict per-product participation (marketing/campaign-eligibility.util.ts): only products ticked for the campaign
+    // carry it, priced from the LIST price (owner rule R1) per variant.
     const enrichedProducts = products.map((p: any) => {
       const variant = cheapestByProduct.get(p._id.toString());
-      const primaryCampaign = pickPrimaryCampaignForBadge(
-        campaignsForProduct(storeCampaigns, String(storeId), p.campaignIds ?? [], campaignCtx.selection),
-      );
+      const productCampaigns = campaignsForProduct(storeCampaigns, p.campaignIds ?? []);
+      const applied = applyCampaignsToVariants(productCampaigns, variantsByProduct.get(p._id.toString()) ?? []);
+      const primaryCampaign = applied.primary
+        ?? pickPrimaryCampaignForBadge(productCampaigns.filter((c) => c.discountType == null || c.discountValue == null));
       const activeCampaignBadge = primaryCampaign ? {
         campaignId: primaryCampaign.campaignId,
         name: primaryCampaign.name,
@@ -1511,10 +1508,9 @@ export class StoreService {
         currency: primaryCampaign.currency,
         endDate: primaryCampaign.endDate,
       } : null;
-      // While the campaign's sale runs on this product, the seller's own markdown is hidden.
-      const hideMarkdown = !!primaryCampaign && primaryCampaign.discountType != null && primaryCampaign.discountValue != null;
-      const productVariants = (variantsByProduct.get(p._id.toString()) ?? [])
-        .map((v: any) => (hideMarkdown ? { ...v, compareAtPrice: null } : v));
+      // While the campaign's sale runs on a variant, the seller's own markdown is hidden (applyCampaignsToVariants).
+      const hideMarkdown = applied.primary != null;
+      const productVariants = applied.variants;
       const { campaignIds: _own, ...pubProduct } = p;
       const base: any = {
         ...pubProduct,
@@ -1527,6 +1523,7 @@ export class StoreService {
         stock:               variant?.stock ?? null,
         compareAtPrice:      hideMarkdown ? null : (variant?.compareAtPrice ?? null),
         activeCampaign:      activeCampaignBadge,
+        ...(applied.appliedPrice != null ? { campaignPrice: applied.appliedPrice } : {}),
       };
       if (variant && benefits) {
         const discount = this.subscriptionBenefits.resolveProductDiscount(benefits.benefits, p, variant.price);

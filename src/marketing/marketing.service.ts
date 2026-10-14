@@ -173,8 +173,8 @@ export class MarketingService {
       .sort({ startDate: 1 })
       .lean();
 
-    // How many of this store's products ticked each campaign (0 = the store never chose per product, so the whole
-    // store is in - see campaign-eligibility.util.ts).
+    // How many of this store's products ticked each campaign (strict opt-in: 0 = no discounted product yet -
+    // see campaign-eligibility.util.ts).
     const counts = campaigns.length
       ? await this.r.productModel.aggregate([
           { $match: { storeId, isDelete: false, campaignIds: { $in: campaigns.map((c) => String(c._id)) } } },

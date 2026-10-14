@@ -128,15 +128,15 @@ export class PremiumEntitlementsService {
             if (!calc.applies) return v;
             // Premium competes with the normal price a buyer would pay on this variant (running % sale, store-subscriber price):
             // when that is lower or equal, no premium price is offered and the sale / subscriber price stays visible.
-            const camp = p.activeCampaign;
-            const campUnit = camp?.discountType === 'percentage' && camp.discountValue ? Math.round(v.price * (1 - camp.discountValue / 100) * 100) / 100 : v.price;
+            const campUnit = typeof v.campaignPrice === 'number' ? v.campaignPrice : v.price;
             const normalUnit = Math.min(campUnit, typeof v.subscriberPrice === 'number' ? v.subscriberPrice : Infinity);
             if (!(calc.unit < normalUnit)) return v;
             applied = true;
-            const { subscriberPrice: _a, youSaveUSD: _b, discountPercent: _c, subscriberPlanName: _d, minOrderValueUSD: _e, ...rest } = v;
+            const { subscriberPrice: _a, youSaveUSD: _b, discountPercent: _c, subscriberPlanName: _d, minOrderValueUSD: _e, campaignPrice: _f, campaignId: _g, campaignListPrice: _h, ...rest } = v;
             return { ...rest, listPrice: calc.listUnit, premiumPrice: calc.unit, premiumDiscountPercent: calc.totalPercent, premiumSellerPercent: calc.sellerPercent, premiumPlatformPercent: calc.platformPercent };
           });
           if (applied && out.activeCampaign) out.activeCampaign = null;
+          if (applied) delete out.campaignPrice;
         }
         return out as T;
       });

@@ -301,8 +301,7 @@ export class Product {
   isListedOnEdudeen: boolean;
 
   // Admin campaigns (sales) the seller chose for THIS product. See
-  // marketing/campaign-eligibility.util.ts for the rule (a store that never picked any product for a campaign
-  // keeps the old whole-store behaviour).
+  // marketing/campaign-eligibility.util.ts for the rule (strict opt-in: only ticked products are in a campaign).
   @Prop({ type: [String], default: [] })
   campaignIds: string[];
 
@@ -310,6 +309,11 @@ export class Product {
   // (1-50). null = follow the store setting. Premium members only; the seller bears this discount.
   @Prop({ type: Number, default: null })
   premiumDiscountPercent: number | null;
+
+  // The seller turned the Premium member discount OFF for this product (e.g. to join a platform sale, or to opt out of
+  // a store-wide default). A product has EITHER a Premium offer OR a platform sale, never both.
+  @Prop({ type: Boolean, default: false })
+  premiumOptOut: boolean;
 
   // admin marketplace-management toggle — highlights the listing on the
   // marketplace homepage, separate from seller-controlled fields above

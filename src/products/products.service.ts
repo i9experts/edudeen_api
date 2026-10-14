@@ -18,7 +18,7 @@ import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-benefits.service';
 import { EntitlementsService } from 'src/platform-plans/entitlements.service';
 import { MarketingService } from 'src/marketing/marketing.service';
-import { pickPrimaryCampaignForBadge } from 'src/marketing/campaign-pricing.util';
+import { ActiveCampaignForStore, applyCampaignsToVariants, pickBestCampaignForLine, pickPrimaryCampaignForBadge } from 'src/marketing/campaign-pricing.util';
 import { campaignsForProduct, loadCampaignContext, parseCampaignIdsInput } from 'src/marketing/campaign-eligibility.util';
 import { EducationLevel, LICENSE_OPTION_LABEL, LICENSE_OPTION_NAME } from './schemas/product.schema';
 import { EducationLevelService } from './education-level.service';
@@ -38,7 +38,7 @@ import {
 import { optionNameSet, optionsKey, validateOptions } from './variant-options.util';
 import { AttributesService } from 'src/attributes/attributes.service';
 import { PremiumEntitlementsService } from 'src/premium/premium-entitlements.service';
-import { cleanPremiumPercent } from 'src/premium/premium.util';
+import { assertOfferExclusive, premiumFieldsFromBody } from './offers.util';
 import { assertPremiumGap } from 'src/premium/premium-gap';
 
 import { clampInt } from 'src/common/query-safety.util';
@@ -56,12 +56,6 @@ function assertValidPrice(value: unknown, field: string, { nullable = false } = 
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > MAX_PRICE) {
     throw new BadRequestException(`${field} must be a number between 0 and ${MAX_PRICE}`);
   }
-}
-
-/** { premiumDiscountPercent } when the body carries it (validated 1-50 / null), else {} so nothing changes. */
-function premiumFieldFromBody(body: any): { premiumDiscountPercent?: number | null } {
-  const v = cleanPremiumPercent(body?.premiumDiscountPercent);
-  return v === undefined ? {} : { premiumDiscountPercent: v };
 }
 
 @Injectable()
@@ -104,25 +98,30 @@ export class ProductsService {
     const missingIds = products
       .filter((p: any) => p._id && !Array.isArray(p.campaignIds))
       .map((p: any) => String(p._id));
-    const ctx = await loadCampaignContext(this.databaseService.repositories.productModel, storeIds, campaignIds, missingIds);
+    const ctx = campaignIds.length ? await loadCampaignContext(this.databaseService.repositories.productModel, missingIds) : { campaignIdsByProduct: new Map<string, string[]>() };
     const ownIds = (p: any): string[] | undefined => (Array.isArray(p.campaignIds) ? p.campaignIds : ctx.campaignIdsByProduct.get(String(p._id)));
 
     return products.map((raw) => {
       const { campaignIds: _own, ...p } = raw as any;
-      const campaigns = campaignsForProduct(
-        raw.storeId ? campaignsByStore.get(raw.storeId) : undefined,
-        raw.storeId as string,
-        ownIds(raw),
-        ctx.selection,
-      );
-      const primary = campaigns.length ? pickPrimaryCampaignForBadge(campaigns) : null;
-      // While the campaign's sale runs on this product, the seller's own markdown is hidden (it returns after).
-      if (primary && primary.discountType != null && primary.discountValue != null) {
-        if (Array.isArray(p.variants)) p.variants = p.variants.map((v: any) => ({ ...v, originalCompareAtPrice: v.compareAtPrice ?? null, compareAtPrice: null }));
-        if (p.compareAtPrice != null) p.compareAtPrice = null;
+      const campaigns = campaignsForProduct(raw.storeId ? campaignsByStore.get(raw.storeId) : undefined, ownIds(raw));
+      // Owner rule R1: an Edudeen offer is computed from the LIST price (compare-at when above the price) and only
+      // applies when strictly cheaper than the normal price; each variant gets its own `campaignPrice`.
+      let primary: ActiveCampaignForStore | null = null;
+      let appliedPrice: number | null = null;
+      if (Array.isArray(p.variants) && p.variants.length > 0) {
+        const r = applyCampaignsToVariants(campaigns, p.variants);
+        p.variants = r.variants; primary = r.primary; appliedPrice = r.appliedPrice;
+      } else {
+        const price = p.defaultVariantPrice ?? p.price;
+        const line = typeof price === 'number' ? pickBestCampaignForLine(campaigns.filter((c) => c.discountType != null && c.discountValue != null), price, p.compareAtPrice ?? null) : null;
+        if (line) { primary = line.campaign; appliedPrice = line.unit; }
       }
+      if (primary && p.compareAtPrice != null) p.compareAtPrice = null;
+      // Badge-only campaign (no discount configured): shown, never changes a price.
+      if (!primary) primary = pickPrimaryCampaignForBadge(campaigns.filter((c) => c.discountType == null || c.discountValue == null));
       return {
         ...p,
+        ...(appliedPrice != null ? { campaignPrice: appliedPrice } : {}),
         activeCampaign: primary
           ? {
               campaignId: primary.campaignId,
@@ -1531,9 +1530,11 @@ export class ProductsService {
     const categoryId = await this.resolveRootCategoryId(store.categoryId, body.categoryId);
 
     // Owner rule R3: the normal sale must stay below the Premium discount by the admin's minimum gap.
-    await assertPremiumGap(this.premiumService, store as any, premiumFieldFromBody(body).premiumDiscountPercent, variants.map((v: any) => ({ price: v.price, compareAtPrice: v.compareAtPrice ?? null })));
+    await assertPremiumGap(this.premiumService, store as any, premiumFieldsFromBody(body).premiumDiscountPercent, variants.map((v: any) => ({ price: v.price, compareAtPrice: v.compareAtPrice ?? null })), premiumFieldsFromBody(body).premiumOptOut === true);
 
     const campaignIds = body.campaignIds === undefined ? [] : await this.marketingService.resolveProductCampaignIds(String(store._id), body.campaignIds);
+    // Owner rule R3: a product is in a platform sale OR has a Premium offer, never both.
+    assertOfferExclusive(store as any, { ...premiumFieldsFromBody(body), campaignIds });
     const slug = await generateUniqueSlug(productModel, name);
 
     const product = await productModel.create({
@@ -1542,7 +1543,7 @@ export class ProductsService {
       name,
       slug,
       campaignIds,
-      ...premiumFieldFromBody(body),
+      ...premiumFieldsFromBody(body),
       description: description ?? null,
       productType: 'physical',
       type: 'physical',
@@ -1711,12 +1712,14 @@ export class ProductsService {
     await this.assertCourseReady(null, delivery.deliveryFormat, status ? resolveSellerPublishStatus(status, null) : 'draft');
 
     // Owner rule R3 (normal sale vs Premium discount), on the base price and every license tier.
-    await assertPremiumGap(this.premiumService, store as any, premiumFieldFromBody(body).premiumDiscountPercent, [
+    await assertPremiumGap(this.premiumService, store as any, premiumFieldsFromBody(body).premiumDiscountPercent, [
       { price, compareAtPrice: compareAtPrice ?? null },
       ...(Array.isArray(body.licenseTiers) ? body.licenseTiers.map((t: any) => ({ price: Number(t?.price), compareAtPrice: t?.compareAtPrice ?? null })).filter((t: any) => Number.isFinite(t.price)) : []),
-    ]);
+    ], premiumFieldsFromBody(body).premiumOptOut === true);
 
     const campaignIds = body.campaignIds === undefined ? [] : await this.marketingService.resolveProductCampaignIds(String(store._id), body.campaignIds);
+    // Owner rule R3: a product is in a platform sale OR has a Premium offer, never both.
+    assertOfferExclusive(store as any, { ...premiumFieldsFromBody(body), campaignIds });
     const slug = await generateUniqueSlug(productModel, name);
 
     const product = await productModel.create({
@@ -1725,7 +1728,7 @@ export class ProductsService {
       name,
       slug,
       campaignIds,
-      ...premiumFieldFromBody(body),
+      ...premiumFieldsFromBody(body),
       description: description ?? null,
       productType: finalProductType,
       type: 'digital',
@@ -1929,7 +1932,16 @@ export class ProductsService {
       productUpdate.isListedOnEdudeen = isListedOnEdudeen;
     if (body.campaignIds !== undefined)
       productUpdate.campaignIds = await this.marketingService.resolveProductCampaignIds(product.storeId, body.campaignIds);
-    Object.assign(productUpdate, premiumFieldFromBody(body)); // seller-funded Premium member price override (1-50 or null)
+    Object.assign(productUpdate, premiumFieldsFromBody(body)); // seller-funded Premium member price override (1-50 or null) + opt-out
+    // Owner rule R3: platform sale XOR Premium offer (checked only when this request touches one of them).
+    if (body.campaignIds !== undefined || body.premiumDiscountPercent !== undefined || body.premiumOptOut !== undefined) {
+      const offerStore = await this.databaseService.repositories.storeModel.findById(product.storeId).select('premiumDiscount').lean();
+      assertOfferExclusive(offerStore as any, {
+        premiumDiscountPercent: productUpdate.premiumDiscountPercent !== undefined ? productUpdate.premiumDiscountPercent : (product as any).premiumDiscountPercent,
+        premiumOptOut: productUpdate.premiumOptOut !== undefined ? productUpdate.premiumOptOut : (product as any).premiumOptOut,
+        campaignIds: productUpdate.campaignIds ?? (product as any).campaignIds,
+      });
+    }
     if (status !== undefined) {
       assertSellerStatus(status);
       productUpdate.status = resolveSellerPublishStatus(status, product);
@@ -1997,9 +2009,9 @@ export class ProductsService {
 
     // Owner rule R3 - only when this request touches prices / the Premium percent (never for unrelated edits of an
     // existing product, so legacy listings stay editable).
-    if (this.premiumService && (price !== undefined || compareAtPrice !== undefined || body.premiumDiscountPercent !== undefined || body.licenseTiers !== undefined)) {
+    if (this.premiumService && (price !== undefined || compareAtPrice !== undefined || body.premiumDiscountPercent !== undefined || body.premiumOptOut !== undefined || body.licenseTiers !== undefined)) {
       const gapStore = await this.databaseService.repositories.storeModel.findById(product.storeId).select('premiumDiscount').lean();
-      const own = body.premiumDiscountPercent !== undefined ? premiumFieldFromBody(body).premiumDiscountPercent : (product as any).premiumDiscountPercent;
+      const own = body.premiumDiscountPercent !== undefined ? premiumFieldsFromBody(body).premiumDiscountPercent : (product as any).premiumDiscountPercent;
       const current: any[] = await productVariantModel.find({ productId, isDelete: false, status: 'active' }).select('price compareAtPrice isDefault options').lean();
       const prices: Array<{ price: number; compareAtPrice?: number | null }> = current.map((v) =>
         product.type !== 'physical' && v.isDefault
@@ -2008,7 +2020,7 @@ export class ProductsService {
       if (Array.isArray(body.licenseTiers)) {
         for (const t of body.licenseTiers) if (Number.isFinite(Number(t?.price))) prices.push({ price: Number(t.price), compareAtPrice: t?.compareAtPrice ?? null });
       }
-      await assertPremiumGap(this.premiumService, gapStore as any, own, prices);
+      await assertPremiumGap(this.premiumService, gapStore as any, own, prices, (productUpdate.premiumOptOut !== undefined ? productUpdate.premiumOptOut : (product as any).premiumOptOut) === true);
     }
 
     const updatedProduct =

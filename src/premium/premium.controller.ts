@@ -28,7 +28,7 @@ export class PremiumController {
 
   /** Public: platform offer %, fee on premium sales, min gap, and (with ?type=&currency=) the normal platform fee for that product type. */
   @Get('terms')
-  terms(@Query('type') type?: string, @Query('currency') currency?: string) { return this.premium.getTerms(type, currency); }
+  terms(@Query('type') type?: string, @Query('currency') currency?: string, @Query('storeId') storeId?: string) { return this.premium.getTerms(type, currency, storeId); }
 
   /** Seller: products whose normal sale is too close to their Premium discount (warning list for the store settings card). */
   @ApiBearerAuth() @UseGuards(JwtAuthGuard, RolesGuard) @Roles('seller')

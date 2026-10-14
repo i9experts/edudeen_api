@@ -158,6 +158,10 @@ export class InventoryService {
         defaultVariantId: defaultVariant?._id ?? null,
         minPrice,
         maxPrice,
+        // Offers (seller bulk tool): platform sales this product is in + its Premium member offer
+        campaignIds: Array.isArray(product.campaignIds) ? product.campaignIds : [],
+        premiumDiscountPercent: product.premiumDiscountPercent ?? null,
+        premiumOptOut: product.premiumOptOut === true,
         // digital-only — full config so re-opening Edit repopulates correctly
         digital: product.digital ?? null,
       };

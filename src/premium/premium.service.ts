@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model } from 'mongoose';
@@ -9,6 +9,7 @@ import { RedisService } from '../redis/redis.service';
 import { UploadService } from '../upload/upload.service';
 import { AdminConfigService } from '../admin-config/admin-config.service';
 import { ExchangeRateService } from '../exchange-rate/exchange-rate.service';
+import { CommissionRulesService } from '../commission-rules/commission-rules.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NOTIFICATION_TYPES } from '../notifications/notification.types';
@@ -55,6 +56,7 @@ export class PremiumService {
     @InjectModel(PremiumPayment.name) private readonly paymentModel: Model<PremiumPaymentDocument>,
     @InjectModel(PremiumCouponIssue.name) private readonly couponIssueModel: Model<PremiumCouponIssueDocument>,
     @InjectModel(PremiumSettings.name) private readonly settingsModel: Model<PremiumSettingsDocument>,
+    @Optional() private readonly commissionRules?: CommissionRulesService,
   ) {}
 
   getEntitlements(userId?: string | null) { return this.entitlements.getEntitlements(userId); }
@@ -170,12 +172,15 @@ export class PremiumService {
   /**
    * Public / seller-readable: the numbers the seller's earnings calculator and the sale-vs-premium rule use.
    * `type` (physical | digital | educational | course) adds the normal per-type platform fee; `currency` converts a fixed fee.
+   * `normalFee` is the fee ACTUALLY charged on a normal sale: PlatformConfig.platformFees[type] when set (source
+   * 'platform_fees'), else the legacy commission-rule rate for the store (source 'commission_rules' - the same fallback
+   * FinanceService.recordSale uses; per-store override when `storeId` is given). null = no fee can be determined.
    */
-  async getTerms(type?: string, currency?: string) {
+  async getTerms(type?: string, currency?: string, storeId?: string) {
     const settings = await this.entitlements.getSettings();
     const t = termsFromSettings(settings);
     const feeType = type === 'physical' ? 'physical' : 'digital';
-    let normalFee: { type: string; mode: 'percentage' | 'fixed'; value: number; fixedAmountInCurrency: number | null; currency: string | null } | null = null;
+    let normalFee: { type: string; mode: 'percentage' | 'fixed'; value: number; fixedAmountInCurrency: number | null; currency: string | null; source: 'platform_fees' | 'commission_rules' } | null = null;
     try {
       const fees: any = await this.adminConfig.getPlatformFees();
       const rule = fees?.[feeType];
@@ -185,12 +190,21 @@ export class PremiumService {
           const cur = currency === 'PKR' ? 'PKR' : 'USD';
           if (cur === 'USD') converted = rule.value;
           else { const rate = await this.pkrRate(); converted = rate ? Math.round(rule.value * rate) : null; }
-          normalFee = { type: feeType, mode: 'fixed', value: rule.value, fixedAmountInCurrency: converted, currency: cur };
+          normalFee = { type: feeType, mode: 'fixed', value: rule.value, fixedAmountInCurrency: converted, currency: cur, source: 'platform_fees' };
         } else {
-          normalFee = { type: feeType, mode: 'percentage', value: rule.value, fixedAmountInCurrency: null, currency: null };
+          normalFee = { type: feeType, mode: 'percentage', value: rule.value, fixedAmountInCurrency: null, currency: null, source: 'platform_fees' };
         }
       }
     } catch { /* terms still useful without the normal fee */ }
+    if (!normalFee && this.commissionRules && typeof storeId === 'string' && isValidObjectId(storeId)) {
+      try {
+        const { rate, source } = await this.commissionRules.resolveRate(storeId);
+        // 'hardcoded_fallback' with 0 = no rule exists at all: the fee is NOT set, never present it as 0%.
+        if (source !== 'hardcoded_fallback' || rate > 0) {
+          normalFee = { type: feeType, mode: 'percentage', value: Math.round(rate * 10000) / 100, fixedAmountInCurrency: null, currency: null, source: 'commission_rules' };
+        }
+      } catch { /* leave null */ }
+    }
     return {
       success: true,
       data: {
@@ -210,20 +224,23 @@ export class PremiumService {
     const store: any = await repos.storeModel.findOne({ _id: storeId, sellerId, isDelete: false }).select('premiumDiscount').lean();
     if (!store) throw new NotFoundException('Store not found');
     const gap = termsFromSettings(await this.entitlements.getSettings()).minGapPercent;
-    const products: any[] = await repos.productModel.find({ storeId, isDelete: false, status: { $ne: 'inactive' } }).select('name premiumDiscountPercent').limit(2000).lean();
+    const products: any[] = await repos.productModel.find({ storeId, isDelete: false, status: { $ne: 'inactive' } }).select('name premiumDiscountPercent premiumOptOut campaignIds').limit(2000).lean();
     const variants: any[] = products.length
       ? await repos.productVariantModel.find({ productId: { $in: products.map((p) => String(p._id)) }, isDelete: false, status: 'active' }).select('productId price compareAtPrice').lean()
       : [];
     const byProduct = new Map<string, any[]>();
     for (const v of variants) { const k = String(v.productId); if (!byProduct.has(k)) byProduct.set(k, []); byProduct.get(k)!.push(v); }
     const conflicts: Array<{ productId: string; name: string; premiumPercent: number; salePercent: number; message: string }> = [];
+    const bothOffers: Array<{ productId: string; name: string; premiumPercent: number }> = [];
     for (const p of products) {
       const pct = premiumPercentFor(p, store);
+      // legacy data: a product that has a Premium offer AND is ticked for a platform sale (they are exclusive now)
+      if (pct > 0 && Array.isArray(p.campaignIds) && p.campaignIds.length > 0) bothOffers.push({ productId: String(p._id), name: p.name, premiumPercent: pct });
       const vs = byProduct.get(String(p._id)) ?? [];
       const message = premiumGapViolation(pct, vs, gap);
       if (message) conflicts.push({ productId: String(p._id), name: p.name, premiumPercent: pct, salePercent: Math.round(Math.max(...vs.map((v) => normalSalePercent(v.price, v.compareAtPrice))) * 10) / 10, message });
     }
-    return { success: true, data: { minGapPercent: gap, conflicts } };
+    return { success: true, data: { minGapPercent: gap, conflicts, bothOffers } };
   }
 
   // ── plans ────────────────────────────────────────────────────────────────

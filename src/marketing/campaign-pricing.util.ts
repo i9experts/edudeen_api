@@ -61,6 +61,98 @@ export function pickBestCampaign(
   return best;
 }
 
+// ── Per-line campaign price (owner rule R1) ─────────────────────────────────────────────────────────────────────────
+//
+// An offer from Edudeen is computed from the LIST price (compare-at when it is above the selling price, else the price):
+//     percentage:  unit = list - list x pct/100          fixed:  unit = list - amount
+// The buyer pays min(normal price, campaign unit): the campaign only applies when it is STRICTLY cheaper than what the
+// buyer would already pay (a tie stays normal). `discount` is measured against that normal price, so for a
+// platform-sponsored campaign it is exactly what the platform reimburses (seller is credited their own price), and for a
+// seller-sponsored one it is what the seller gives up (seller receives what the buyer pays).
+
+export interface CampaignLinePrice {
+  campaign: ActiveCampaignForStore;
+  /** the base the offer was computed from */
+  listUnit: number;
+  /** what the buyer pays per unit under the campaign */
+  unit: number;
+  /** normal price - unit (> 0) */
+  discount: number;
+}
+
+/** The list price: compare-at when it is above the selling price, else the price (same base as Edudeen Premium). */
+export function campaignListUnit(price: number, compareAtPrice?: number | null): number {
+  return typeof compareAtPrice === 'number' && compareAtPrice > price ? compareAtPrice : price;
+}
+
+/** One campaign on one line. `normalUnit` = what the buyer pays without the campaign (default: `price`). null = does not apply. */
+export function campaignLinePrice(
+  campaign: ActiveCampaignForStore, price: number, compareAtPrice?: number | null, normalUnit: number = price,
+): CampaignLinePrice | null {
+  if (!campaign.discountType || campaign.discountValue == null || !(price > 0)) return null;
+  const listUnit = campaignListUnit(price, compareAtPrice);
+  const off = campaign.discountType === 'percentage'
+    ? round(listUnit * (Math.min(campaign.discountValue, 100) / 100))
+    : Math.min(campaign.discountValue, listUnit);
+  const unit = round(Math.max(0, listUnit - off));
+  if (!(unit < normalUnit)) return null;
+  return { campaign, listUnit, unit, discount: round(normalUnit - unit) };
+}
+
+/** Best campaign for a line: the lowest resulting unit price; ties break on soonest-ending. null when none applies. */
+export function pickBestCampaignForLine(
+  campaigns: ActiveCampaignForStore[], price: number, compareAtPrice?: number | null, normalUnit: number = price,
+): CampaignLinePrice | null {
+  let best: CampaignLinePrice | null = null;
+  for (const c of campaigns) {
+    const r = campaignLinePrice(c, price, compareAtPrice, normalUnit);
+    if (!r) continue;
+    if (!best || r.unit < best.unit || (r.unit === best.unit && c.endDate < best.campaign.endDate)) best = r;
+  }
+  return best;
+}
+
+/**
+ * Display: stamps each variant the campaign really discounts with `campaignPrice` / `campaignId` / `campaignListPrice`
+ * (and hides the seller's own markdown on it - `originalCompareAtPrice` keeps it). `campaigns` = the campaigns this
+ * product is IN. `primary` = the campaign behind the cheapest variant (null when none applies).
+ */
+export function applyCampaignsToVariants(campaigns: ActiveCampaignForStore[], variants: any[]): { variants: any[]; primary: ActiveCampaignForStore | null; appliedPrice: number | null } {
+  const withDiscount = campaigns.filter((c) => c.discountType != null && c.discountValue != null);
+  let cheapest: { unit: number; campaign: ActiveCampaignForStore } | null = null;
+  const out = variants.map((v: any) => {
+    const r = withDiscount.length && typeof v.price === 'number' ? pickBestCampaignForLine(withDiscount, v.price, v.compareAtPrice ?? null) : null;
+    if (!r) return v;
+    if (!cheapest || r.unit < cheapest.unit) cheapest = { unit: r.unit, campaign: r.campaign };
+    return { ...v, campaignPrice: r.unit, campaignId: r.campaign.campaignId, campaignListPrice: r.listUnit, originalCompareAtPrice: v.compareAtPrice ?? null, compareAtPrice: null };
+  });
+  const c = cheapest as { unit: number; campaign: ActiveCampaignForStore } | null;
+  return { variants: out, primary: c ? c.campaign : null, appliedPrice: c ? c.unit : null };
+}
+
+/** Cart/checkout: raw campaign docs -> campaigns whose fixed value is expressed in `targetCurrency` (a fixed one that cannot be converted is left out). */
+export async function campaignsInCurrency(
+  rawCampaigns: any[],
+  targetCurrency: string,
+  convert?: (amount: number, from: string, to: string) => Promise<number>,
+): Promise<Array<ActiveCampaignForStore & { origValue: number | null; valueCurrency: string | null }>> {
+  const out: Array<ActiveCampaignForStore & { origValue: number | null; valueCurrency: string | null }> = [];
+  for (const c of rawCampaigns) {
+    let value: number | null = c.discountValue ?? null;
+    const valueCurrency: string | null = c.discountType === 'fixed' ? (c.currency ?? 'USD') : null;
+    if (c.discountType === 'fixed' && value != null && valueCurrency && valueCurrency !== targetCurrency) {
+      if (!convert) continue;
+      try { value = await convert(value, valueCurrency, targetCurrency); } catch { continue; }
+    }
+    out.push({
+      campaignId: String(c._id ?? c.campaignId), name: c.name, discountType: c.discountType ?? null, discountValue: value,
+      currency: targetCurrency, endDate: c.endDate, sponsorType: c.sponsorType ?? 'seller',
+      origValue: c.discountValue ?? null, valueCurrency,
+    });
+  }
+  return out;
+}
+
 export interface CartCampaignDiscount {
   campaignId: string;
   name: string;

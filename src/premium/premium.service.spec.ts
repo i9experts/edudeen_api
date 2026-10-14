@@ -180,7 +180,7 @@ describe('PremiumEntitlementsService', () => {
     expect((gd.variants[0] as any).compareAtPrice).toBe(100); // a guest keeps seeing the seller's normal sale
   });
   it('decorateProducts: a percentage campaign that beats premium keeps the campaign badge and offers no premium price; one that loses is replaced by premium', async () => {
-    const mk = (pct: number) => ({ _id: 'p', storeId: 'A', activeCampaign: { campaignId: 'c', discountType: 'percentage', discountValue: pct }, variants: [{ price: 100, compareAtPrice: null, originalCompareAtPrice: null }] });
+    const mk = (pct: number) => ({ _id: 'p', storeId: 'A', activeCampaign: { campaignId: 'c', discountType: 'percentage', discountValue: pct }, variants: [{ price: 100, compareAtPrice: null, originalCompareAtPrice: null, campaignPrice: 100 - pct }] });
     const settings = new Map<string, any>([['A', { premiumDiscount: { enabled: true, percent: 20 } }]]);
     const member = make({ status: 'active', planSnapshot: { benefits: {} } }).svc;
     const [better, worse] = await member.decorateProducts([mk(40), mk(10)] as any, 'u1', { storeSettings: settings }); // premium = 25 (20 + 5)
@@ -236,6 +236,24 @@ describe('admin settings + public terms (R4)', () => {
     const physical: any = await svc.getTerms('physical', 'PKR');
     expect(physical.data.normalFee).toMatchObject({ type: 'physical', mode: 'fixed', value: 1, fixedAmountInCurrency: 280, currency: 'PKR' });
     expect(((await svc.getTerms('educational')) as any).data.normalFee.type).toBe('digital');
+  });
+  it('GET terms normalFee: platformFees set -> that value (source platform_fees); unset -> the commission rule of the store (source commission_rules)', async () => {
+    const STORE = '64f0c0ffee0c0ffee0c0ff0a';
+    const withFees = settingsSvc(null, { digital: { mode: 'percentage', value: 10 } });
+    (withFees.svc as any).commissionRules = { resolveRate: jest.fn().mockResolvedValue({ rate: 0.2, source: 'seller_override' }) };
+    expect(((await withFees.svc.getTerms('digital', 'USD', STORE)) as any).data.normalFee).toMatchObject({ mode: 'percentage', value: 10, source: 'platform_fees' });
+    const unset = settingsSvc(null, null);
+    const resolveRate = jest.fn().mockResolvedValue({ rate: 0.1, source: 'seller_override' });
+    (unset.svc as any).commissionRules = { resolveRate };
+    expect(((await unset.svc.getTerms('digital', 'USD', STORE)) as any).data.normalFee).toMatchObject({ type: 'digital', mode: 'percentage', value: 10, source: 'commission_rules' });
+    expect(resolveRate).toHaveBeenCalledWith(STORE);
+  });
+  it('GET terms normalFee is null (never a silent 0%) when no fee can be determined', async () => {
+    const STORE = '64f0c0ffee0c0ffee0c0ff0a';
+    const none = settingsSvc(null, null);
+    (none.svc as any).commissionRules = { resolveRate: jest.fn().mockResolvedValue({ rate: 0, source: 'hardcoded_fallback' }) };
+    expect(((await none.svc.getTerms('digital', 'USD', STORE)) as any).data.normalFee).toBeNull();
+    expect(((await none.svc.getTerms('digital')) as any).data.normalFee).toBeNull();
   });
   it('GET terms with the platform offer off reports 0%', async () => {
     const { svc } = settingsSvc({ platformDiscount: { enabled: false, percent: 5 }, premiumSellerFeePercent: 5, minGapPercent: 5 });

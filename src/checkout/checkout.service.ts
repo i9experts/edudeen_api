@@ -11,7 +11,8 @@ import { licenseFromVariant } from 'src/products/product-input.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-benefits.service';
 import { MarketingService } from 'src/marketing/marketing.service';
-import { loadCampaignContext, pickBestCampaignForItems } from 'src/marketing/campaign-eligibility.util';
+import { campaignsForProduct } from 'src/marketing/campaign-eligibility.util';
+import { campaignsInCurrency, pickBestCampaignForLine } from 'src/marketing/campaign-pricing.util';
 import { AdminConfigService } from 'src/admin-config/admin-config.service';
 import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import { SUPPORTED_CURRENCIES, FxSnapshot } from 'src/exchange-rate/schemas/exchange-rate.schema';
@@ -437,46 +438,49 @@ export class CheckoutService {
         isPremiumBuyer ? { earlyAccessHours: premiumEnt!.earlyAccessHours } : {},
       );
 
-    // Per-product participation (campaign-eligibility.util.ts): each campaign is valued on ITS eligible lines only and
-    // the discount is spread over those lines; other lines keep full price and stay open to the seller's own sale.
-    const campaignCtx = await loadCampaignContext(
-      productModel,
-      cartStoreIds,
-      [...new Set([...activeCampaignsByStore.values()].flat().map((c) => c.campaignId))],
-      [...new Set(checkoutItems.map((i) => i.productId))],
-    );
-
+    // Pass 3 is PER LINE (owner rules R1/R2). A line is in a campaign only when its product carries the campaign id (strict
+    // opt-in, see campaign-eligibility.util.ts). The offer is computed from the LIST price (compare-at when above the
+    // selling price, else the price) and applies only when strictly cheaper than what the buyer already pays for the line
+    // (the selling price, or the subscriber price). `campaignDiscountUSD` = normal unit - campaign unit (x qty): for a
+    // platform-sponsored sale that is exactly what the platform reimburses (the seller is credited their own price), for a
+    // seller-sponsored sale it is what the seller gives up (the seller receives what the buyer pays).
     for (const storeId of cartStoreIds) {
       const campaigns = activeCampaignsByStore.get(storeId);
       if (!campaigns || campaigns.length === 0) continue;
-
       const allStoreItems = checkoutItems.filter((i) => i.storeId === storeId);
-      const best = pickBestCampaignForItems(
-        campaigns,
-        storeId,
-        allStoreItems.map((i) => ({ productId: i.productId, amount: i.totalPrice })),
-        campaignCtx.campaignIdsByProduct,
-        campaignCtx.selection,
-      );
-      if (!best || best.discountAmount <= 0) continue;
-      const storeItems = allStoreItems.filter((i) => best.productIds.includes(i.productId));
-
-      this.distributeCampaignDiscount(
-        storeItems,
-        best.discountAmount,
-        best.campaign.campaignId,
-        best.campaign.sponsorType,
-      );
-      campaignSavingsUSD = this.round(campaignSavingsUSD + best.discountAmount);
-      appliedCampaigns.push({
-        campaignId: best.campaign.campaignId,
-        name: best.campaign.name,
-        storeId,
-        discountUSD: best.discountAmount,
-        sponsorType: best.campaign.sponsorType,
-      });
+      const storeCurrency = allStoreItems[0]?.currency;
+      const usable = storeCurrency
+        ? await campaignsInCurrency(
+            campaigns as any[], storeCurrency,
+            (amount, from, to) => (this.exchangeRateService as any).convert(amount, from, to),
+          )
+        : [];
+      const byCampaign = new Map<string, { sponsorType: 'seller' | 'platform'; name: string; discount: number }>();
+      for (const item of allStoreItems) {
+        const productDoc = productById.get(item.productId);
+        const variantDoc = variantById.get(String(item.variantId));
+        const mine = campaignsForProduct(usable, productDoc?.campaignIds);
+        if (!mine.length || !variantDoc) continue;
+        const normalUnit = item.quantity > 0 ? this.round(item.totalPrice / item.quantity) : item.price;
+        const line = pickBestCampaignForLine(mine, variantDoc.price, variantDoc.compareAtPrice ?? null, normalUnit);
+        if (!line) continue;
+        const lineDiscount = this.round(line.discount * item.quantity);
+        if (lineDiscount <= 0) continue;
+        if (item.originalPrice == null) item.originalPrice = item.price;
+        item.campaignId = line.campaign.campaignId;
+        item.campaignDiscountUSD = lineDiscount;
+        item.campaignSponsorType = line.campaign.sponsorType;
+        item.totalPrice = this.round(item.totalPrice - lineDiscount);
+        item.price = item.quantity > 0 ? this.round(item.totalPrice / item.quantity) : item.totalPrice;
+        const agg = byCampaign.get(line.campaign.campaignId) ?? { sponsorType: line.campaign.sponsorType, name: line.campaign.name, discount: 0 };
+        agg.discount = this.round(agg.discount + lineDiscount);
+        byCampaign.set(line.campaign.campaignId, agg);
+        campaignSavingsUSD = this.round(campaignSavingsUSD + lineDiscount);
+      }
+      for (const [campaignId, agg] of byCampaign) {
+        appliedCampaigns.push({ campaignId, name: agg.name, storeId, discountUSD: agg.discount, sponsorType: agg.sponsorType });
+      }
     }
-
     // Pass 3.5: seller's own automatic (no-code) discount (DiscountsService)
     // — same "computed server-side, never client-supplied" rule as campaign
     // discount above, resolved on top of it. An item that already got a
@@ -1718,32 +1722,6 @@ export class CheckoutService {
       item.totalPriceBeforeCoupon = item.totalPrice;
       item.couponDiscountUSD = shareInItemCurrency;
       item.totalPrice = this.round(item.totalPrice - shareInItemCurrency);
-      item.price =
-        item.quantity > 0
-          ? this.round(item.totalPrice / item.quantity)
-          : item.totalPrice;
-    });
-  }
-
-  /** Distributes an automatic platform-campaign discount across a store's
-   *  items, mutating price/totalPrice in place. Unlike a coupon, a campaign
-   *  discount is never toggled off by the buyer, so it needs no "before"
-   *  revert fields — it's simply recomputed fresh every time a checkout is
-   *  (re)created from the cart. `originalPrice` is set only if a subscriber
-   *  discount hasn't already set it, so it always reflects the true pre-any-
-   *  discount price for receipt display. */
-  private distributeCampaignDiscount(
-    storeItems: any[],
-    totalDiscount: number,
-    campaignId: string,
-    sponsorType: 'seller' | 'platform',
-  ) {
-    this.proportionallyDistribute(storeItems, totalDiscount, (item, share) => {
-      if (item.originalPrice == null) item.originalPrice = item.price;
-      item.campaignId = campaignId;
-      item.campaignDiscountUSD = share;
-      item.campaignSponsorType = sponsorType;
-      item.totalPrice = this.round(item.totalPrice - share);
       item.price =
         item.quantity > 0
           ? this.round(item.totalPrice / item.quantity)

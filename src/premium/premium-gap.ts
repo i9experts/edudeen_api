@@ -14,10 +14,11 @@ export async function assertPremiumGap(
   store: { premiumDiscount?: { enabled?: boolean; percent?: number } | null } | null | undefined,
   productPercent: number | null | undefined,
   prices: Array<{ price: number; compareAtPrice?: number | null }>,
+  premiumOptOut = false,
 ): Promise<void> {
   if (!premium || typeof premium.getTerms !== 'function' || !prices.length) return;
   if (!prices.some((p) => typeof p.compareAtPrice === 'number' && p.compareAtPrice > p.price)) return;
-  const sellerPct = premiumPercentFor({ premiumDiscountPercent: productPercent ?? null }, store);
+  const sellerPct = premiumPercentFor({ premiumDiscountPercent: productPercent ?? null, premiumOptOut }, store);
   if (!sellerPct) return;
   const { minGapPercent } = await premium.getTerms();
   const message = premiumGapViolation(sellerPct, prices, minGapPercent);

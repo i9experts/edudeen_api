@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
-import { resolveCartCampaignDiscount } from '../marketing/campaign-pricing.util';
-import { isProductInCampaign, loadCampaignContext } from '../marketing/campaign-eligibility.util';
+import { campaignsInCurrency, CampaignLinePrice, CartCampaignDiscount, pickBestCampaignForLine } from '../marketing/campaign-pricing.util';
+import { campaignsForProduct } from '../marketing/campaign-eligibility.util';
 import { isValidObjectId } from 'mongoose';
 import { sanitizeDigitalForPublicView } from 'src/products/product-public-view.util';
 import { Injectable, BadRequestException, ForbiddenException, Optional } from '@nestjs/common';
@@ -223,7 +223,7 @@ export class CartService {
       const products = productIds.length
         ? await this.databaseService.repositories.productModel
             .find({ _id: { $in: productIds } })
-            .select('images sellerId status isDelete storeId premiumDiscountPercent')
+            .select('images sellerId status isDelete storeId premiumDiscountPercent premiumOptOut campaignIds')
             .lean()
         : [];
       const productById = new Map(
@@ -305,9 +305,9 @@ export class CartService {
         };
       });
 
-      // The store's running sale (admin campaign) — the same rule checkout applies (best single
-      // campaign on the subtotal), so the cart shows the discount instead of revealing it only
-      // at the last checkout step. Coupons / gift cards / membership prices are applied at checkout.
+      // The store's running sales (admin campaigns) - the same rules checkout applies, priced PER LINE (owner rules R1/R2):
+      // only products the seller ticked for the campaign are in it, the offer is computed from the LIST price
+      // (compare-at when above the price) and applies only when strictly cheaper than the normal price.
       const realNow = new Date();
       // Premium early access: an active member's cart already prices a campaign that starts within their earlyAccessHours.
       const premiumEnt = this.premium ? await this.premium.getEntitlements(userId) : null;
@@ -326,47 +326,57 @@ export class CartService {
         })
         .select('name endDate discountType discountValue currency sponsorType')
         .lean();
-      // Per-product participation (campaign-eligibility.util.ts): the sale covers only the lines whose product is in
-      // the campaign, so each campaign is valued on its own eligible lines.
-      const { selection, campaignIdsByProduct } = await loadCampaignContext(
-        this.databaseService.repositories.productModel, [storeId],
-        (rawCampaigns as any[]).map((c) => String(c._id)), productIds as string[],
-      );
-      const inCampaign = (campaignId: string, productId: string) =>
-        isProductInCampaign(campaignId, storeId, campaignIdsByProduct.get(productId), selection);
-      const resolveCampaign = (excluded: Set<string>) => resolveCartCampaignDiscount(
-        rawCampaigns as any[], excluded.size ? items.filter((i) => !excluded.has(lineKey(i))).reduce((s, i) => s + i.itemTotal, 0) : totalPrice, cartCurrency,
+      const cartCampaigns = await campaignsInCurrency(
+        rawCampaigns as any[], cartCurrency,
         this.exchangeRateService ? (amount, from, to) => this.exchangeRateService!.convert(amount, from, to) : undefined,
-        (campaignId) => items.filter((i) => inCampaign(campaignId, i.productId) && !excluded.has(lineKey(i))).reduce((s, i) => s + i.itemTotal, 0),
       );
-      let campaignDiscount = await resolveCampaign(new Set());
+      const campaignMeta = new Map(cartCampaigns.map((c) => [c.campaignId, c]));
+      const campaignLines = new Map<string, CampaignLinePrice>();
+      for (const i of items) {
+        const mine = campaignsForProduct(cartCampaigns, (productById.get(i.productId) as any)?.campaignIds);
+        const r = pickBestCampaignForLine(mine, i.unitPrice, compareAtByVariant.get(i.productVariantId) ?? null);
+        if (r) campaignLines.set(lineKey(i), r);
+      }
       // Premium competes with the normal pipeline: a member's line gets the premium price only when it is strictly lower than
-      // what a normal buyer pays for the same line (list price less this line's share of the running sale); otherwise the
-      // campaign price shows and no premium price is offered. Checkout makes the same comparison.
+      // what a normal buyer pays for the same line (the campaign price when one applies); otherwise the campaign price shows.
+      // Checkout makes the same comparison.
       if (premiumEnt?.isPremium && premiumTerms) {
-        const eligibleTotal = campaignDiscount ? items.filter((i) => inCampaign(campaignDiscount!.campaignId, i.productId)).reduce((s, i) => s + i.itemTotal, 0) : 0;
         for (const i of items) {
           const sellerPct = sellerPctOf(i.productId);
           if (!sellerPct) continue;
           const calc = premiumLinePrice(i.unitPrice, compareAtByVariant.get(i.productVariantId), sellerPct, premiumTerms.platformPercent);
           if (!calc.applies) continue;
-          const share = campaignDiscount && eligibleTotal > 0 && inCampaign(campaignDiscount.campaignId, i.productId) ? (campaignDiscount.amount ?? 0) * (i.itemTotal / eligibleTotal) : 0;
-          const normalUnit = i.unitPrice - (i.quantity > 0 ? share / i.quantity : 0);
-          if (calc.unit < normalUnit) premiumLines.set(lineKey(i), { calc, sellerPct });
+          const normalUnit = campaignLines.get(lineKey(i))?.unit ?? i.unitPrice;
+          if (calc.unit < normalUnit) { premiumLines.set(lineKey(i), { calc, sellerPct }); campaignLines.delete(lineKey(i)); }
         }
-        if (premiumLines.size && campaignDiscount && [...premiumLines.keys()].some((k) => items.some((i) => lineKey(i) === k && inCampaign(campaignDiscount!.campaignId, i.productId)))) {
-          campaignDiscount = await resolveCampaign(new Set(premiumLines.keys()));
-        }
-      }      // Edudeen Premium: the seller's chosen member discount. Everyone gets the teaser `premiumPercent`; only an active
-      // member gets `premiumUnitPrice` / `premiumDiscountPercent` (display only - checkout is the source of truth and
-      // takes the best single seller-side discount per line, so lines on a campaign sale show no member price).
+      }
+      // Cart summary: one total; the label is the campaign that contributes the most.
+      const campaignTotals = new Map<string, number>();
+      let campaignAmount = 0;
+      for (const i of items) {
+        const r = campaignLines.get(lineKey(i));
+        if (!r) continue;
+        const amt = Math.round(r.discount * i.quantity * 100) / 100;
+        campaignAmount = Math.round((campaignAmount + amt) * 100) / 100;
+        campaignTotals.set(r.campaign.campaignId, Math.round(((campaignTotals.get(r.campaign.campaignId) ?? 0) + amt) * 100) / 100);
+      }
+      const topCampaignId = [...campaignTotals.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+      const topCampaign = topCampaignId ? campaignMeta.get(topCampaignId) : undefined;
+      const campaignDiscount: CartCampaignDiscount | null = topCampaign && campaignAmount > 0
+        ? { campaignId: topCampaign.campaignId, name: topCampaign.name, amount: campaignAmount, currency: cartCurrency, discountType: topCampaign.discountType, discountValue: topCampaign.origValue, valueCurrency: topCampaign.valueCurrency }
+        : null;
+      // Edudeen Premium: the seller's chosen member discount. Everyone gets the teaser `premiumPercent`; only an active
+      // member gets `premiumUnitPrice` / `premiumDiscountPercent` (display only - checkout is the source of truth).
       let premiumSavings = 0;
       let premiumPlatformFunded = 0;
       const itemsWithFlag = items.map((i) => {
         const pl = premiumLines.get(lineKey(i));
-        const onCampaign = !pl && !!campaignDiscount && inCampaign(campaignDiscount.campaignId, i.productId);
+        const cl = campaignLines.get(lineKey(i));
+        const base = {
+          ...i, onCampaign: !pl && !!cl,
+          ...(!pl && cl ? { campaignId: cl.campaign.campaignId, campaignUnitPrice: cl.unit, campaignItemTotal: Math.round(cl.unit * i.quantity * 100) / 100, listPrice: cl.listUnit } : {}),
+        };
         const pct = sellerPctOf(i.productId);
-        const base = { ...i, onCampaign };
         if (!pct) return base;
         // Teaser for everyone: seller% + platform% combined, with the breakdown.
         const teaser = { premiumPercent: Math.round((pct + (premiumTerms?.platformPercent ?? 0)) * 100) / 100, premiumSellerPercent: pct, premiumPlatformPercent: premiumTerms?.platformPercent ?? 0 };
@@ -379,7 +389,6 @@ export class CartService {
           premiumItemTotal: Math.round(unit * i.quantity * 100) / 100, listPrice: pl.calc.listUnit,
         };
       });
-
       // Final response
       return {
         message: 'Cart fetched successfully',

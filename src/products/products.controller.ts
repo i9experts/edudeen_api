@@ -16,6 +16,7 @@ import {
 
 import { ProductsService } from './products.service';
 import { ProductStockService } from './product-stock.service';
+import { ProductOffersService } from './product-offers.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -26,6 +27,7 @@ export class productController {
   constructor(
     private readonly ProductsService: ProductsService,
     private readonly productStockService: ProductStockService,
+    private readonly productOffersService: ProductOffersService,
   ) {}
 
   @UseGuards(OptionalJwtAuthGuard)
@@ -256,6 +258,15 @@ export class productController {
   async bulkUpdateStock(@Req() req: any, @Body() body: any) {
     const { userId: sellerId } = req.user;
     return this.productStockService.bulkUpdateStock(sellerId, String(body?.storeId ?? ''), body?.updates);
+  }
+
+  // Bulk Premium / platform-sale membership for the seller product list: { storeId, productIds[<=200], action, percent?, campaignId? }.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Patch('bulk-offers')
+  async bulkOffers(@Req() req: any, @Body() body: any) {
+    const { userId: sellerId } = req.user;
+    return this.productOffersService.bulkOffers(sellerId, body);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

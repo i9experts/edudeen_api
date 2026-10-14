@@ -29,7 +29,7 @@ function world(seeds: Seed[], opts: { ent?: any; storePremium?: any; autoDiscoun
         premiumDiscount: opts.storePremium === undefined ? { enabled: true, percent: 20 } : opts.storePremium,
       });
     }
-    products.set(s.productId, { _id: s.productId, storeId: s.storeId, sellerId: `seller-${s.storeId}`, name: s.productId, type: 'digital', status: 'active', isDelete: false, images: [], premiumDiscountPercent: s.productPct ?? null });
+    products.set(s.productId, { _id: s.productId, storeId: s.storeId, sellerId: `seller-${s.storeId}`, name: s.productId, type: 'digital', status: 'active', isDelete: false, images: [], premiumDiscountPercent: s.productPct ?? null, campaignIds: opts.campaignPct ? ['c1'] : [] });
     variants.set(`v-${s.productId}`, { _id: `v-${s.productId}`, productId: s.productId, status: 'active', isDelete: false, price: s.price ?? 100, compareAtPrice: s.compareAt ?? null, currency: 'USD', unlimitedStock: true, stock: 0, options: [] });
     let cart = carts.find((c) => c.storeId === s.storeId);
     if (!cart) carts.push((cart = { userId, storeId: s.storeId, status: 'active', isDelete: false, items: [] }));
@@ -360,3 +360,51 @@ describe('seller credit math with Premium', () => {
     expect(so.platformSponsoredDiscountUSD).toBe(5);
     expect(feeItemsFor(so)).toEqual([{ type: 'digital', totalPrice: 80, quantity: 1, feePercent: 5 }]);
   });});
+
+describe('Platform campaign priced from the LIST price + strict per-product opt-in (owner rules R1/R2/R6)', () => {
+  const noPremium = { ent: NON_PREMIUM, storePremium: null };
+  const seeds = [{ storeId: 'A', productId: 'pa', price: 500, compareAt: 550 }];
+
+  it('10% mega sale on price 500 / compare 550 => buyer pays 495; platform-sponsored discount recorded = 5 (seller is credited 500)', async () => {
+    const { data } = await create(world(seeds, { ...noPremium, campaignPct: 10, campaignSponsor: 'platform' }));
+    const i = data.checkout.items[0];
+    expect(i).toMatchObject({ price: 495, totalPrice: 495, campaignDiscountUSD: 5, campaignSponsorType: 'platform', campaignId: 'c1', originalPrice: 500 });
+    expect(data.checkout.subtotal).toBe(495);
+    expect(data.checkout.campaignDiscountTotalUSD).toBe(5);
+    // PaymentService credits subtotal + platform-sponsored discount to the seller
+    expect(i.totalPrice + i.campaignDiscountUSD).toBe(500);
+  });
+
+  it('seller-sponsored: buyer pays 495 and the seller receives 495 (no reimbursement)', async () => {
+    const { data } = await create(world(seeds, { ...noPremium, campaignPct: 10, campaignSponsor: 'seller' }));
+    const i = data.checkout.items[0];
+    expect(i).toMatchObject({ totalPrice: 495, campaignSponsorType: 'seller' });
+    expect(feeItemsFor({ items: [i] }).length).toBe(1);
+  });
+
+  it('5% mega sale => 522.5 is not cheaper than the seller price 500: NO campaign applies, line stays normal', async () => {
+    const { data } = await create(world(seeds, { ...noPremium, campaignPct: 5 }));
+    const i = data.checkout.items[0];
+    expect(i.totalPrice).toBe(500);
+    expect(i.campaignDiscountUSD ?? 0).toBe(0);
+    expect(i.campaignId ?? null).toBeNull();
+    expect(data.checkout.campaignDiscountTotalUSD).toBe(0);
+  });
+
+  it('regression (bug report): a product the seller never ticked gets NO campaign price even though the store is a participant', async () => {
+    const w = world([{ storeId: 'A', productId: 'pa', price: 100 }], { ...noPremium, campaignPct: 30 });
+    (w.repos.productModel as any).find = jest.fn((f: any) => chain((f?._id?.$in ?? []).map((id: string) => ({ _id: id, storeId: 'A', sellerId: 'seller-A', name: id, type: 'digital', status: 'active', isDelete: false, images: [], campaignIds: [] }))));
+    const { data } = await create(w);
+    expect(data.checkout.items[0].totalPrice).toBe(100);
+    expect(data.checkout.items[0].campaignDiscountUSD ?? 0).toBe(0);
+  });
+
+  it('a product with an effective Premium offer is not discounted by a campaign for a NON-member either way; premiumOptOut turns the premium offer off for a member', async () => {
+    const w = world([{ storeId: 'A', productId: 'pa', price: 100 }], { ent: MEMBER, campaignPct: 10 });
+    (w.repos.productModel as any).find = jest.fn((f: any) => chain((f?._id?.$in ?? []).map((id: string) => ({ _id: id, storeId: 'A', sellerId: 'seller-A', name: id, type: 'digital', status: 'active', isDelete: false, images: [], premiumOptOut: true, campaignIds: ['c1'] }))));
+    const { data } = await create(w);
+    const i = data.checkout.items[0];
+    expect(i.totalPrice).toBe(90); // campaign, no premium (store default 20% ignored because of premiumOptOut)
+    expect(i.premiumDiscountPercent ?? 0).toBe(0);
+  });
+});

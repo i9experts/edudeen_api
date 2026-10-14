@@ -47,21 +47,18 @@ export class AdminMarketingService {
         const ids = (stores as any[]).map((s) => String(s._id));
         if (ids.length === 0) return;
         const cid = String(campaign._id);
-        const [autos, bundles, markdownVariants, selectedStores] = await Promise.all([
+        const [autos, bundles, markdownVariants] = await Promise.all([
           this.r.automaticDiscountModel.distinct('storeId', { storeId: { $in: ids }, isActive: true, isDelete: false }),
           this.r.bundleModel.distinct('storeId', { storeId: { $in: ids }, isActive: true, isDelete: false }),
           this.r.productVariantModel.find({ compareAtPrice: { $gt: 0 }, isDelete: false }).select('productId price compareAtPrice').limit(20000).lean(),
-          // stores that picked products for this campaign: only those products took part (others never did)
-          this.r.productModel.distinct('storeId', { storeId: { $in: ids }, isDelete: false, campaignIds: cid }),
         ]);
-        const selectedSet = new Set<string>((selectedStores as any[]).map(String));
         const markdownProductIds = (markdownVariants as any[]).filter((v) => v.compareAtPrice > v.price).map((v) => v.productId);
         const markdownProducts = markdownProductIds.length
           ? await this.r.productModel.find({ _id: { $in: markdownProductIds }, storeId: { $in: ids }, isDelete: false }).select('storeId campaignIds').lean()
           : [];
-        // a markdown only counts when its product was in the campaign (picked it, or the store never picked any)
+        // a markdown only counts when its product was in the campaign (the seller ticked it - strict opt-in)
         const markdownStores = (markdownProducts as any[])
-          .filter((p) => !selectedSet.has(String(p.storeId)) || (p.campaignIds ?? []).includes(cid))
+          .filter((p) => (p.campaignIds ?? []).includes(cid))
           .map((p) => p.storeId);
         const withOwnSale = new Set<string>([...autos, ...bundles, ...markdownStores].map(String));
         const BATCH = 25;
