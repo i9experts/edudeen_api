@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { IsString, IsOptional, IsIn } from 'class-validator';
+import { IsString, IsOptional, IsIn, IsNotEmpty, MaxLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { SUPPORTED_CURRENCIES } from 'src/exchange-rate/schemas/exchange-rate.schema';
 
@@ -8,16 +8,20 @@ export class AuthUpdateProfileDto {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @IsNotEmpty({ message: 'Name cannot be empty' })
+  @MaxLength(120)
   name?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @MaxLength(40)
   phone?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   address?: string;
 
   @ApiProperty({ required: false })
