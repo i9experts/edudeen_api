@@ -17,6 +17,7 @@ import { UpdateFxConfigDto } from './dto/update-fx-config.dto';
 import { UpdateSocialLinksDto } from './dto/update-social-links.dto';
 import { UpdatePlatformFeesDto } from './dto/update-platform-fees.dto';
 import { SOCIAL_LINK_KEYS } from './schemas/platform-config.schema';
+import { sanitizeSellerPage } from './seller-page.util';
 
 export type FeatureFlagKey =
   | 'aiStudio' | 'marketplace' | 'digitalUploads' | 'affiliateProgram'
@@ -372,6 +373,21 @@ export class AdminConfigService {
     await this.logChange('home_content_updated', 'Homepage content updated', meta);
     return { success: true, message: 'Homepage content updated', data: (config as any).homeContent };
   }
+  /** Admin-editable /become-a-seller page content. Sections sent replace the stored section; omitted ones are kept; null resets one to the built-in default. */
+  async updateSellerPage(body: Record<string, unknown>, meta: AuditMeta) {
+    const { set, unset } = sanitizeSellerPage(body);
+    if (!Object.keys(set).length && !Object.keys(unset).length) throw new BadRequestException('Send at least one section to update');
+    // A null/non-object sellerPage cannot take dotted paths - normalise it first.
+    await this.model.updateOne({ $or: [{ sellerPage: null }, { sellerPage: { $exists: false } }] }, { $set: { sellerPage: {} } });
+    const update: Record<string, unknown> = {};
+    if (Object.keys(set).length) update.$set = set;
+    if (Object.keys(unset).length) update.$unset = unset;
+    const config = await this.model.findOneAndUpdate({}, update, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
+    this.invalidateCache();
+    await this.logChange('seller_page_updated', `Become-a-seller page updated: ${[...Object.keys(set), ...Object.keys(unset)].map(k => k.replace('sellerPage.', '')).join(', ')}`, meta);
+    return { success: true, message: 'Become-a-seller page updated', data: (config as any).sellerPage ?? {} };
+  }
+
   /**
    * Public, read-only slice of the platform config — ONLY fields that are safe
    * for anyone to see (no bank details, no email/AI/fx internals). Used by the
@@ -390,6 +406,7 @@ export class AdminConfigService {
       data: {
         socialLinks,
         homeContent: (config as any).homeContent ?? {},
+        sellerPage: (config as any).sellerPage ?? {},
         payout: {
           frequency: config.payoutConfig?.payoutFrequency ?? 'monthly',
         },

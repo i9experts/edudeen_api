@@ -4,11 +4,13 @@ import { Faq, FaqSchema } from './schemas/faq.schema';
 import { FaqService } from './faq.service';
 import { FaqController } from './faq.controller';
 import { RedisModule } from 'src/redis/redis.module';
+import { AdminReauthModule } from '../admin-reauth/admin-reauth.module';
 
 @Module({
   imports: [
     MongooseModule.forFeature([{ name: Faq.name, schema: FaqSchema }]),
     RedisModule,
+    AdminReauthModule,
   ],
   controllers: [FaqController],
   providers: [FaqService],

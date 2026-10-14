@@ -129,6 +129,16 @@ export class AdminConfigController {
   }
 
   @UseGuards(AdminReauthGuard)
+  @Put('seller-page')
+  updateSellerPage(@Req() req: any, @Body() body: Record<string, unknown>) {
+    return this.adminConfigService.updateSellerPage(body, {
+      adminId: req.user.userId,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+  }
+
+  @UseGuards(AdminReauthGuard)
   @Put('social-links')
   updateSocialLinks(@Req() req: any, @Body() dto: UpdateSocialLinksDto) {
     return this.adminConfigService.updateSocialLinks(dto, {

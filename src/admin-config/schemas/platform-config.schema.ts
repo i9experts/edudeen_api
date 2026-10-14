@@ -203,6 +203,11 @@ export class PlatformConfig {
   // Free-form object; admin-config.service sanitises it on write.
   @Prop({ type: Object, default: () => ({}) })
   homeContent: Record<string, unknown>;
+
+  // Admin-editable content of the public /become-a-seller page (hero, steps, feature rows,
+  // FAQs...). Free-form object; admin-config/seller-page.util.ts sanitises it on write.
+  @Prop({ type: Object, default: () => ({}) })
+  sellerPage: Record<string, unknown>;
 }
 
 export const PlatformConfigSchema = SchemaFactory.createForClass(PlatformConfig);

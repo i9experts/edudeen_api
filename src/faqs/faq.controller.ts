@@ -24,6 +24,7 @@ import { CreateFaqDto, UpdateFaqDto } from './dto/faq.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { AdminReauthGuard } from '../admin-reauth/admin-reauth.guard';
 
 @ApiTags('FAQs')
 @Controller('api/faqs')
@@ -133,7 +134,7 @@ export class FaqController {
   }
 
   @Post()
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @ApiBearerAuth()
   @HttpCode(HttpStatus.CREATED)
@@ -163,7 +164,7 @@ export class FaqController {
   }
 
   @Put(':id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
@@ -187,7 +188,7 @@ export class FaqController {
   }
 
   @Put(':id/toggle')
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
@@ -211,7 +212,7 @@ export class FaqController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
