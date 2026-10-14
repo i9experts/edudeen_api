@@ -25,6 +25,8 @@ export interface ChatbotConfig {
   enabled: boolean;
   /** Allow the existing AI help-bot (kill switch `help_bot` in AI settings still applies) for free-text questions. */
   aiEnabled: boolean;
+  /** false (default): a typed question that is not a greeting/FAQ goes to the admin chat inbox. true: the AI help-bot answers it instead. */
+  useAiFallback: boolean;
   buyerQuestions: ChatQA[];
   sellerQuestions: ChatQA[];
   welcomeText: string;
@@ -115,6 +117,7 @@ export const DEFAULT_SELLER_QUESTIONS: ChatQA[] = [
 export const DEFAULT_CHATBOT: ChatbotConfig = {
   enabled: true,
   aiEnabled: true,
+  useAiFallback: false,
   buyerQuestions: DEFAULT_BUYER_QUESTIONS,
   sellerQuestions: DEFAULT_SELLER_QUESTIONS,
   welcomeText: 'I am the Edudeen help assistant. Tap a question below or type your own.',

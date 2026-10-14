@@ -8,8 +8,9 @@ import { ChatLang, detectLanguage, isCuratedLang } from './chatbot.lang';
 import { detectGreeting, greetingReplyFor, KINDS_WITH_CHIPS } from './chatbot.greetings';
 import { matchFaq } from './chatbot.matcher';
 import { ChatTranslator } from './chat-translator.service';
+import { ChatSupportService } from './chat-support.service';
 
-export type ChatSource = 'faq' | 'greeting' | 'ai' | 'fallback';
+export type ChatSource = 'faq' | 'greeting' | 'ai' | 'fallback' | 'escalated' | 'needs_contact' | 'rate_limited';
 export interface ChatQuickReply { id: string; label: string }
 export interface ChatAction { label: string; to: string }
 export interface ChatReply {
@@ -21,8 +22,38 @@ export interface ChatReply {
   lang: ChatLang;
   /** True when the reply carries the one-time "other languages need the assistant" note. */
   notice?: boolean;
+  /** Set when source === 'escalated' (the question was sent to the Edudeen team's chat inbox). */
+  conversationId?: string;
+  escalation?: { conversationId: string; shortCode: string; status: string; messageId: string; guestToken?: string; notice: string };
 }
-export interface ChatInput { audience: ChatAudience; text: string; lang?: 'en' | 'ur'; langNoticeShown?: boolean; userId?: string | null; ip?: string | null }
+export interface ChatInput {
+  audience: ChatAudience; text: string; lang?: 'en' | 'ur'; langNoticeShown?: boolean; userId?: string | null; ip?: string | null;
+  /** JWT role of the caller ('user' | 'seller' | 'admin'); identity itself is looked up server-side. */
+  role?: string | null;
+  guestToken?: string | null;
+  guest?: { name?: string; email?: string; phone?: string } | null;
+}
+
+const ESC: Record<'en' | 'ur' | 'ur-latn', { sent: string; added: string; needsContact: string; rateLimited: string }> = {
+  en: {
+    sent: 'Thank you! Your question has been sent to the Edudeen team. You will get the answer right here in this chat.',
+    added: 'Added to your conversation. The Edudeen team will reply right here.',
+    needsContact: 'So we can reply to you, please share your name and an email or phone number.',
+    rateLimited: 'You have sent several questions already. Please wait a little before sending another.',
+  },
+  ur: {
+    sent: 'شکریہ! آپ کا سوال ایڈودین ٹیم کو بھیج دیا گیا ہے۔ جواب آپ کو یہیں اسی چیٹ میں ملے گا۔',
+    added: 'آپ کی گفتگو میں شامل کر دیا گیا۔ ایڈودین ٹیم یہیں جواب دے گی۔',
+    needsContact: 'ہم آپ کو جواب دے سکیں اس کے لیے اپنا نام اور ای میل یا فون نمبر بتائیں۔',
+    rateLimited: 'آپ کئی سوالات بھیج چکے ہیں۔ دوسرا بھیجنے سے پہلے تھوڑا انتظار کریں۔',
+  },
+  'ur-latn': {
+    sent: 'Shukriya! Aapka sawal Edudeen team ko bhej diya gaya hai. Jawab aapko yahin isi chat mein mil jayega.',
+    added: 'Aapki guftagu mein shamil kar diya gaya. Edudeen team yahin jawab degi.',
+    needsContact: 'Taake hum aapko jawab de saken, apna naam aur email ya phone number batayen.',
+    rateLimited: 'Aap kai sawalat bhej chuke hain. Dusra bhejne se pehle thora intezar karein.',
+  },
+};
 
 const NOTICE: Partial<Record<ChatLang, string>> = {
   en: 'Note: answers in other languages need the AI assistant to be on. Showing the English answer.',
@@ -58,6 +89,7 @@ export class ChatbotService {
     private readonly ai: AiService,
     private readonly help: HelpBotService,
     private readonly translator: ChatTranslator,
+    private readonly support: ChatSupportService,
   ) {}
 
   private chips(list: ChatQA[], lang: ChatLang): ChatQuickReply[] {
@@ -86,6 +118,24 @@ export class ChatbotService {
     // AI off / failed: the curated English answer (curated Urdu/Roman Urdu without a stored variant also land here).
     const needsNotice = !isCuratedLang(lang) && !noticeShown;
     return { text: needsNotice ? `${qa.a}\n\n${NOTICE[lang] ?? NOTICE.en}` : qa.a, notice: needsNotice };
+  }
+
+  private async escalateReply(input: ChatInput, list: ChatQA[], lang: ChatLang, surface: ChatLang): Promise<ChatReply> {
+    const tl: 'en' | 'ur' | 'ur-latn' = lang === 'ur' || lang === 'ur-latn' ? lang : 'en';
+    const base = { quickReplies: this.chips(list, surface), actions: [] as ChatAction[], lang };
+    const r = await this.support.escalate(
+      { userId: input.userId, role: input.role, ip: input.ip, guestToken: input.guestToken, guest: input.guest },
+      input.audience, String(input.text ?? ''), lang,
+    );
+    if (r.kind === 'needs_contact') return { ...base, reply: ESC[tl].needsContact, source: 'needs_contact' };
+    if (r.kind === 'rate_limited') return { ...base, reply: ESC[tl].rateLimited, source: 'rate_limited' };
+    const conv = r.conv;
+    const escalation = {
+      conversationId: String(conv._id), shortCode: conv.shortCode as string, status: conv.status as string,
+      messageId: r.kind === 'escalated' ? r.messageId : '', ...(r.kind === 'escalated' && r.guestToken ? { guestToken: r.guestToken } : {}),
+    };
+    const notice = r.kind === 'escalated' && !r.created ? ESC[tl].added : ESC[tl].sent;
+    return { ...base, reply: notice, source: 'escalated', conversationId: escalation.conversationId, escalation: { ...escalation, notice } };
   }
 
   async handle(input: ChatInput): Promise<ChatReply> {
@@ -131,7 +181,10 @@ export class ChatbotService {
       return { reply, quickReplies: this.chips(list, surface), actions: [], source: 'faq', lang, ...(notice ? { notice } : {}) };
     }
 
-    // (c) existing AI help-bot, grounded in the platform Q&A + admin FAQs
+    // (c) default: a human answers. The question goes to the admin chat inbox (the AI help-bot is skipped).
+    if (!cfg.useAiFallback) return this.escalateReply(input, list, lang, surface);
+
+    // (c') optional AI fallback (admin toggle `useAiFallback`), grounded in the platform Q&A + admin FAQs
     if (aiOn && (isCuratedLang(lang) || translatedQuestion)) {
       try {
         const ans = await this.help.answerForChat({

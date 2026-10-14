@@ -56,6 +56,7 @@ export const NOTIFICATION_TYPES = {
   PREMIUM_EXPIRING_SOON: 'premium_expiring_soon',
   PREMIUM_EXPIRED: 'premium_expired',
   PREMIUM_COUPON: 'premium_coupon',
+  SUPPORT_REPLY: 'support_reply',
 } as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[keyof typeof NOTIFICATION_TYPES];
@@ -116,4 +117,5 @@ export const NOTIFICATION_CATEGORY: Record<string, 'orders' | 'messages' | 'prom
   [NOTIFICATION_TYPES.PREMIUM_EXPIRING_SOON]: 'subscriptions',
   [NOTIFICATION_TYPES.PREMIUM_EXPIRED]: 'subscriptions',
   [NOTIFICATION_TYPES.PREMIUM_COUPON]: 'promotions',
+  [NOTIFICATION_TYPES.SUPPORT_REPLY]: 'messages',
 };

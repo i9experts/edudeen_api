@@ -19,8 +19,9 @@ function build(opts: { aiAvailable?: boolean; aiText?: (system: string, content:
   const config: any = { getChatbotConfig: async () => effectiveChatbot(opts.cfg ?? null) };
   const help: any = { answerForChat: jest.fn(async () => 'AI grounded answer') };
   const translator = new ChatTranslator(ai);
-  const svc = new ChatbotService(config, ai, help, translator);
-  return { svc, generate, help, translator };
+  const support: any = { escalate: jest.fn(async () => ({ kind: 'escalated', conv: { _id: 'c1', shortCode: 'A7K2', status: 'open' }, messageId: 'm1', created: true })) };
+  const svc = new ChatbotService(config, ai, help, translator, support);
+  return { svc, generate, help, translator, support };
 }
 const send = (svc: ChatbotService, text: string, extra: any = {}) => svc.handle({ audience: 'buyer', text, ...extra });
 
@@ -71,26 +72,26 @@ describe('ChatbotService', () => {
     const r = await send(svc, 'wie kann ich meine bestellung bezahlen und herunterladen');
     expect(r.lang).toBe('de');
     // not confidently matched without translation -> fallback (English) - never an error
-    expect(['fallback', 'faq']).toContain(r.source);
+    expect(['escalated', 'faq']).toContain(r.source);
     const d = await send(svc, 'Mein Download Link funktioniert nicht ich brauche Hilfe beim Download');
     if (d.source === 'faq') expect(d.reply).toContain('Hinweis');
   });
 
   it('uses the existing help-bot for unmatched curated-language questions when AI is on, falls back when it is off or fails', async () => {
-    const on = build({ aiAvailable: true });
+    const on = build({ aiAvailable: true, cfg: { useAiFallback: true } });
     const r = await send(on.svc, 'do you have a mobile app for ios');
     expect(r.source).toBe('ai'); expect(on.help.answerForChat).toHaveBeenCalled();
-    const off = build({ aiAvailable: false });
+    const off = build({ aiAvailable: false, cfg: { useAiFallback: true } });
     const f = await send(off.svc, 'do you have a mobile app for ios');
     expect(f.source).toBe('fallback'); expect(f.actions[0].to).toBe('/contact-us'); expect(f.quickReplies).toHaveLength(5);
-    const failing = build({ aiAvailable: true }); failing.help.answerForChat.mockRejectedValue(new Error('boom'));
+    const failing = build({ aiAvailable: true, cfg: { useAiFallback: true } }); failing.help.answerForChat.mockRejectedValue(new Error('boom'));
     expect((await send(failing.svc, 'do you have a mobile app for ios')).source).toBe('fallback');
-    const noAiCfg = build({ aiAvailable: true, cfg: { aiEnabled: false } });
+    const noAiCfg = build({ aiAvailable: true, cfg: { aiEnabled: false, useAiFallback: true } });
     expect((await send(noAiCfg.svc, 'do you have a mobile app for ios')).source).toBe('fallback');
   });
 
   it('Urdu fallback follows the typed language; disabled widget returns a polite note', async () => {
-    const { svc } = build();
+    const { svc } = build({ cfg: { useAiFallback: true } });
     expect((await send(svc, 'آپ کے پاس موبائل ایپ ہے')).reply).toContain('معذرت');
     const off = build({ cfg: { enabled: false } });
     expect((await send(off.svc, 'hello')).reply).toContain('switched off');
@@ -100,6 +101,29 @@ describe('ChatbotService', () => {
     const { svc } = build();
     const r = await svc.handle({ audience: 'seller', text: 'platform fees kitni hain' });
     expect(r.reply).toContain('Premium fee'.slice(0, 7)); expect(r.quickReplies[0].id).toBe('seller-start');
+  });
+
+  it('default: an unmatched typed question is escalated to the admin inbox, never to the AI', async () => {
+    const { svc, help, generate, support } = build({ aiAvailable: true });
+    const r = await send(svc, 'do you have a mobile app for ios', { userId: 'u1', role: 'user' });
+    expect(r.source).toBe('escalated'); expect(r.conversationId).toBe('c1'); expect(r.reply).toContain('sent to the Edudeen team');
+    expect(help.answerForChat).not.toHaveBeenCalled(); expect(generate).not.toHaveBeenCalled();
+    expect(support.escalate.mock.calls[0][0]).toMatchObject({ userId: 'u1', role: 'user' });
+    const ru = await send(svc, 'kya aapke paas koi mobile app hai ios ke liye'); expect(ru.reply).toContain('Shukriya');
+  });
+
+  it('known FAQ questions and greetings are never escalated', async () => {
+    const { svc, support } = build();
+    expect((await send(svc, 'how do i download my file')).source).toBe('faq');
+    expect((await send(svc, 'hello')).source).toBe('greeting');
+    expect(support.escalate).not.toHaveBeenCalled();
+  });
+
+  it('surfaces needs_contact and rate_limited from the support service', async () => {
+    const a = build(); a.support.escalate.mockResolvedValue({ kind: 'needs_contact' });
+    expect((await send(a.svc, 'do you have a mobile app for ios')).source).toBe('needs_contact');
+    const b = build(); b.support.escalate.mockResolvedValue({ kind: 'rate_limited' });
+    expect((await send(b.svc, 'do you have a mobile app for ios')).source).toBe('rate_limited');
   });
 
   it('chip labels switch with the language', () => {
@@ -126,7 +150,7 @@ describe('ChatbotController', () => {
     const good = plainToInstance(ChatMessageDto, { audience: 'buyer', text: 'hi' });
     expect(await validate(good)).toHaveLength(0);
     expect((await validate(plainToInstance(ChatMessageDto, { audience: 'admin', text: 'hi' }))).length).toBeGreaterThan(0);
-    expect((await validate(plainToInstance(ChatMessageDto, { audience: 'buyer', text: 'x'.repeat(401) }))).length).toBeGreaterThan(0);
+    expect((await validate(plainToInstance(ChatMessageDto, { audience: 'buyer', text: 'x'.repeat(1001) }))).length).toBeGreaterThan(0);
     expect((await validate(plainToInstance(ChatMessageDto, { audience: 'buyer', text: '' }))).length).toBeGreaterThan(0);
     void ThrottlerGuard;
   });

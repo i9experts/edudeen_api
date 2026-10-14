@@ -50,6 +50,12 @@ export function sanitizeChatbot(body: Record<string, unknown> | null | undefined
     if (typeof src[key] !== 'boolean') throw new BadRequestException(`${key} must be true or false`);
     set[`chatbot.${key}`] = src[key];
   }
+  // Escalation switch: false (default) = unmatched questions go to the admin chat inbox, true = old AI help-bot answers them.
+  if (src.useAiFallback !== undefined) {
+    if (src.useAiFallback === null) unset['chatbot.useAiFallback'] = '';
+    else if (typeof src.useAiFallback !== 'boolean') throw new BadRequestException('useAiFallback must be true or false');
+    else set['chatbot.useAiFallback'] = src.useAiFallback;
+  }
   for (const key of ['buyerQuestions', 'sellerQuestions'] as const) {
     if (src[key] === undefined) continue;
     if (src[key] === null) { unset[`chatbot.${key}`] = ''; continue; }
@@ -73,6 +79,7 @@ export function effectiveChatbot(stored: Record<string, any> | null | undefined)
   return {
     enabled: typeof s.enabled === 'boolean' ? s.enabled : DEFAULT_CHATBOT.enabled,
     aiEnabled: typeof s.aiEnabled === 'boolean' ? s.aiEnabled : DEFAULT_CHATBOT.aiEnabled,
+    useAiFallback: s.useAiFallback === true,
     buyerQuestions: list(s.buyerQuestions, DEFAULT_CHATBOT.buyerQuestions),
     sellerQuestions: list(s.sellerQuestions, DEFAULT_CHATBOT.sellerQuestions),
     welcomeText: str(s.welcomeText, CHATBOT_LIMITS.text) || DEFAULT_CHATBOT.welcomeText,
