@@ -83,6 +83,6 @@ import { AiCronService } from './core/ai-cron.service';
     EmbeddingService, SemanticIndexService, QuizService, TtsService, WeeklyDigestService, AiCronService,
   ],
   // The scheduler recovers stale credit holds (see SchedulerService.recoverStaleAiStudioHolds).
-  exports: [AiStudioCreditsService, AiService, AiFlagsService, SmartSearchService],
+  exports: [AiStudioCreditsService, AiService, AiFlagsService, SmartSearchService, HelpBotService],
 })
 export class AiStudioModule {}

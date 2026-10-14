@@ -48,6 +48,7 @@ import { HealthModule } from './health/health.module';
 import { PlatformPlansModule } from './platform-plans/platform-plans.module';
 import { SeoModule } from './seo/seo.module';
 import { AiStudioModule } from './ai-studio/ai-studio.module';
+import { ChatbotModule } from './chatbot/chatbot.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AdminReauthModule } from './admin-reauth/admin-reauth.module';
 import { AdminConfigModule } from './admin-config/admin-config.module';
@@ -124,6 +125,7 @@ import { PhoneVerificationModule } from './phone-verification/phone-verification
     SubscriptionsModule,
     PlatformPlansModule,
     AiStudioModule,
+    ChatbotModule,
     SchedulerModule,
     MarketingModule,
     LoyaltyModule,

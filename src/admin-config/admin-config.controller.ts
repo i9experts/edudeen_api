@@ -148,6 +148,21 @@ export class AdminConfigController {
     });
   }
 
+  @Get('chatbot')
+  getChatbot() {
+    return this.adminConfigService.getChatbotConfig().then(data => ({ success: true, data }));
+  }
+
+  @UseGuards(AdminReauthGuard)
+  @Put('chatbot')
+  updateChatbot(@Req() req: any, @Body() body: Record<string, unknown>) {
+    return this.adminConfigService.updateChatbot(body, {
+      adminId: req.user.userId,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+  }
+
   @Patch('maintenance')
   setMaintenanceMode(@Req() req: any, @Body() dto: UpdateMaintenanceDto) {
     return this.adminConfigService.setMaintenanceMode(dto, {

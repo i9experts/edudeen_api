@@ -15,7 +15,7 @@ function guardsFor(ctrl: any, method: string): unknown[] {
 
 describe('inline-edit write routes carry AdminReauthGuard', () => {
   const cases: [string, any, string[]][] = [
-    ['AdminConfigController', AdminConfigController, ['updateHomeContent', 'updateSellerPage', 'updateSocialLinks']],
+    ['AdminConfigController', AdminConfigController, ['updateHomeContent', 'updateSellerPage', 'updateSocialLinks', 'updateChatbot']],
     ['CategoriesController', CategoriesController, ['addCategory', 'reorder', 'update', 'remove']],
     ['AdminMarketingController', AdminMarketingController, ['updateCampaign', 'setCampaignStatus']],
     ['FaqController', FaqController, ['create', 'update', 'toggle', 'remove']],

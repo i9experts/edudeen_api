@@ -18,6 +18,7 @@ import { UpdateSocialLinksDto } from './dto/update-social-links.dto';
 import { UpdatePlatformFeesDto } from './dto/update-platform-fees.dto';
 import { SOCIAL_LINK_KEYS } from './schemas/platform-config.schema';
 import { sanitizeSellerPage } from './seller-page.util';
+import { effectiveChatbot, sanitizeChatbot } from '../chatbot/chatbot.config';
 
 export type FeatureFlagKey =
   | 'aiStudio' | 'marketplace' | 'digitalUploads' | 'affiliateProgram'
@@ -388,6 +389,25 @@ export class AdminConfigService {
     return { success: true, message: 'Become-a-seller page updated', data: (config as any).sellerPage ?? {} };
   }
 
+  /** Effective chat-widget config (stored overrides merged over the built-in defaults). Safe to expose publicly. */
+  async getChatbotConfig() {
+    const config = await this.getRawConfig();
+    return effectiveChatbot((config as any).chatbot);
+  }
+
+  /** Admin-editable chat widget content. Keys left out keep their stored value; null / empty list resets to the built-in default. */
+  async updateChatbot(body: Record<string, unknown>, meta: AuditMeta) {
+    const { set, unset } = sanitizeChatbot(body);
+    await this.model.updateOne({ $or: [{ chatbot: null }, { chatbot: { $exists: false } }] }, { $set: { chatbot: {} } });
+    const update: Record<string, unknown> = {};
+    if (Object.keys(set).length) update.$set = set;
+    if (Object.keys(unset).length) update.$unset = unset;
+    const config = await this.model.findOneAndUpdate({}, update, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
+    this.invalidateCache();
+    await this.logChange('chatbot_updated', `Chat widget content updated: ${[...Object.keys(set), ...Object.keys(unset)].map(k => k.replace('chatbot.', '')).join(', ')}`, meta);
+    return { success: true, message: 'Chat widget updated', data: effectiveChatbot((config as any).chatbot) };
+  }
+
   /**
    * Public, read-only slice of the platform config — ONLY fields that are safe
    * for anyone to see (no bank details, no email/AI/fx internals). Used by the
@@ -407,6 +427,7 @@ export class AdminConfigService {
         socialLinks,
         homeContent: (config as any).homeContent ?? {},
         sellerPage: (config as any).sellerPage ?? {},
+        chatbot: effectiveChatbot((config as any).chatbot),
         payout: {
           frequency: config.payoutConfig?.payoutFrequency ?? 'monthly',
         },

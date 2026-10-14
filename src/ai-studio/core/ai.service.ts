@@ -42,6 +42,8 @@ export interface AiGenerateRequest {
   /** Skip the ai_generations call log (only when the caller writes its own row). */
   skipLog?: boolean;
   timeoutMs?: number;
+  /** Rate-limit bucket for anonymous callers (e.g. the public chat widget passes the client IP). */
+  rateKey?: string | null;
 }
 
 export interface AiGenerateResult {
@@ -138,7 +140,7 @@ export class AiService {
     const client = this.getClient();
     await this.flags.assertEnabled(req.feature, req.storeId);
 
-    const principal = req.storeId || req.userId || req.adminId || 'anon';
+    const principal = req.storeId || req.userId || req.adminId || req.rateKey || 'anon';
     if (!(await this.limiter.tryConsume(`${req.feature}:${principal}`)) || !(await this.limiter.tryConsume(`all:${principal}`))) {
       throw new HttpException({ success: false, errorCode: AI_RATE_LIMITED, message: 'Too many AI requests. Please wait a minute and try again.' }, HttpStatus.TOO_MANY_REQUESTS);
     }

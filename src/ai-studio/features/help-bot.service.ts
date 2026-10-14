@@ -31,6 +31,27 @@ export function rankFaqs(question: string, faqs: FaqLite[], n = 6): FaqLite[] {
 export class HelpBotService {
   constructor(private readonly db: DatabaseService, private readonly ai: AiService) {}
 
+  /**
+   * Public chat-widget variant (buyers, sellers, guests): same grounding rules as `ask`, but no store ownership check and no
+   * store billing (the help bot is free). `extra` = the platform's own curated Q&A. Returns null when nothing relevant is found.
+   * Throws the AiService errors (unavailable / switched off / rate limited) - the caller falls back to curated text.
+   */
+  async answerForChat(opts: { audience: 'buyer' | 'seller'; question: string; replyLanguage: string; extra: FaqLite[]; rateKey: string; userId?: string | null }): Promise<string | null> {
+    const q = String(opts.question ?? '').trim().slice(0, 400);
+    if (q.length < 3) return null;
+    const faqs: any[] = await this.db.repositories.faqModel.find({ isActive: true }).select('question answer category').limit(300).lean();
+    const pool: FaqLite[] = [...opts.extra, ...faqs.map((f) => ({ question: f.question, answer: f.answer, category: f.category }))];
+    const top = rankFaqs(q, pool);
+    if (!top.length) return null;
+    const out = await this.ai.generate({
+      feature: 'help_bot', tier: 'fast', userId: opts.userId ?? null, rateKey: opts.rateKey, maxTokens: 450,
+      system: `You are Edudeen's ${opts.audience} help assistant in a small chat widget. Answer using ONLY the help articles provided. If they do not contain the answer, reply exactly with NO_ANSWER. Keep it short (under 120 words). Keep any markdown links exactly as written. Do not invent features, fees, prices or policies. Reply in ${opts.replyLanguage}.`,
+      messages: [{ role: 'user', content: `<articles>\n${top.map((f, i) => `[${i + 1}] Q: ${f.question}\nA: ${f.answer.slice(0, 1200)}`).join('\n\n')}\n</articles>\n\nQuestion: ${q}` }],
+    });
+    const text = out.text.trim();
+    return !text || /^NO_ANSWER\b/i.test(text) ? null : text;
+  }
+
   async ask(sellerId: string, storeId: string, question: string) {
     await verifyStoreOwnershipOrForbidden(this.db.repositories.storeModel, storeId, sellerId);
     const q = String(question ?? '').trim().slice(0, 400);

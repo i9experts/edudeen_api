@@ -208,6 +208,11 @@ export class PlatformConfig {
   // FAQs...). Free-form object; admin-config/seller-page.util.ts sanitises it on write.
   @Prop({ type: Object, default: () => ({}) })
   sellerPage: Record<string, unknown>;
+
+  // Edudeen Help chat widget content (buyer/seller suggested Q&As, greetings fallback). Free-form; chatbot/chatbot.config.ts
+  // sanitises it on write and merges it with the built-in defaults on read.
+  @Prop({ type: Object, default: null })
+  chatbot: Record<string, unknown> | null;
 }
 
 export const PlatformConfigSchema = SchemaFactory.createForClass(PlatformConfig);

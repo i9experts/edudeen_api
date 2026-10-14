@@ -18,7 +18,7 @@ export const AI_FEATURE_DEFS = {
   translate_listing: { label: 'Urdu/English translation',  group: 'seller',   credits: 2 },
   review_reply:      { label: 'Review reply drafts',       group: 'seller',   credits: 2 },
   weekly_insights:   { label: 'Weekly insights digest',    group: 'seller',   credits: 5 },
-  help_bot:          { label: 'Seller help bot',           group: 'seller',   credits: 0 },
+  help_bot:          { label: 'Help bot (chat widget + seller help)',           group: 'seller',   credits: 0 },
   product_cover:     { label: 'Product cover text',        group: 'seller',   credits: 2 },
   // --- platform features (cost carried by Edudeen, logged only) ---
   moderation_review: { label: 'Listing pre-moderation',    group: 'platform', credits: 0 },
