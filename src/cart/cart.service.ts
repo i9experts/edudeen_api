@@ -223,7 +223,7 @@ export class CartService {
       const products = productIds.length
         ? await this.databaseService.repositories.productModel
             .find({ _id: { $in: productIds } })
-            .select('images sellerId status isDelete storeId premiumDiscountPercent premiumOptOut campaignIds')
+            .select('images sellerId status isDelete storeId type premiumDiscountPercent premiumOptOut campaignIds')
             .lean()
         : [];
       const productById = new Map(
@@ -299,6 +299,9 @@ export class CartService {
           options: (item as any).options ?? [],
 
           currency: (item as any).currency ?? null,
+          // physical | digital, from the product itself: checkout skips the address steps for an all-digital cart, so
+          // this must not depend on what this browser remembers.
+          type: product?.type === 'physical' || product?.type === 'digital' ? product.type : undefined,
           unitPrice, // single product price (live)
           quantity: item.quantity, // quantity
           itemTotal: itemTotal, // quantity × price

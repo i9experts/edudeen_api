@@ -1332,18 +1332,6 @@ export class ProductsService {
       };
     }
 
-    const [productWithSeller] = await this.attachCampaignBadges([
-      this.sanitizeDigitalForPublicView({
-        ...product,
-        sellerName: seller ? seller.name : null,
-        sellerVerified: seller ? !!seller.isVerified : false,
-        storeSlug: store ? store.slug : null,
-        storeName: store ? store.name : null,
-        storeLogo: store ? store.logo : null,
-        storeFollowersCount: store ? (store.followersCount ?? 0) : 0,
-      }),
-    ], customerId);
-
     // 4️⃣ Get variants — must key off the resolved document's real _id, not
     // the route param (which may be a slug string, not the product's id).
     const rawVariants = await productVariantModel
@@ -1358,16 +1346,28 @@ export class ProductsService {
       customerId,
       product.storeId,
     );
-    let variants = this.applySubscriberPricing(
+    const pricedVariants = this.applySubscriberPricing(
       rawVariants,
       product,
       benefitsEntry ?? undefined,
     );
-    // Same rule as the listings: while the campaign's sale runs on this product the seller's own markdown is hidden.
-    const badge: any = (productWithSeller as any)?.activeCampaign;
-    if (badge && badge.discountType != null && badge.discountValue != null) {
-      variants = variants.map((v: any) => ({ ...v, originalCompareAtPrice: v.compareAtPrice ?? null, compareAtPrice: null })); // premium list price survives the hidden markdown
-    }
+
+    // The campaign price is computed per variant (same helper as the listings), so the variants go through the
+    // badge step with the product. While a campaign's sale runs on a variant the seller's own markdown is hidden.
+    const [withCampaign] = await this.attachCampaignBadges([
+      this.sanitizeDigitalForPublicView({
+        ...product,
+        variants: pricedVariants,
+        sellerName: seller ? seller.name : null,
+        sellerVerified: seller ? !!seller.isVerified : false,
+        storeSlug: store ? store.slug : null,
+        storeName: store ? store.name : null,
+        storeLogo: store ? store.logo : null,
+        storeFollowersCount: store ? (store.followersCount ?? 0) : 0,
+      }),
+    ], customerId);
+    const { variants: campaignVariants, ...productWithSeller } = withCampaign as any;
+    let variants: any[] = campaignVariants ?? pricedVariants;
 
     // Edudeen Premium: teaser percent for everyone, member price on the variants for active members.
     {
