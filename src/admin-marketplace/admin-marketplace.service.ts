@@ -9,7 +9,6 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NOTIFICATION_TYPES } from '../notifications/notification.types';
 import { UploadService } from '../upload/upload.service';
 import { StoreService } from '../store/store.service';
-import { assertValidVerificationTransition, type VerificationStatus } from '../store/schemas/store.schema';
 import { MarketplaceListingQueryDto } from './dto/marketplace-listing-query.dto';
 import { LeadsQueryDto } from './dto/leads-query.dto';
 import { mergeTrustBadges } from '../products/trust-badges.util';
@@ -343,22 +342,13 @@ export class AdminMarketplaceService {
     return { success: true, message: 'Fulfillment mode updated', data: { fulfillmentMode } };
   }
 
-  /** New-store Leads queue — filtered by `verificationStatus`, NOT the
-   *  store's marketplace `status` (they're deliberately separate fields —
-   *  see store.schema.ts). List view is deliberately light (no documents/
-   *  signed URLs — those only ever get generated on-demand in
-   *  `getLeadDetail`, one lead at a time). */
+  /** Store approvals queue (legacy). New stores are live immediately now, so this only lists stores whose
+   *  marketplace `status` is `pending` (created before business verification was removed). Filter by `status`
+   *  (default `pending`; `all` removes the filter). */
   async getLeads(query: LeadsQueryDto) {
     const filter: Record<string, unknown> = { isDelete: false };
-    // No explicit status filter → the actionable review queue (pending/under_review),
-    // same default as before this filter existed. `verificationStatus: 'all'`
-    // (or any other real VerificationStatus value) is an explicit admin choice
-    // to look outside that queue — e.g. to see already-verified or rejected leads.
-    if (!query.verificationStatus) {
-      filter.verificationStatus = { $in: ['pending', 'under_review'] };
-    } else if (query.verificationStatus !== 'all') {
-      filter.verificationStatus = query.verificationStatus;
-    }
+    const status = query.status ?? 'pending';
+    if (status !== 'all') filter.status = status;
     if (query.search) filter.name = { $regex: escapeRegex(query.search), $options: 'i' };
 
     const page = query.page ?? 1;
@@ -393,9 +383,6 @@ export class AdminMarketplaceService {
         submittedAt: s.createdAt,
         storeStatus: s.status,
         country: s.country ?? 'PK',
-        businessType: s.businessType ?? null,
-        verificationLevel: s.verificationLevel ?? null,
-        verificationStatus: s.verificationStatus ?? 'not_started',
         seller: {
           id: s.sellerId,
           name: seller?.name ?? 'Unknown',
@@ -409,24 +396,14 @@ export class AdminMarketplaceService {
     return { success: true, data: { items, total, page, limit } };
   }
 
-  /** Full review view for one lead — business info, the SAME requirement
-   *  checklist (required vs optional, per-document state) the seller's own
-   *  verification page renders, each document with a fresh signed URL, and
-   *  the submission/review history trail. Reuses
-   *  StoreService.getVerificationEvaluationForAdmin so admin never has to
-   *  infer "why is this document required for this seller" on its own —
-   *  the same country/businessType/level-aware calculation the seller sees
-   *  is what's shown here. */
   async getLeadDetail(id: string) {
-    const store = await this.r.storeModel.findOne({ _id: id, isDelete: false }).select('+verification');
+    const store = await this.r.storeModel.findOne({ _id: id, isDelete: false });
     if (!store) throw new NotFoundException('Lead not found');
 
-    const [seller, category, evaluation] = await Promise.all([
+    const [seller, category] = await Promise.all([
       this.r.sellerModel.findById(store.sellerId, { name: 1, email: 1, phone: 1, address: 1 }).lean(),
       store.categoryId ? this.r.categoryModel.findById(store.categoryId, { name: 1 }).lean() : null,
-      this.storeService.getVerificationEvaluationForAdmin(id),
     ]);
-    const v: any = store.verification ?? {};
 
     return {
       success: true,
@@ -449,73 +426,15 @@ export class AdminMarketplaceService {
           address: seller?.address ?? null,
         },
         country: store.country ?? 'PK',
-        businessType: store.businessType ?? null,
-        verificationLevel: evaluation.requirements.verificationLevel,
-        verificationStatus: store.verificationStatus ?? 'not_started',
-        legalBusinessName: v.legalBusinessName ?? null,
-        registrationNumber: v.registrationNumber ?? null,
-        taxId: v.taxId ?? null,
-        businessAddress: v.businessAddress ?? null,
-        idDocumentType: v.idDocumentType ?? null,
-        authorizedContact: v.authorizedContact ?? null,
-        documents: evaluation.documents,
-        missingFields: evaluation.missingFields,
-        missingDocuments: evaluation.missingDocuments,
-        canApprove: evaluation.canSubmit,
-        history: v.history ?? [],
+        canApprove: store.status === 'pending' || store.status === 'rejected',
       },
     };
   }
 
-  private async findReviewableStoreOrThrow(id: string) {
-    const store = await this.r.storeModel.findOne({ _id: id, isDelete: false }).select('+verification');
-    if (!store) throw new NotFoundException('Lead not found');
-    const verificationStatus: VerificationStatus = store.verificationStatus ?? 'not_started';
-    if (!['pending', 'under_review'].includes(verificationStatus)) {
-      throw new BadRequestException('This lead has already been reviewed');
-    }
-    return store;
-  }
-
-  private pushVerificationHistory(action: string, note: string | null, meta: AuditMeta) {
-    return { action, note, actorId: meta.adminId, actorRole: 'admin', at: new Date() };
-  }
-
-  /** Optional intermediate state — purely a "someone's actively looking at
-   *  this" signal for the admin team; approve/reject work the same whether
-   *  a lead passed through here or not. Only touches `verificationStatus`
-   *  — the store's marketplace `status` stays untouched while under review. */
-  async markUnderReview(id: string, meta: AuditMeta) {
-    const store = await this.findReviewableStoreOrThrow(id);
-    const current: VerificationStatus = store.verificationStatus ?? 'not_started';
-    if (current === 'under_review') return { success: true, message: 'Already under review' };
-    assertValidVerificationTransition(current, 'under_review');
-
-    await this.r.storeModel.findByIdAndUpdate(id, {
-      $set: { verificationStatus: 'under_review' },
-      $push: { 'verification.history': this.pushVerificationHistory('under_review', null, meta) },
-    });
-    this.log('lead_under_review', `Store "${store.name}" marked under review`, meta, id, 'store');
-    this.notificationsService.notify({
-      recipientId: store.sellerId,
-      recipientRole: 'seller',
-      type: NOTIFICATION_TYPES.VERIFICATION_UNDER_REVIEW,
-      title: 'Your verification is under review',
-      body: `Our team has started reviewing "${store.name}"'s business verification.`,
-      data: { storeId: id },
-    }).catch(() => {});
-    return { success: true, message: 'Marked as under review' };
-  }
-
-  /** Approval moves BOTH fields together — Store.status → 'active' (goes
-   *  live on the marketplace) and verificationStatus → 'verified' — because
-   *  Edudeen has exactly one admin review action today, not two independent
-   *  ones. They remain separate schema fields regardless (see
-   *  store.schema.ts), and this is gated by `evaluateVerification` — an
-   *  incomplete submission physically cannot be approved. */
+  /** Approve = store goes live (status -> active). A suspended store is never re-activated here. */
   async approveLead(id: string, meta: AuditMeta) {
-    const store = await this.findReviewableStoreOrThrow(id);
-    const current: VerificationStatus = store.verificationStatus ?? 'not_started';
+    const store = await this.r.storeModel.findOne({ _id: id, isDelete: false });
+    if (!store) throw new NotFoundException('Lead not found');
 
     // A store of a suspended seller must not go live (the suspension cascade only touched stores that were active).
     const owner = await this.r.sellerModel.findOne({ _id: store.sellerId, isDelete: false }, { status: 1 }).lean();
@@ -523,26 +442,11 @@ export class AdminMarketplaceService {
       throw new ConflictException('The seller account is suspended or missing — unsuspend the seller before approving this store');
     }
 
-    const evaluation = await this.storeService.getVerificationEvaluationForAdmin(id);
-    if (!evaluation.canSubmit) {
-      throw new BadRequestException({
-        message: 'This seller has not completed all required verification requirements yet',
-        missingFields: evaluation.missingFields,
-        missingDocuments: evaluation.missingDocuments,
-      });
-    }
-    assertValidVerificationTransition(current, 'verified');
-
-    // Atomic + conditional: two admins approving at once (or an approve racing a reject/suspend) can't both
-    // win, and a SUSPENDED store is never silently re-activated by an approval.
     const approved = await this.r.storeModel.findOneAndUpdate(
-      { _id: id, isDelete: false, verificationStatus: { $in: ['pending', 'under_review'] }, status: { $ne: 'suspended' } },
-      {
-        $set: { status: 'active', verificationStatus: 'verified', reviewedAt: new Date() },
-        $push: { 'verification.history': this.pushVerificationHistory('approved', null, meta) },
-      },
+      { _id: id, isDelete: false, status: { $in: ['pending', 'rejected'] } },
+      { $set: { status: 'active', reviewedAt: new Date(), rejectionReason: null } },
     );
-    if (!approved) throw new BadRequestException('This lead was already reviewed, or the store is suspended');
+    if (!approved) throw new BadRequestException('This store was already reviewed, or it is suspended');
 
     this.log('lead_approved', `Store "${store.name}" approved and is now live`, meta, id, 'store');
     this.notificationsService.notify({
@@ -554,25 +458,19 @@ export class AdminMarketplaceService {
       data: { storeId: id },
     }).catch(() => {});
 
-    return { success: true, message: 'Lead approved — store is now live' };
+    return { success: true, message: 'Store approved — it is now live' };
   }
 
-  /** `reason` is mandatory here (enforced by `RejectLeadDto`) — a rejection
-   *  without an explanation leaves the seller with no way to fix and
-   *  resubmit. Moves both fields together, same reasoning as approveLead. */
+  /** `reason` is mandatory (enforced by `RejectLeadDto`). */
   async rejectLead(id: string, reason: string, meta: AuditMeta) {
-    const store = await this.findReviewableStoreOrThrow(id);
-    const current: VerificationStatus = store.verificationStatus ?? 'not_started';
-    assertValidVerificationTransition(current, 'rejected');
+    const store = await this.r.storeModel.findOne({ _id: id, isDelete: false });
+    if (!store) throw new NotFoundException('Lead not found');
 
     const rejected = await this.r.storeModel.findOneAndUpdate(
-      { _id: id, isDelete: false, verificationStatus: { $in: ['pending', 'under_review'] }, status: { $ne: 'suspended' } },
-      {
-        $set: { status: 'rejected', verificationStatus: 'rejected', rejectionReason: reason, reviewedAt: new Date() },
-        $push: { 'verification.history': this.pushVerificationHistory('rejected', reason, meta) },
-      },
+      { _id: id, isDelete: false, status: 'pending' },
+      { $set: { status: 'rejected', rejectionReason: reason, reviewedAt: new Date() } },
     );
-    if (!rejected) throw new BadRequestException('This lead was already reviewed, or the store is suspended');
+    if (!rejected) throw new BadRequestException('This store was already reviewed, or it is suspended');
 
     this.log('lead_rejected', `Store "${store.name}" rejected: ${reason}`, meta, id, 'store');
     this.notificationsService.notify({
@@ -580,10 +478,10 @@ export class AdminMarketplaceService {
       recipientRole: 'seller',
       type: NOTIFICATION_TYPES.STORE_REJECTED,
       title: 'Your store application was rejected',
-      body: `"${store.name}" was rejected: ${reason}. You can correct the details and resubmit.`,
+      body: `"${store.name}" was rejected: ${reason}.`,
       data: { storeId: id },
     }).catch(() => {});
 
-    return { success: true, message: 'Lead rejected' };
+    return { success: true, message: 'Store rejected' };
   }
 }

@@ -9,7 +9,6 @@ import {
   Min,
   MaxLength,
 } from 'class-validator';
-import { VERIFICATION_STATUSES } from '../../store/schemas/store.schema';
 
 export class LeadsQueryDto {
   @ApiProperty({ required: false })
@@ -20,13 +19,13 @@ export class LeadsQueryDto {
 
   @ApiProperty({
     required: false,
-    enum: [...VERIFICATION_STATUSES, 'all'],
+    enum: ['pending', 'active', 'rejected', 'suspended', 'all'],
     description:
-      'Omit for the default pending/under_review review queue; "all" removes the status filter entirely.',
+      'Store status. Omit for pending; "all" removes the filter.',
   })
   @IsOptional()
-  @IsIn([...VERIFICATION_STATUSES, 'all'])
-  verificationStatus?: string;
+  @IsIn(['pending', 'active', 'rejected', 'suspended', 'all'])
+  status?: string;
 
   @ApiProperty({ required: false, default: 1 })
   @IsOptional()
