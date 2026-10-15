@@ -75,6 +75,7 @@ export class UpdateProductDto {
   })
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(20, { message: 'A product can have at most 20 images' })
   @IsUrl({}, { each: true, message: 'Each image must be a valid URL' })
   images?: string[];
 
