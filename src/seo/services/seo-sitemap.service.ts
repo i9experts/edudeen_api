@@ -88,7 +88,7 @@ export class SeoSitemapService {
       .find({ status: 'active', isDelete: false, slug: { $exists: true, $ne: null } })
       .select('slug updatedAt')
       .lean();
-    const urls = categories.map((c: any) => ({ loc: `${PLATFORM_ORIGIN}/marketplace/${c.slug}`, lastmod: c.updatedAt }));
+    const urls = categories.map((c: any) => ({ loc: `${PLATFORM_ORIGIN}/c/${c.slug}`, lastmod: c.updatedAt }));
     await this.writeChunks('categories', null, urls);
   }
 

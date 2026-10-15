@@ -141,8 +141,8 @@ export class SeoResolutionService {
         ratingCount: product.ratingSum,
       }),
       this.schemaGenerator.buildBreadcrumbSchema([
-        { name: 'Marketplace', url: `${PLATFORM_ORIGIN}/marketplace` },
-        ...(category ? [{ name: (category as any).name, url: `${PLATFORM_ORIGIN}/marketplace?category=${(category as any)._id}` }] : []),
+        { name: 'Home', url: PLATFORM_ORIGIN },
+        ...(category ? [{ name: (category as any).name, url: `${PLATFORM_ORIGIN}/c/${(category as any).slug || (category as any)._id}` }] : []),
         { name: product.name, url: canonicalUrl },
       ]),
     ];
@@ -176,11 +176,11 @@ export class SeoResolutionService {
 
     const title = seo.metaTitle
       ?? renderTemplate(template?.titleTemplate, { categoryName: (category as any).name })
-      ?? `${(category as any).name} | Edudeen Marketplace`;
+      ?? `${(category as any).name} | Edudeen`;
     const description = seo.metaDescription
       ?? renderTemplate(template?.descriptionTemplate, { categoryName: (category as any).name })
       ?? `Shop ${(category as any).name} on Edudeen.`;
-    const canonicalUrl = seo.canonicalUrlOverride ?? `${PLATFORM_ORIGIN}/marketplace?category=${(category as any)._id}`;
+    const canonicalUrl = seo.canonicalUrlOverride ?? `${PLATFORM_ORIGIN}/c/${(category as any).slug || (category as any)._id}`;
 
     return {
       entityType: 'category',
@@ -195,7 +195,7 @@ export class SeoResolutionService {
       ogImage: seo.ogImage ?? (category as any).image ?? null,
       twitterCard: seo.twitterCard ?? 'summary_large_image',
       jsonLd: [this.schemaGenerator.buildBreadcrumbSchema([
-        { name: 'Marketplace', url: `${PLATFORM_ORIGIN}/marketplace` },
+        { name: 'Home', url: PLATFORM_ORIGIN },
         { name: (category as any).name, url: canonicalUrl },
       ])],
     };

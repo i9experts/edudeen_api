@@ -93,7 +93,7 @@ export class SeoSchemaGeneratorService {
       url: PLATFORM_ORIGIN,
       potentialAction: {
         '@type': 'SearchAction',
-        target: `${PLATFORM_ORIGIN}/marketplace?search={search_term_string}`,
+        target: `${PLATFORM_ORIGIN}/?search={search_term_string}`,
         'query-input': 'required name=search_term_string',
       },
     };
