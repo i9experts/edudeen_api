@@ -27,6 +27,7 @@ import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
 import { fetchPdfPageCount, isPdfName } from './pdf-page-count.util';
 import { sanitizeDigitalForPublicView } from './product-public-view.util';
 import { classFilter, classIndex } from './class-levels';
+import { assertPriceRules, assertDescriptionRule, assertStockRule, cleanShippingWeight } from './price-rules.util';
 import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, cleanLearningMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
 import { generateUniqueSlug } from 'src/common/slug.util';
 import { RedisService } from 'src/redis/redis.service';
@@ -1539,7 +1540,10 @@ export class ProductsService {
       if (v?.price === undefined || v?.price === null) {
         throw new BadRequestException('Every variant requires a price');
       }
+      assertPriceRules({ price: v.price, compareAtPrice: v.compareAtPrice, currency: store.baseCurrency, priceLabel: 'Variant price' });
       assertValidPrice(v.price, 'Variant price');
+      assertStockRule(v.stock, !!v.unlimitedStock);
+      v.shippingWeight = cleanShippingWeight(v.shippingWeight, true);
       if (v.compareAtPrice !== undefined) assertValidPrice(v.compareAtPrice, 'compareAtPrice', { nullable: true });
       try {
         validateOptions(v.options);
@@ -1563,10 +1567,8 @@ export class ProductsService {
     }
 
     assertText(name, 'name', 200);
-    // The schema requires a non-empty description; a missing one used to reach Mongoose and come back as a 500.
-    if (description === undefined || description === null || !String(description).trim()) {
-      throw new BadRequestException('description is required');
-    }
+    // The schema requires a non-empty description (a missing one used to come back as a 500); sellers must write at least 20 characters.
+    assertDescriptionRule(description);
     assertText(description, 'description', 20000);
     if (status !== undefined) assertSellerStatus(status);
     const scheduledDate = status === 'scheduled' ? parseScheduledAt(scheduledAt) : null;
@@ -1623,7 +1625,7 @@ export class ProductsService {
           options: v.options ?? [],
           stock: v.stock ?? 0,
           unlimitedStock: !!v.unlimitedStock,
-          shippingWeight: v.shippingWeight ?? null,
+          shippingWeight: v.shippingWeight,
           images: v.images ?? [],
           isDefault: defaultIndex === -1 ? index === 0 : index === defaultIndex,
         });
@@ -1694,6 +1696,7 @@ export class ProductsService {
     if (!name) throw new BadRequestException('Product name is required');
     if (price === undefined || price === null)
       throw new BadRequestException('Price is required');
+    assertPriceRules({ price, compareAtPrice, currency: store.baseCurrency });
     assertValidPrice(price, 'Price');
     if (compareAtPrice !== undefined) assertValidPrice(compareAtPrice, 'compareAtPrice', { nullable: true });
 
@@ -1704,10 +1707,8 @@ export class ProductsService {
     }
 
     assertText(name, 'name', 200);
-    // The schema requires a non-empty description; a missing one used to reach Mongoose and come back as a 500.
-    if (description === undefined || description === null || !String(description).trim()) {
-      throw new BadRequestException('description is required');
-    }
+    // The schema requires a non-empty description (a missing one used to come back as a 500); sellers must write at least 20 characters.
+    assertDescriptionRule(description);
     assertText(description, 'description', 20000);
     if (status !== undefined) assertSellerStatus(status);
     const scheduledDate = status === 'scheduled' ? parseScheduledAt(scheduledAt) : null;
@@ -1963,6 +1964,7 @@ export class ProductsService {
     }
 
     if (name !== undefined) assertText(name, 'name', 200);
+    if (description !== undefined && description !== null) assertDescriptionRule(description);
     if (description !== undefined) productUpdate.description = description === null ? null : assertText(description, 'description', 20000);
     let effectiveCategoryId = product.categoryId;
     if (body.categoryId !== undefined && body.categoryId !== null && body.categoryId !== '' && body.categoryId !== product.categoryId) {
@@ -2051,6 +2053,17 @@ export class ProductsService {
         productUpdate.customLevel = null;
         productUpdate.normalizedCustomLevel = null;
       }
+    }
+
+    // Price rules (digital/educational default variant): compare-at above price, no negatives, PKR whole rupees. Checked before anything is written.
+    if (product.type !== 'physical' && (price !== undefined || compareAtPrice !== undefined)) {
+      const ruleStore = await this.databaseService.repositories.storeModel.findById(product.storeId).select('baseCurrency').lean();
+      const curVariant: any = price !== undefined && compareAtPrice !== undefined ? null : await productVariantModel.findOne({ productId, isDefault: true, isDelete: false }).select('price compareAtPrice').lean();
+      assertPriceRules({
+        price: price !== undefined ? price : curVariant?.price,
+        compareAtPrice: compareAtPrice !== undefined ? compareAtPrice : curVariant?.compareAtPrice,
+        currency: (ruleStore as any)?.baseCurrency,
+      });
     }
 
     // Owner rule R3 - only when this request touches prices / the Premium percent (never for unrelated edits of an

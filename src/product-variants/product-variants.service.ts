@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { PremiumEntitlementsService } from 'src/premium/premium-entitlements.service';
 import { assertPremiumGap } from 'src/premium/premium-gap';
+import { assertPriceRules, assertStockRule, cleanShippingWeight } from 'src/products/price-rules.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { CreateVariantDto } from './dto/create-variant.dto';
 import { UpdateVariantDto } from './dto/update-variant.dto';
@@ -78,6 +79,9 @@ export class ProductVariantsService {
     const store = await storeModel.findOne({ _id: product.storeId, isDelete: false });
     if (!store) throw new NotFoundException('Store not found');
 
+    assertPriceRules({ price: dto.price, compareAtPrice: dto.compareAtPrice, currency: store.baseCurrency });
+    assertStockRule(dto.stock, !!dto.unlimitedStock);
+    const weight = cleanShippingWeight(dto.shippingWeight, true);
     const options = dto.options ?? [];
     const existing = await this.getActiveVariants(productId);
     this.assertConsistentAndUnique(existing as any, options);
@@ -96,7 +100,7 @@ export class ProductVariantsService {
       options,
       stock: dto.stock ?? 0,
       unlimitedStock: !!dto.unlimitedStock,
-      shippingWeight: dto.shippingWeight ?? null,
+      shippingWeight: weight,
       images: dto.images ?? [],
       isDefault: existing.length === 0,
     });
@@ -128,6 +132,15 @@ export class ProductVariantsService {
     });
     if (!variant) throw new NotFoundException('Variant not found');
 
+    if (dto.price !== undefined || dto.compareAtPrice !== undefined) {
+      const ruleStore = await storeModel.findOne({ _id: ownedProduct.storeId, isDelete: false }).select('baseCurrency').lean();
+      assertPriceRules({
+        price: dto.price !== undefined ? dto.price : (variant as any).price,
+        compareAtPrice: dto.compareAtPrice !== undefined ? dto.compareAtPrice : (variant as any).compareAtPrice,
+        currency: (ruleStore as any)?.baseCurrency,
+      });
+    }
+
     if (this.premium && (dto.price !== undefined || dto.compareAtPrice !== undefined)) {
       const store = await storeModel.findOne({ _id: ownedProduct.storeId, isDelete: false }).select('premiumDiscount').lean();
       await assertPremiumGap(this.premium, store as any, (ownedProduct as any).premiumDiscountPercent, [{
@@ -153,7 +166,9 @@ export class ProductVariantsService {
     if (dto.options !== undefined) update.options = dto.options;
     if (dto.stock !== undefined) update.stock = dto.stock;
     if (dto.unlimitedStock !== undefined) update.unlimitedStock = !!dto.unlimitedStock;
-    if (dto.shippingWeight !== undefined) update.shippingWeight = dto.shippingWeight;
+    // Only checked when the request sends it, so old products without a weight stay editable; clearing it is rejected.
+    if (dto.shippingWeight !== undefined) update.shippingWeight = cleanShippingWeight(dto.shippingWeight, true);
+    if (dto.stock !== undefined) assertStockRule(dto.stock, dto.unlimitedStock !== undefined ? !!dto.unlimitedStock : !!(variant as any).unlimitedStock);
     if (dto.images !== undefined) update.images = dto.images;
 
     const updated =

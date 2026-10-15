@@ -55,7 +55,7 @@ describe('physical variant create / edit enforce the rule', () => {
     const { s, repos } = svc(terms());
     await expect(s.addVariant('u1', 'p1', { price: 88, compareAtPrice: 100, options: [] } as any)).rejects.toBeInstanceOf(BadRequestException);
     expect(repos.productVariantModel.create).not.toHaveBeenCalled();
-    await expect(s.addVariant('u1', 'p1', { price: 90, compareAtPrice: 100, options: [] } as any)).resolves.toMatchObject({ success: true });
+    await expect(s.addVariant('u1', 'p1', { price: 90, compareAtPrice: 100, options: [], shippingWeight: '1 kg' } as any)).resolves.toMatchObject({ success: true });
   });
   it('updateVariant: checks the new price/compare-at only, uses the current value for the field not sent; unrelated edits are never blocked', async () => {
     const { s, repos } = svc(terms());
@@ -65,6 +65,6 @@ describe('physical variant create / edit enforce the rule', () => {
   });
   it('without the premium module the variant service behaves exactly as before', async () => {
     const { s } = svc(undefined);
-    await expect(s.addVariant('u1', 'p1', { price: 10, compareAtPrice: 100, options: [] } as any)).resolves.toMatchObject({ success: true });
+    await expect(s.addVariant('u1', 'p1', { price: 10, compareAtPrice: 100, options: [], shippingWeight: '1 kg' } as any)).resolves.toMatchObject({ success: true });
   });
 });

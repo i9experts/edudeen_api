@@ -17,7 +17,7 @@ const EDUCATION_CATEGORIES: SeedCategory[] = [
   { name: 'Quran & Tajweed', description: 'Noorani Qaida, Quran reading, Tajweed, Hifz and translation resources.',
     subs: ['Noorani Qaida', 'Quran Reading (Nazra)', 'Tajweed Rules', 'Hifz & Revision', 'Quran Translation & Tafseer', 'Dua & Azkar', 'Quranic Arabic'] },
   { name: 'Islamic Studies', description: 'Aqeedah, Fiqh, Seerah, Hadith and character building for children and students.',
-    subs: ['Aqeedah (Beliefs)', 'Fiqh & Salah', 'Seerah of the Prophet ﷺ', 'Hadith', 'Islamic History', 'Akhlaq & Adab', 'Stories of the Prophets', 'Islamic Studies Worksheets'] },
+    subs: ['Aqeedah (Beliefs)', 'Fiqh & Salah', 'Seerah of the Prophet ﷺ', 'Hadith', 'Islamic History', 'Akhlaq & Adab', 'Stories of the Prophets', 'Islamic Studies Worksheets', 'Islamic Accessories (Prayer Mats, Rehal, Tasbeeh)'] },
   { name: 'Arabic Language', description: 'Arabic alphabet, reading, grammar and vocabulary for all ages.',
     subs: ['Arabic Alphabet & Reading', 'Arabic Grammar (Nahw & Sarf)', 'Arabic Vocabulary', 'Spoken Arabic', 'Arabic for Kids'] },
   { name: 'Urdu Language', description: 'Urdu qaida, reading, grammar, writing and literature.',
