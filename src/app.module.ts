@@ -82,9 +82,9 @@ import { PhoneVerificationModule } from './phone-verification/phone-verification
     ConfigModule.forRoot({ isGlobal: true }),
     EventEmitterModule.forRoot(),
     ThrottlerModule.forRoot([
-      // Platform-wide default: 100 req/min per IP. Endpoints that need a tighter
+      // Platform-wide default: 300 req/min per IP (home + browse pages fire ~10 calls each, and schools / shared networks share one IP; auth/payment endpoints keep their own tight @Throttle limits). Endpoints that need a tighter
       // (payment/webhook) or looser (public browse) limit override via @Throttle().
-      { name: 'default', ttl: 60_000, limit: 100 },
+      { name: 'default', ttl: 60_000, limit: 300 },
     ]),
     DatabaseModule,
     QueueModule,

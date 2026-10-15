@@ -119,6 +119,8 @@ export class PremiumEntitlementsService {
       return products.map((p) => {
         const sellerPct = premiumPercentFor(p as any, settings.get(String(p.storeId)));
         if (!sellerPct) return p;
+        // Free product (every variant priced 0): nothing to discount, so no Premium teaser.
+        if (Array.isArray(p.variants) && p.variants.length > 0 && p.variants.every((v: any) => !(Number(v?.price) > 0))) return p;
         const total = Math.round((sellerPct + terms.platformPercent) * 100) / 100;
         const out: any = { ...p, premiumPercent: total, premiumSellerPercent: sellerPct, premiumPlatformPercent: terms.platformPercent };
         if (isMember && Array.isArray(p.variants)) {

@@ -380,7 +380,7 @@ export class CartService {
           ...(!pl && cl ? { campaignId: cl.campaign.campaignId, campaignUnitPrice: cl.unit, campaignItemTotal: Math.round(cl.unit * i.quantity * 100) / 100, listPrice: cl.listUnit } : {}),
         };
         const pct = sellerPctOf(i.productId);
-        if (!pct) return base;
+        if (!pct || !(i.unitPrice > 0)) return base; // no teaser on free items
         // Teaser for everyone: seller% + platform% combined, with the breakdown.
         const teaser = { premiumPercent: Math.round((pct + (premiumTerms?.platformPercent ?? 0)) * 100) / 100, premiumSellerPercent: pct, premiumPlatformPercent: premiumTerms?.platformPercent ?? 0 };
         if (!pl) return { ...base, ...teaser };
