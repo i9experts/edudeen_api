@@ -53,15 +53,16 @@ export function assertDescriptionRule(description: unknown): void {
 }
 
 export const MAX_WEIGHT_KG = 50;
+export const MIN_WEIGHT_KG = 0.001; // 1 g
 export const MAX_STOCK = 100_000;
+const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
 
-/** "0.6 kg", "600 g", "0.6" (kg) -> kilograms; null when it is not a weight. */
+/** "0.6 kg", "600 g", "500g", "0.6" (kg) -> kilograms; null when it is not a (non-negative) weight. */
 export function parseWeightKg(text: unknown): number | null {
   const m = /^\s*(\d+(?:\.\d+)?)\s*(kg|g)?\s*$/i.exec(String(text ?? ''));
   if (!m) return null;
   const n = Number(m[1]);
-  const kg = (m[2] ?? 'kg').toLowerCase() === 'g' ? n / 1000 : n;
-  return Math.round(kg * 1000) / 1000;
+  return r6((m[2] ?? 'kg').toLowerCase() === 'g' ? n / 1000 : n);
 }
 
 /**
@@ -71,13 +72,13 @@ export function parseWeightKg(text: unknown): number | null {
 export function cleanShippingWeight(raw: unknown, required: boolean): string | undefined {
   if (raw === undefined && !required) return undefined;
   if (raw === undefined || raw === null || String(raw).trim() === '') throw new BadRequestException('Shipping weight is required');
+  if (/^\s*-\s*\d/.test(String(raw))) throw new BadRequestException("Shipping weight can't be negative");
   const kg = parseWeightKg(raw);
   if (kg === null) throw new BadRequestException('Shipping weight must be a number, e.g. 0.5 kg or 500 g');
-  if (!(kg > 0)) throw new BadRequestException('Shipping weight must be more than 0');
+  if (kg < MIN_WEIGHT_KG - 1e-12) throw new BadRequestException('Minimum weight is 1 g');
   if (kg > MAX_WEIGHT_KG) throw new BadRequestException(`Shipping weight can't be more than ${MAX_WEIGHT_KG} kg`);
   return `${kg} kg`;
 }
-
 /** Stock: whole number 0..MAX_STOCK (skipped for unlimited stock). */
 export function assertStockRule(stock: unknown, unlimited: boolean): void {
   if (unlimited || stock === undefined || stock === null) return;

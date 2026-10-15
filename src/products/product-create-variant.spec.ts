@@ -57,9 +57,13 @@ describe('ProductsService.addPhysicalProduct validation', () => {
   });
   it('rejects a weight that is not a number, zero, or over 50 kg', async () => {
     await reject({ shippingWeight: 'abc' }, {}, /must be a number/);
-    await reject({ shippingWeight: '0 kg' }, {}, /more than 0/);
+    await reject({ shippingWeight: '0 kg' }, {}, /Minimum weight is 1 g/);
+    await reject({ shippingWeight: '0.4 g' }, {}, /Minimum weight is 1 g/);
+    await reject({ shippingWeight: '-5 kg' }, {}, /can't be negative/);
     await reject({ shippingWeight: '51 kg' }, {}, /more than 50 kg/);
     await reject({ shippingWeight: '60000 g' }, {}, /more than 50 kg/);
+    await makeSvc().addPhysicalProduct('s1', body({ shippingWeight: '1 g' }));
+    const created: any[] = []; await makeSvc(created).addPhysicalProduct('s1', body({ shippingWeight: '500g' })); expect(created[0].shippingWeight).toBe('0.5 kg');
   });
   it('rejects bad stock: negative, decimal, huge', async () => {
     await reject({ stock: -1 }, {}, /Stock can't be negative/);
