@@ -8,6 +8,7 @@ import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { AdminMarketplaceService } from './admin-marketplace.service';
 import { MarketplaceListingQueryDto } from './dto/marketplace-listing-query.dto';
 import { SetFeaturedDto } from './dto/set-featured.dto';
+import { SetTestDto } from './dto/set-test.dto';
 import { SetTrustBadgesDto } from './dto/set-trust-badges.dto';
 import { SetStoreBadgeDto } from './dto/set-store-badge.dto';
 import { SetFulfillmentModeDto } from './dto/set-fulfillment-mode.dto';
@@ -41,6 +42,12 @@ export class AdminMarketplaceController {
   @Patch('listings/:id/feature')
   setFeatured(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: SetFeaturedDto) {
     return this.adminMarketplaceService.setFeatured(id, dto.isFeatured, this.meta(req));
+  }
+
+  /** Mark / unmark a listing as a QA test listing - hidden from every public surface while marked. */
+  @Patch('listings/:id/test')
+  setTest(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: SetTestDto) {
+    return this.adminMarketplaceService.setTest(id, dto.isTest, this.meta(req));
   }
 
   @Patch('listings/:id/trust')

@@ -4,6 +4,7 @@ import { blockingScope, maintenanceState, normalizeMaintenance, type Maintenance
 import { UpdateMaintenanceDto } from './dto/update-maintenance.dto';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
+import { isPublicStoreUrl, publicHomeContent, sanitizeHomeUrdu, sanitizeStatsThresholds } from './home-content.util';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { UpdateFeatureFlagsDto } from './dto/update-feature-flags.dto';
 import { UpdateAiConfigDto } from './dto/update-ai-config.dto';
@@ -345,8 +346,12 @@ export class AdminConfigService {
       if (src[key] === undefined) continue;
       const v = str(src[key], 500);
       if (v && !/^https?:\/\/\S+$/i.test(v)) throw new BadRequestException(`${key} must be a full https:// link`);
+      // App-store links must be PUBLIC (no Play internal-test / TestFlight links).
+      if (v && key !== 'heroImageUrl' && !isPublicStoreUrl(v)) throw new BadRequestException(`${key} must be a public https:// store link (internal-test and TestFlight links are not allowed)`);
       set[`homeContent.${key}`] = v;
     }
+    if (src.statsThresholds !== undefined) set['homeContent.statsThresholds'] = sanitizeStatsThresholds(src.statsThresholds);
+    if (src.ur !== undefined) set['homeContent.ur'] = sanitizeHomeUrdu(src.ur);
     if (src.promiseItems !== undefined) {
       set['homeContent.promiseItems'] = (Array.isArray(src.promiseItems) ? src.promiseItems : []).map(x => str(x, 80)).filter(Boolean).slice(0, 6);
     }
@@ -425,7 +430,9 @@ export class AdminConfigService {
       success: true,
       data: {
         socialLinks,
-        homeContent: (config as any).homeContent ?? {},
+        homeContent: publicHomeContent((config as any).homeContent),
+        // Real, derived facts the homepage trust points may claim (never invented).
+        commerce: { codAvailable: await this.isCodOffered() },
         sellerPage: (config as any).sellerPage ?? {},
         chatbot: effectiveChatbot((config as any).chatbot),
         payout: {
@@ -433,6 +440,15 @@ export class AdminConfigService {
         },
       },
     };
+  }
+
+  /** True when at least one live store accepts cash on delivery (used for the homepage trust points). */
+  private async isCodOffered(): Promise<boolean> {
+    try {
+      return !!(await this.databaseService.repositories.storeModel.exists({ status: 'active', isDelete: false, codEnabled: { $ne: false } }));
+    } catch {
+      return false;
+    }
   }
 
   async setMaintenanceMode(dto: UpdateMaintenanceDto, meta: AuditMeta) {

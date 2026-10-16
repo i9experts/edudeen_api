@@ -25,8 +25,8 @@ export class CoursesService {
   }
 
   private async findProduct(idOrSlug: string) {
-    let product: any = await this.r.productModel.findOne({ slug: idOrSlug, isDelete: false }).lean();
-    if (!product && isValidObjectId(idOrSlug)) product = await this.r.productModel.findOne({ _id: idOrSlug, isDelete: false }).lean();
+    let product: any = await this.r.productModel.findOne({ slug: idOrSlug, isDelete: false, isTest: { $ne: true } }).lean();
+    if (!product && isValidObjectId(idOrSlug)) product = await this.r.productModel.findOne({ _id: idOrSlug, isDelete: false, isTest: { $ne: true } }).lean();
     if (!product) throw new NotFoundException('Course not found');
     return product;
   }

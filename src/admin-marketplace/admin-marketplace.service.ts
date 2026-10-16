@@ -136,6 +136,7 @@ export class AdminMarketplaceService {
       purchaseCount: p.purchaseCount,
       status: flaggedIdSet.has(String(p._id)) ? 'flagged' : p.status,
       isFeatured: p.isFeatured,
+      isTest: (p as any).isTest === true,
       reviewNote: (p as any).reviewNote ?? null,
       createdAt: (p as any).createdAt,
     }));
@@ -153,6 +154,7 @@ export class AdminMarketplaceService {
     const product = await this.findProductOrThrow(id);
     // Only a listing buyers can actually see may be featured — featuring a draft / inactive / off-market listing
     // put it into featured rails. Unfeaturing is always allowed.
+    if (isFeatured && (product as any).isTest === true) throw new BadRequestException('A test listing cannot be featured - unmark it as a test first');
     if (isFeatured && (product.status !== 'active' || !(await isStoreLive(this.r.storeModel, product.storeId)))) {
       throw new BadRequestException('Only active listings from a live store can be featured');
     }
@@ -164,6 +166,14 @@ export class AdminMarketplaceService {
       id,
     );
     return { success: true, message: isFeatured ? 'Listing featured' : 'Listing unfeatured' };
+  }
+
+  /** QA flag: a test listing is hidden from every public query (browse, search, rails, sitemap...). Marking it also drops the featured flag. */
+  async setTest(id: string, isTest: boolean, meta: AuditMeta) {
+    const product = await this.findProductOrThrow(id);
+    await this.r.productModel.findByIdAndUpdate(id, { $set: isTest ? { isTest: true, isFeatured: false } : { isTest: false } });
+    this.log(isTest ? 'listing_marked_test' : 'listing_unmarked_test', `Listing "${product.name}" ${isTest ? 'marked as test (hidden from the public)' : 'unmarked as test'}`, meta, id);
+    return { success: true, message: isTest ? 'Marked as test - hidden from the public' : 'Test mark removed' };
   }
 
   /** Sets the admin trust badges (scholar reviewed, age-appropriate range) on a listing. Omitted fields are kept. */

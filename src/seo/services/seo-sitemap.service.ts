@@ -58,7 +58,7 @@ export class SeoSitemapService {
 
   private async regenerateProducts(storeId?: string) {
     const { productModel } = this.db.repositories;
-    const filter: Record<string, any> = { status: 'active', isDelete: false };
+    const filter: Record<string, any> = { status: 'active', isDelete: false, isTest: { $ne: true } };
     // Only products of LIVE stores are indexed (suspended/pending stores' products used to be listed).
     const liveStores = await this.db.repositories.storeModel
       .find({ status: 'active', isDelete: false, ...(storeId ? { _id: storeId } : {}) }).select('_id').lean();

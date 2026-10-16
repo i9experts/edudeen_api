@@ -320,6 +320,11 @@ export class Product {
   @Prop({ default: false })
   isFeatured: boolean;
 
+  // Admin-only QA flag: a test listing is hidden from EVERY public surface (browse, search, sitemap, rails...).
+  // Unset on old documents, so public queries use { isTest: { $ne: true } }, never $eq false.
+  @Prop({ default: false })
+  isTest: boolean;
+
   // Admin-assigned trust badges (set in the listing review; see products/trust-badges.util.ts).
   // Plain nested object, null until an admin sets something.
   @Prop({ type: Object, default: null })
@@ -379,5 +384,6 @@ ProductSchema.index({ status: 1 });
 // perf: compound indexes for hot query paths (additive)
 ProductSchema.index({ storeId: 1, status: 1, isDelete: 1 });
 ProductSchema.index({ status: 1, isDelete: 1, createdAt: -1 });
+ProductSchema.index({ isTest: 1 });
 ProductSchema.index({ categoryId: 1, status: 1, isDelete: 1 });
 ProductSchema.index({ scheduledAt: 1 });

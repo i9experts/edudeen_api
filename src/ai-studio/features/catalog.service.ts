@@ -46,7 +46,7 @@ export function normalizeFilters(raw: any): SearchFilters {
  * Semantic (embedding) ranking is merged on top of this by SmartSearchService (see embeddings/semantic-index.service.ts).
  */
 export function buildProductFilter(f: SearchFilters, activeStoreIds: string[], categoryIds: string[] = []): Record<string, any> {
-  const q: Record<string, any> = { status: 'active', isDelete: false, storeId: { $in: activeStoreIds } };
+  const q: Record<string, any> = { status: 'active', isDelete: false, isTest: { $ne: true }, storeId: { $in: activeStoreIds } };
   if (f.keywords.length) {
     const ors: any[] = [];
     for (const k of f.keywords) {
@@ -116,7 +116,7 @@ export class AiCatalogService {
     const valid = ids.filter((i) => Types.ObjectId.isValid(i));
     if (!valid.length) return [];
     const stores = await this.r.storeModel.find({ status: 'active', isDelete: false }, { _id: 1 }).lean();
-    const products: any[] = await this.r.productModel.find({ _id: { $in: valid }, status: 'active', isDelete: false, storeId: { $in: stores.map((s: any) => s._id.toString()) } }).lean();
+    const products: any[] = await this.r.productModel.find({ _id: { $in: valid }, status: 'active', isDelete: false, isTest: { $ne: true }, storeId: { $in: stores.map((s: any) => s._id.toString()) } }).lean();
     const byId = new Map(products.map((p) => [p._id.toString(), p]));
     let cards = await this.toCards(valid.map((i) => byId.get(i)).filter(Boolean));
     if (f.minPrice != null) cards = cards.filter((c) => c.price != null && c.price >= f.minPrice!);
@@ -125,7 +125,7 @@ export class AiCatalogService {
   }
 
   async getOne(idOrSlug: string): Promise<(ProductCard & { description: string; tags: string[]; ageMin: number | null; ageMax: number | null; curricula: string[] }) | null> {
-    const filter: any = { status: 'active', isDelete: false, ...(Types.ObjectId.isValid(idOrSlug) ? { _id: idOrSlug } : { slug: idOrSlug }) };
+    const filter: any = { status: 'active', isDelete: false, isTest: { $ne: true }, ...(Types.ObjectId.isValid(idOrSlug) ? { _id: idOrSlug } : { slug: idOrSlug }) };
     const p: any = await this.r.productModel.findOne(filter).lean();
     if (!p) return null;
     const [card] = await this.toCards([p]);

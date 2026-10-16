@@ -21,8 +21,8 @@ export class ProductQuestionsService {
 
   private async findProduct(idOrSlug: string) {
     const { productModel } = this.databaseService.repositories;
-    let product: any = await productModel.findOne({ slug: idOrSlug, isDelete: false }).select('_id name slug storeId sellerId status').lean();
-    if (!product && isValidObjectId(idOrSlug)) product = await productModel.findOne({ _id: idOrSlug, isDelete: false }).select('_id name slug storeId sellerId status').lean();
+    let product: any = await productModel.findOne({ slug: idOrSlug, isDelete: false, isTest: { $ne: true } }).select('_id name slug storeId sellerId status').lean();
+    if (!product && isValidObjectId(idOrSlug)) product = await productModel.findOne({ _id: idOrSlug, isDelete: false, isTest: { $ne: true } }).select('_id name slug storeId sellerId status').lean();
     if (!product) throw new NotFoundException('Product not found');
     return product;
   }

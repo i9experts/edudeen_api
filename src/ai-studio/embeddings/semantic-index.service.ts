@@ -112,7 +112,7 @@ export class SemanticIndexService {
   async prune(): Promise<number> {
     const ids: string[] = (await this.model.find({}).select('productId').lean()).map((e: any) => e.productId);
     if (!ids.length) return 0;
-    const live = new Set((await this.db.repositories.productModel.find({ _id: { $in: ids }, status: 'active', isDelete: false }).select('_id').lean()).map((p: any) => p._id.toString()));
+    const live = new Set((await this.db.repositories.productModel.find({ _id: { $in: ids }, status: 'active', isDelete: false, isTest: { $ne: true } }).select('_id').lean()).map((p: any) => p._id.toString()));
     const dead = ids.filter((i) => !live.has(i));
     if (dead.length) await this.model.deleteMany({ productId: { $in: dead } });
     return dead.length;

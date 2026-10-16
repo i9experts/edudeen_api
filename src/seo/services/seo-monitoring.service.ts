@@ -201,7 +201,7 @@ export class SeoMonitoringService implements OnModuleInit, OnModuleDestroy {
   /** Top-trafficked product/store URLs for the weekly CWV cron — PSI has real per-call latency and rate limits, so this is deliberately capped rather than scanning the whole catalog. */
   async getTopUrlsForCwv(limit = 40): Promise<string[]> {
     const [topProducts, topStores] = await Promise.all([
-      this.db.repositories.productModel.find({ status: 'active', isDelete: false }).sort({ purchaseCount: -1 }).limit(limit * 0.7).select('slug').lean(),
+      this.db.repositories.productModel.find({ status: 'active', isDelete: false, isTest: { $ne: true } }).sort({ purchaseCount: -1 }).limit(limit * 0.7).select('slug').lean(),
       this.db.repositories.storeModel.find({ status: 'active', isDelete: false }).sort({ followersCount: -1 }).limit(limit * 0.3).select('slug').lean(),
     ]);
     return [

@@ -32,6 +32,7 @@ import { AdminConfigService } from 'src/admin-config/admin-config.service';
 import { StoreThemeService } from '../store-theme/store-theme.service';
 import { StorePagesService } from '../store-pages/store-pages.service';
 import { CollectionsService } from '../collections/collections.service';
+import { featuredStoreFilter, isFeaturedStoreEligible } from './featured-stores.util';
 
 // Store slugs render at the site root (`edudeen.com/:slug`) — these are the
 // frontend's top-level static route segments (router/index.tsx), reserved so
@@ -984,7 +985,7 @@ export class StoreService {
     const storeIds = stores.map((s: any) => s._id.toString());
     const productCounts = storeIds.length
       ? await productModel.aggregate([
-          { $match: { storeId: { $in: storeIds }, isDelete: false } },
+          { $match: { storeId: { $in: storeIds }, isDelete: false, status: 'active', isTest: { $ne: true } } },
           { $group: { _id: '$storeId', count: { $sum: 1 } } },
         ])
       : [];
@@ -1008,27 +1009,33 @@ export class StoreService {
 
   // ── 3c. Top stores — cached for the home-screen row ───────────────────────
   async getTopStores(limit: number) {
-    const cacheKey = `top-stores:v2:${limit}`;
+    const cacheKey = `top-stores:v3:${limit}`;
     const cached = await this.redisService.get(cacheKey);
     if (cached) {
       return { success: true, data: { stores: JSON.parse(cached) } };
     }
 
     const { storeModel, productModel } = this.databaseService.repositories;
-    const stores = await storeModel
-      .find({ status: 'active', isDelete: false })
+    // Only finished stores are featured: logo, banner, a real bio (cheap checks in the query) and enough
+    // published, non-test listings (checked on the candidates below).
+    const candidates = await storeModel
+      .find(featuredStoreFilter())
       .sort({ averageRating: -1, followersCount: -1 })
-      .limit(limit)
+      .limit(Math.min(100, limit * 5))
       .lean();
 
-    const storeIds = stores.map((s: any) => s._id.toString());
-    const productCounts = storeIds.length
+    const candidateIds = candidates.map((s: any) => s._id.toString());
+    const productCounts = candidateIds.length
       ? await productModel.aggregate([
-          { $match: { storeId: { $in: storeIds }, isDelete: false } },
+          { $match: { storeId: { $in: candidateIds }, isDelete: false, status: 'active', isTest: { $ne: true } } },
           { $group: { _id: '$storeId', count: { $sum: 1 } } },
         ])
       : [];
     const productCountByStore = new Map<string, number>(productCounts.map((r: any) => [r._id, r.count]));
+    const stores = candidates
+      .filter((s: any) => isFeaturedStoreEligible(s, productCountByStore.get(s._id.toString()) ?? 0))
+      .slice(0, limit);
+    const storeIds = stores.map((s: any) => s._id.toString());
     const campaignsByStore = await this.marketingService.getActiveCampaignsForStores(storeIds);
 
     const shaped = stores.map((s: any) =>
@@ -1045,13 +1052,13 @@ export class StoreService {
 
   // ── 3d. Platform-wide stats — homepage stat strip (real numbers, cached) ──
   async getPlatformStats() {
-    const cacheKey = 'platform-stats:v1';
+    const cacheKey = 'platform-stats:v2';
     const cached = await this.redisService.get(cacheKey);
     if (cached) return { success: true, data: JSON.parse(cached) };
 
-    const { sellerModel, storeModel, userModel, orderModel, ratingModel } = this.databaseService.repositories;
+    const { sellerModel, storeModel, userModel, orderModel, ratingModel, productModel } = this.databaseService.repositories;
 
-    const [storesCount, sellersCount, buyersCount, gmvAgg, ratingAgg] = await Promise.all([
+    const [storesCount, sellersCount, buyersCount, gmvAgg, ratingAgg, productsCount] = await Promise.all([
       storeModel.countDocuments({ isDelete: false, status: 'active' }),
       sellerModel.countDocuments({ isDelete: false, status: 'active' }),
       userModel.countDocuments({ isDelete: false }),
@@ -1063,12 +1070,15 @@ export class StoreService {
         { $match: { isDelete: false, rating: { $ne: null } } },
         { $group: { _id: null, avg: { $avg: '$rating' }, count: { $sum: 1 } } },
       ]),
+      // Published, non-test listings only (the homepage stats thresholds read this).
+      productModel.countDocuments({ status: 'active', isDelete: false, isTest: { $ne: true } }),
     ]);
 
     const data = {
       storesCount,
       sellersCount,
       buyersCount,
+      productsCount,
       gmv: gmvAgg[0]?.total ?? 0,
       avgRating: ratingAgg[0]?.avg ?? 0,
       ratingCount: ratingAgg[0]?.count ?? 0,
@@ -1102,7 +1112,7 @@ export class StoreService {
     const qCollection = queryString(query.collectionId);
     const qSort = queryString(query.sort);
 
-    const filter: any = { storeId, isDelete: false, status: 'active' };
+    const filter: any = { storeId, isDelete: false, status: 'active', isTest: { $ne: true } };
     if (qType && qType !== 'all') filter.type = qType;
     // `Product.categoryId` is the store's single fixed root category — every
     // product in a store shares the exact same value there, so filtering on
@@ -1140,7 +1150,7 @@ export class StoreService {
     // actually returned.
     if (query.onSale === true || query.onSale === 'true') {
       const storeProductIds = (
-        await this.databaseService.repositories.productModel.find({ storeId, isDelete: false, status: 'active' }).select('_id').lean()
+        await this.databaseService.repositories.productModel.find({ storeId, isDelete: false, status: 'active', isTest: { $ne: true } }).select('_id').lean()
       ).map((p: any) => p._id.toString());
       const onSaleVariants = await this.databaseService.repositories.productVariantModel
         .find({ productId: { $in: storeProductIds }, status: 'active', isDelete: false, $expr: { $gt: ['$compareAtPrice', '$price'] } })
@@ -1273,6 +1283,7 @@ export class StoreService {
       storeId,
       isDelete: false,
       status: 'active',
+      isTest: { $ne: true },
     });
 
     // Which subcategories this store's own active catalog actually uses —
@@ -1282,7 +1293,7 @@ export class StoreService {
     // one root — see assertValidRootCategory — so faceting by root would
     // always return exactly one, useless, entry).
     const categoryAgg = await productModel.aggregate([
-      { $match: { storeId, isDelete: false, status: 'active', subCategoryId: { $ne: null } } },
+      { $match: { storeId, isDelete: false, status: 'active', isTest: { $ne: true }, subCategoryId: { $ne: null } } },
       { $group: { _id: '$subCategoryId', count: { $sum: 1 } } },
     ]);
     const categoryIds = categoryAgg.map((c) => c._id).filter(Boolean);

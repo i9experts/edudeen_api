@@ -74,7 +74,7 @@ export class EducationLevelService implements OnModuleInit {
 
   /** Tier-1 + Tier-2 counts from live products only — backs the buyer-side dynamic filter chips. */
   async getFacets() {
-    const baseMatch = { productType: 'educational', status: 'active', isDelete: false };
+    const baseMatch = { productType: 'educational', status: 'active', isDelete: false, isTest: { $ne: true } };
 
     const levelRows = await this.productModel.aggregate([
       { $match: { ...baseMatch, educationLevel: { $ne: null } } },

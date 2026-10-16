@@ -84,7 +84,7 @@ export class CuratedCollectionsService {
     const picked = c.productIds?.length ? await this.productsService.getShapedProductsByIds(c.productIds.slice(0, limit), viewerId ?? null) : [];
     let products: any[] = picked;
     if (products.length < limit && hasRule(c.rule)) {
-      const filter: any = { status: 'active', isDelete: false, _id: { $nin: products.map((p: any) => p._id) } };
+      const filter: any = { status: 'active', isDelete: false, isTest: { $ne: true }, _id: { $nin: products.map((p: any) => p._id) } };
       if (c.rule.educationLevel) filter.educationLevel = c.rule.educationLevel;
       if (c.rule.curriculum) filter.curricula = c.rule.curriculum;
       if (c.rule.categoryId) {
@@ -159,7 +159,7 @@ export class CuratedCollectionsService {
     const term = str(q, 60);
     if (term.length < 2) return { success: true, data: [] };
     const rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    const rows = await this.databaseService.repositories.productModel.find({ status: 'active', isDelete: false, name: rx }).select('_id name slug images storeId').limit(20).lean();
+    const rows = await this.databaseService.repositories.productModel.find({ status: 'active', isDelete: false, isTest: { $ne: true }, name: rx }).select('_id name slug images storeId').limit(20).lean();
     return { success: true, data: rows.map((p: any) => ({ _id: String(p._id), name: p.name, slug: p.slug, image: p.images?.[0] ?? null })) };
   }
 }

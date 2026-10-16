@@ -346,11 +346,11 @@ export class CategoriesService {
     const productModel = this.databaseService.repositories.productModel;
     const [rootRows, subRows] = await Promise.all([
       productModel.aggregate([
-        { $match: { status: 'active', isDelete: false } },
+        { $match: { status: 'active', isDelete: false, isTest: { $ne: true } } },
         { $group: { _id: '$categoryId', count: { $sum: 1 } } },
       ]),
       productModel.aggregate([
-        { $match: { status: 'active', isDelete: false, subCategoryId: { $ne: null } } },
+        { $match: { status: 'active', isDelete: false, isTest: { $ne: true }, subCategoryId: { $ne: null } } },
         { $group: { _id: '$subCategoryId', count: { $sum: 1 } } },
       ]),
     ]);

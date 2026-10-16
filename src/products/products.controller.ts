@@ -156,7 +156,7 @@ export class productController {
   @UseGuards(OptionalJwtAuthGuard)
   @Get('getProductById/:id')
   async getProductById(@Req() req: any, @Param('id') id: string) {
-    return this.ProductsService.getProductById(id, req.user?.userId ?? null);
+    return this.ProductsService.getProductById(id, req.user?.userId ?? null, req.user?.role ?? null);
   }
 
   @Get('getVariantById/:variantId')

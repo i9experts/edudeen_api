@@ -464,8 +464,8 @@ export class ProductsService {
       throw new HttpException({ success: false, message: 'Too many requests — please try again later' }, HttpStatus.TOO_MANY_REQUESTS);
     }
     const { productModel } = this.databaseService.repositories;
-    let product: any = await productModel.findOne({ slug: idOrSlug, status: 'active', isDelete: false }).lean();
-    if (!product && isValidObjectId(idOrSlug)) product = await productModel.findOne({ _id: idOrSlug, status: 'active', isDelete: false }).lean();
+    let product: any = await productModel.findOne({ slug: idOrSlug, status: 'active', isDelete: false, isTest: { $ne: true } }).lean();
+    if (!product && isValidObjectId(idOrSlug)) product = await productModel.findOne({ _id: idOrSlug, status: 'active', isDelete: false, isTest: { $ne: true } }).lean();
     if (!product || !(await this.isStoreLive(product.storeId))) throw new NotFoundException('Product not found');
     const sample = product.digital?.sampleFile;
     if (!sample?.url) throw new NotFoundException('This product has no free sample');
@@ -498,11 +498,11 @@ export class ProductsService {
     // Same slug-first, id-fallback resolution as getProductById — the
     // product-detail page passes whatever :slug route param it has.
     let product = await productModel
-      .findOne({ slug: idOrSlug, status: 'active', isDelete: false })
+      .findOne({ slug: idOrSlug, status: 'active', isDelete: false, isTest: { $ne: true } })
       .lean();
     if (!product && isValidObjectId(idOrSlug)) {
       product = await productModel
-        .findOne({ _id: idOrSlug, status: 'active', isDelete: false })
+        .findOne({ _id: idOrSlug, status: 'active', isDelete: false, isTest: { $ne: true } })
         .lean();
     }
     if (!product) throw new NotFoundException('Product not found');
@@ -619,7 +619,7 @@ export class ProductsService {
 
     const query: any = {
       status: 'active',
-      isDelete: false,
+      isDelete: false, isTest: { $ne: true },
     };
 
     // Keyword search together with every filter below, so a search results
@@ -1016,7 +1016,7 @@ export class ProductsService {
 
     const query: any = {
       status: 'active',
-      isDelete: false,
+      isDelete: false, isTest: { $ne: true },
       $or: [{ name: regex }, { description: regex }],
     };
 
@@ -1052,8 +1052,8 @@ export class ProductsService {
    */
   async getAlsoBought(idOrSlug: string, limit = 8, customerId?: string | null) {
     const { productModel, orderModel } = this.databaseService.repositories;
-    let product: any = await productModel.findOne({ slug: idOrSlug, status: 'active', isDelete: false }).select('_id categoryId educationLevel').lean();
-    if (!product && isValidObjectId(idOrSlug)) product = await productModel.findOne({ _id: idOrSlug, status: 'active', isDelete: false }).select('_id categoryId educationLevel').lean();
+    let product: any = await productModel.findOne({ slug: idOrSlug, status: 'active', isDelete: false, isTest: { $ne: true } }).select('_id categoryId educationLevel').lean();
+    if (!product && isValidObjectId(idOrSlug)) product = await productModel.findOne({ _id: idOrSlug, status: 'active', isDelete: false, isTest: { $ne: true } }).select('_id categoryId educationLevel').lean();
     if (!product) throw new NotFoundException('Product not found');
     const pid = String(product._id);
     const max = Math.min(Math.max(limit, 1), 20);
@@ -1075,7 +1075,7 @@ export class ProductsService {
 
     if (picked.length < max) {
       const have = new Set([pid, ...picked.map(p => String(p._id))]);
-      const filter: any = { status: 'active', isDelete: false, _id: { $nin: [...have] } };
+      const filter: any = { status: 'active', isDelete: false, isTest: { $ne: true }, _id: { $nin: [...have] } };
       if (product.educationLevel) filter.educationLevel = product.educationLevel;
       else filter.categoryId = product.categoryId;
       await this.restrictToActiveStores(filter);
@@ -1095,7 +1095,7 @@ export class ProductsService {
     if (!this.fuzzyLoading) {
       this.fuzzyLoading = (async () => {
         const rows = await this.databaseService.repositories.productModel
-          .find({ status: 'active', isDelete: false }).select('name tags').limit(20000).lean();
+          .find({ status: 'active', isDelete: false, isTest: { $ne: true } }).select('name tags').limit(20000).lean();
         this.fuzzy.build(rows.map((r: any) => [r.name, ...(Array.isArray(r.tags) ? r.tags : [])].join(' ')));
       })().catch(() => { this.fuzzy.builtAt = Date.now(); }).finally(() => { this.fuzzyLoading = null; });
     }
@@ -1157,7 +1157,7 @@ export class ProductsService {
       const storeById = new Map(stores.map((s) => [String(s._id), s]));
       const enabledStoreIds = stores.filter((s) => s.premiumDiscount?.enabled).map((s) => String(s._id));
       const docs: any[] = await productModel.find({
-        status: 'active', isDelete: false, premiumOptOut: { $ne: true },
+        status: 'active', isDelete: false, isTest: { $ne: true }, premiumOptOut: { $ne: true },
         storeId: { $in: [...storeById.keys()] },
         $or: [{ premiumDiscountPercent: { $gt: 0 } }, { storeId: { $in: enabledStoreIds } }],
       }).sort({ purchaseCount: -1, _id: -1 }).limit(300).lean();
@@ -1195,7 +1195,7 @@ export class ProductsService {
     const query: any = {
       _id: { $in: productIds },
       status: 'active',
-      isDelete: false,
+      isDelete: false, isTest: { $ne: true },
     };
     await this.restrictToActiveStores(query);
 
@@ -1231,7 +1231,7 @@ export class ProductsService {
     if (!(await this.isStoreLive(storeId))) return { success: true, data: { products: [] } };
     const productModel = this.databaseService.repositories.productModel;
     const products = await productModel
-      .find({ storeId, status: 'active', isDelete: false })
+      .find({ storeId, status: 'active', isDelete: false, isTest: { $ne: true } })
       .sort({ createdAt: -1 })
       .limit(limit)
       .lean();
@@ -1245,7 +1245,7 @@ export class ProductsService {
     const topIds = [...sales].sort((a, b) => b.unitsSold - a.unitsSold).slice(0, limit).map((s) => s.productId);
     if (!topIds.length) return { success: true, data: { products: [] } };
 
-    const products = await productModel.find({ _id: { $in: topIds }, storeId, status: 'active', isDelete: false }).lean();
+    const products = await productModel.find({ _id: { $in: topIds }, storeId, status: 'active', isDelete: false, isTest: { $ne: true } }).lean();
     const byId = new Map(products.map((p: any) => [p._id.toString(), p]));
     const ordered = topIds.map((id) => byId.get(id)).filter(Boolean);
     return { success: true, data: { products: await this.attachVariantsAndPricing(ordered, customerId) } };
@@ -1262,7 +1262,9 @@ export class ProductsService {
     return this.getTopSellingProducts(storeId, sevenDaysAgo, limit, customerId);
   }
 
-  async getProductById(idOrSlug: string, customerId?: string | null) {
+  async getProductById(idOrSlug: string, customerId?: string | null, viewerRole?: string | null) {
+    // Products flagged as test are hidden from the public; an admin can still open them.
+    const testFilter: any = viewerRole === 'admin' ? {} : { isTest: { $ne: true } };
     const productModel = this.databaseService.repositories.productModel;
     const productVariantModel =
       this.databaseService.repositories.productVariantModel;
@@ -1277,7 +1279,7 @@ export class ProductsService {
       .findOne({
         slug: idOrSlug,
         status: 'active',
-        isDelete: false,
+        isDelete: false, ...testFilter,
       })
       .lean();
 
@@ -1286,7 +1288,7 @@ export class ProductsService {
         .findOne({
           _id: idOrSlug,
           status: 'active',
-          isDelete: false,
+          isDelete: false, ...testFilter,
         })
         .lean();
     }
@@ -1446,7 +1448,7 @@ export class ProductsService {
       .findOne({
         _id: variant.productId,
         status: 'active',
-        isDelete: false,
+        isDelete: false, isTest: { $ne: true },
       })
       .lean();
 

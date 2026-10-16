@@ -93,7 +93,7 @@ export class SeoResolutionService {
     const { productModel, productVariantModel, categoryModel, storeModel } = this.db.repositories;
     // Only LIVE products of LIVE stores have public SEO metadata (drafts, scheduled, deleted and suspended-store
     // products used to be readable here: name, description, price).
-    const product = await this.findByIdOrSlug(productModel, idOrSlug, 'slug', { status: 'active' });
+    const product = await this.findByIdOrSlug(productModel, idOrSlug, 'slug', { status: 'active', isTest: { $ne: true } });
     if (!product) throw new NotFoundException('Product not found.');
 
     const [category, store, variants] = await Promise.all([
