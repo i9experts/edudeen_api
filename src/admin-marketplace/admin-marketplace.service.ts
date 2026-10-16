@@ -137,6 +137,9 @@ export class AdminMarketplaceService {
       status: flaggedIdSet.has(String(p._id)) ? 'flagged' : p.status,
       isFeatured: p.isFeatured,
       isTest: (p as any).isTest === true,
+      // Server review flags (e.g. 'contact_info') + the matched text, shown as a badge in the review queue.
+      flags: (p as any).flags ?? [],
+      contactMatches: (p as any).contactMatches ?? [],
       reviewNote: (p as any).reviewNote ?? null,
       createdAt: (p as any).createdAt,
     }));
@@ -239,6 +242,9 @@ export class AdminMarketplaceService {
         status: product.status,
         scheduledAt: product.scheduledAt,
         reviewNote: product.reviewNote ?? null,
+        flags: product.flags ?? [],
+        contactMatches: product.contactMatches ?? [],
+        flagReason: product.flagReason ?? null,
         ageMin: product.ageMin ?? null,
         ageMax: product.ageMax ?? null,
         trust: product.trust ?? null,
@@ -280,7 +286,7 @@ export class AdminMarketplaceService {
     // Claimed atomically, so two reviewers can't both act on it.
     const product = await this.r.productModel.findOneAndUpdate(
       { _id: id, isDelete: false, status: current.status },
-      { $set: { status: nextStatus, approvedAt: now, reviewedAt: now, reviewNote: note?.trim() || null } },
+      { $set: { status: nextStatus, approvedAt: now, reviewedAt: now, reviewNote: note?.trim() || null, flags: [], contactMatches: [], flagReason: null } },
       { returnDocument: 'after' },
     );
     if (!product) throw new ConflictException('Someone else just reviewed this listing — refresh the queue');

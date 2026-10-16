@@ -325,6 +325,21 @@ export class Product {
   @Prop({ default: false })
   isTest: boolean;
 
+  // Old slugs after a rename (kept so old links still resolve and redirect to the current slug).
+  @Prop({ type: [String], default: [] })
+  previousSlugs: string[];
+
+  // Review flags set by the server (e.g. 'contact_info' = the text shows a phone / WhatsApp / email). Cleared on admin approval.
+  @Prop({ type: [String], default: [] })
+  flags: string[];
+
+  // The matched text behind the flags, shown to the admin reviewer.
+  @Prop({ type: [String], default: [] })
+  contactMatches: string[];
+
+  @Prop({ type: String, default: null })
+  flagReason: string | null;
+
   // Admin-assigned trust badges (set in the listing review; see products/trust-badges.util.ts).
   // Plain nested object, null until an admin sets something.
   @Prop({ type: Object, default: null })
@@ -385,5 +400,6 @@ ProductSchema.index({ status: 1 });
 ProductSchema.index({ storeId: 1, status: 1, isDelete: 1 });
 ProductSchema.index({ status: 1, isDelete: 1, createdAt: -1 });
 ProductSchema.index({ isTest: 1 });
+ProductSchema.index({ previousSlugs: 1 });
 ProductSchema.index({ categoryId: 1, status: 1, isDelete: 1 });
 ProductSchema.index({ scheduledAt: 1 });

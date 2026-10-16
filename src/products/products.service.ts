@@ -29,7 +29,9 @@ import { sanitizeDigitalForPublicView } from './product-public-view.util';
 import { classFilter, classIndex } from './class-levels';
 import { assertPriceRules, assertDescriptionRule, assertStockRule, cleanShippingWeight } from './price-rules.util';
 import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, cleanLearningMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
-import { generateUniqueSlug } from 'src/common/slug.util';
+import { generateProductSlug, nextPreviousSlugs } from 'src/common/slug.util';
+import { assertClassRangeRule, assertTitleRule, normalizeTitle, productWarnings } from './product-quality.util';
+import { CONTACT_FLAG, scanImagesForContactInfo, scanListingText } from './contact-info.util';
 import { RedisService } from 'src/redis/redis.service';
 import { aggregateProductSales } from 'src/analytics/utils/order-aggregation.util';
 import {
@@ -1293,6 +1295,13 @@ export class ProductsService {
         .lean();
     }
 
+    // An old link after a rename: the previous slug still finds the product; `canonicalSlug` lets the web replace the URL.
+    let viaPreviousSlug = false;
+    if (!product && typeof idOrSlug === 'string' && !isValidObjectId(idOrSlug)) {
+      product = await productModel.findOne({ previousSlugs: idOrSlug, status: 'active', isDelete: false, ...testFilter }).lean();
+      viaPreviousSlug = !!product;
+    }
+
     if (product && (await this.isHiddenByEarlyAccess(product, customerId))) {
       return { message: 'Product not found', success: false, data: null };
     }
@@ -1370,6 +1379,9 @@ export class ProductsService {
     ], customerId);
     const { variants: campaignVariants, ...productWithSeller } = withCampaign as any;
     let variants: any[] = campaignVariants ?? pricedVariants;
+    // Canonical URL slug; slugRedirect = the request used an OLD slug, so the web should replace the URL.
+    (productWithSeller as any).canonicalSlug = product.slug;
+    (productWithSeller as any).slugRedirect = viaPreviousSlug;
 
     // Edudeen Premium: teaser percent for everyone, member price on the variants for active members.
     {
@@ -1569,6 +1581,8 @@ export class ProductsService {
     }
 
     assertText(name, 'name', 200);
+    const title = normalizeTitle(name);
+    assertTitleRule(title);
     // The schema requires a non-empty description (a missing one used to come back as a 500); sellers must write at least 20 characters.
     assertDescriptionRule(description);
     assertText(description, 'description', 20000);
@@ -1585,13 +1599,19 @@ export class ProductsService {
     const campaignIds = body.campaignIds === undefined ? [] : await this.marketingService.resolveProductCampaignIds(String(store._id), body.campaignIds);
     // Owner rule R3: a product is in a platform sale OR has a Premium offer, never both.
     assertOfferExclusive(store as any, { ...premiumFieldsFromBody(body), campaignIds });
-    const slug = await generateUniqueSlug(productModel, name);
+    const slug = await generateProductSlug(productModel, title);
+    const learnMeta = cleanLearningMeta(body);
+    const quality = this.checkListing({ title, type: 'physical', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, requestedStatus: status });
+    const requestedStatus = status ? resolveSellerPublishStatus(status, null) : 'draft';
+    // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
+    const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
 
     const product = await productModel.create({
       sellerId,
       storeId: store._id.toString(),
-      name,
+      name: title,
       slug,
+      ...this.qualityFields(quality.scan),
       campaignIds,
       ...premiumFieldsFromBody(body),
       description: description ?? null,
@@ -1603,9 +1623,9 @@ export class ProductsService {
       tags: cleanTags,
       digital: null,
       isListedOnEdudeen: isListedOnEdudeen ?? false,
-      ...cleanLearningMeta(body),
+      ...learnMeta,
       // A first publish goes to admin review (see resolveSellerPublishStatus).
-      status: status ? resolveSellerPublishStatus(status, null) : 'draft',
+      status: finalStatus,
       scheduledAt: scheduledDate,
     });
 
@@ -1634,11 +1654,12 @@ export class ProductsService {
       }),
     );
 
+    void scanImagesForContactInfo(String(product._id), cleanImages); // TODO(OCR) no-op hook - see contact-info.util.ts
     return {
       success: true,
-      message: 'Physical product created successfully',
+      message: 'Physical product created successfully' + this.contactNote(quality.scan),
       // `defaultVariant` mirrors the digital create response; the seller UI caches it to open the edit form.
-      data: { product, variants: createdVariants, defaultVariant: createdVariants.find((v: any) => v.isDefault) ?? createdVariants[0] ?? null },
+      data: { product, variants: createdVariants, defaultVariant: createdVariants.find((v: any) => v.isDefault) ?? createdVariants[0] ?? null, warnings: quality.warnings, contactFlag: quality.scan.flagged ? { matches: quality.scan.matches, reason: quality.scan.reason } : null },
     };
   }
 
@@ -1709,6 +1730,8 @@ export class ProductsService {
     }
 
     assertText(name, 'name', 200);
+    const title = normalizeTitle(name);
+    assertTitleRule(title);
     // The schema requires a non-empty description (a missing one used to come back as a 500); sellers must write at least 20 characters.
     assertDescriptionRule(description);
     assertText(description, 'description', 20000);
@@ -1769,13 +1792,19 @@ export class ProductsService {
     const campaignIds = body.campaignIds === undefined ? [] : await this.marketingService.resolveProductCampaignIds(String(store._id), body.campaignIds);
     // Owner rule R3: a product is in a platform sale OR has a Premium offer, never both.
     assertOfferExclusive(store as any, { ...premiumFieldsFromBody(body), campaignIds });
-    const slug = await generateUniqueSlug(productModel, name);
+    const slug = await generateProductSlug(productModel, title);
+    const learnMeta = cleanLearningMeta(body);
+    const quality = this.checkListing({ title, type: 'digital', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, requestedStatus: status });
+    const requestedStatus = status ? resolveSellerPublishStatus(status, null) : 'draft';
+    // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
+    const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
 
     const product = await productModel.create({
       sellerId,
       storeId: store._id.toString(),
-      name,
+      name: title,
       slug,
+      ...this.qualityFields(quality.scan),
       campaignIds,
       ...premiumFieldsFromBody(body),
       description: description ?? null,
@@ -1790,10 +1819,10 @@ export class ProductsService {
       tags: cleanTags,
       digital: digitalConfig,
       isListedOnEdudeen: isListedOnEdudeen ?? false,
-      ...cleanLearningMeta(body),
+      ...learnMeta,
       ...delivery,
       // A first publish goes to admin review (see resolveSellerPublishStatus).
-      status: status ? resolveSellerPublishStatus(status, null) : 'draft',
+      status: finalStatus,
       scheduledAt: scheduledDate,
     });
 
@@ -1822,11 +1851,36 @@ export class ProductsService {
 
     void this.fillPdfPageCounts(String(product._id));
 
+    void scanImagesForContactInfo(String(product._id), cleanImages); // TODO(OCR) no-op hook - see contact-info.util.ts
     return {
       success: true,
-      message: 'Digital product created successfully',
-      data: { product, defaultVariant },
+      message: 'Digital product created successfully' + this.contactNote(quality.scan),
+      data: { product, defaultVariant, warnings: quality.warnings, contactFlag: quality.scan.flagged ? { matches: quality.scan.matches, reason: quality.scan.reason } : null },
     };
+  }
+
+  /**
+   * Quality checks shared by every create/edit: class range (needed to go live for digital/educational), the non-blocking
+   * title warnings, and the off-platform contact scan of the seller-written text.
+   */
+  private checkListing(opts: { title: string; type: 'physical' | 'digital'; description?: unknown; classFrom?: string | null; classTo?: string | null; requestedStatus?: string | null; fields?: Record<string, unknown> }) {
+    const goingLive = opts.requestedStatus === 'active' || opts.requestedStatus === 'scheduled';
+    assertClassRangeRule({ type: opts.type, classFrom: opts.classFrom, classTo: opts.classTo, goingLive });
+    return {
+      warnings: productWarnings(opts.title, opts.classFrom, opts.classTo),
+      scan: scanListingText(opts.fields ?? { name: opts.title, description: opts.description }),
+    };
+  }
+
+  /** Mongo fields for the contact_info review flag (set when flagged, cleared when the text is clean). */
+  private qualityFields(scan: { flagged: boolean; matches: string[]; reason: string | null }) {
+    return scan.flagged
+      ? { flags: [CONTACT_FLAG], contactMatches: scan.matches, flagReason: scan.reason }
+      : { flags: [] as string[], contactMatches: [] as string[], flagReason: null };
+  }
+
+  private contactNote(scan: { flagged: boolean }): string {
+    return scan.flagged ? ' - it contains contact details (phone, WhatsApp or email), so it was sent to review instead of going live. Remove them and save again, or wait for our team.' : '';
   }
 
   async getSellerProductById(sellerId: string, productId: string) {
@@ -1959,13 +2013,18 @@ export class ProductsService {
 
     const productUpdate: any = {};
 
-    if (name && name !== product.name) {
-      const slug = await generateUniqueSlug(productModel, name, { excludeId: productId });
-      productUpdate.name = name;
-      productUpdate.slug = slug;
-    }
-
     if (name !== undefined) assertText(name, 'name', 200);
+    const newTitle = name === undefined ? undefined : normalizeTitle(name);
+    if (newTitle !== undefined && newTitle !== product.name) {
+      assertTitleRule(newTitle);
+      // Clean slug from the full title; the old one is remembered so old links keep working (redirected).
+      const slug = await generateProductSlug(productModel, newTitle, { excludeId: productId });
+      productUpdate.name = newTitle;
+      if (slug !== product.slug) {
+        productUpdate.slug = slug;
+        productUpdate.previousSlugs = nextPreviousSlugs((product as any).previousSlugs, product.slug, slug);
+      }
+    }
     if (description !== undefined && description !== null) assertDescriptionRule(description);
     if (description !== undefined) productUpdate.description = description === null ? null : assertText(description, 'description', 20000);
     let effectiveCategoryId = product.categoryId;
@@ -2017,6 +2076,24 @@ export class ProductsService {
         if (cf && ct && classIndex(cf) > classIndex(ct)) throw new BadRequestException('classFrom cannot be after classTo');
         productUpdate.classFrom = cf ?? null;
         productUpdate.classTo = ct ?? null;
+      }
+    }
+
+    // Title warnings, class range (to go live) and the contact-info scan - only for what this request touches.
+    let editWarnings: string[] = [];
+    let editScan: { flagged: boolean; matches: string[]; reason: string | null } | null = null;
+    {
+      const effTitle = productUpdate.name ?? product.name;
+      const effFrom = productUpdate.classFrom !== undefined ? productUpdate.classFrom : product.classFrom;
+      const effTo = productUpdate.classTo !== undefined ? productUpdate.classTo : product.classTo;
+      const effDescription = description !== undefined ? description : product.description;
+      const quality = this.checkListing({ title: effTitle, type: product.type === 'physical' ? 'physical' : 'digital', classFrom: effFrom, classTo: effTo, requestedStatus: status, fields: { name: effTitle, description: effDescription } });
+      editWarnings = quality.warnings;
+      if (name !== undefined || description !== undefined) {
+        editScan = quality.scan;
+        Object.assign(productUpdate, this.qualityFields(quality.scan));
+        // Held for review instead of staying/going live while it shows contact details.
+        if (quality.scan.flagged && ['active', 'scheduled'].includes(productUpdate.status ?? product.status)) productUpdate.status = 'pending_review';
       }
     }
 
@@ -2119,10 +2196,11 @@ export class ProductsService {
       await this.syncLicenseVariants(updatedProduct ?? product, baseLicense, tiers, (store as any)?.baseCurrency ?? 'PKR');
     }
 
+    void scanImagesForContactInfo(productId, Array.isArray(images) ? images : (product as any).images ?? []); // TODO(OCR) no-op hook
     return {
       success: true,
-      message: 'Product updated successfully',
-      data: { product: updatedProduct, variant: updatedVariant },
+      message: 'Product updated successfully' + (editScan ? this.contactNote(editScan) : ''),
+      data: { product: updatedProduct, variant: updatedVariant, warnings: editWarnings, contactFlag: editScan?.flagged ? { matches: editScan.matches, reason: editScan.reason } : null },
     };
   }
 

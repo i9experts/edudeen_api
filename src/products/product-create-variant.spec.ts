@@ -27,7 +27,7 @@ function makeSvc(created: any[] = []) {
 }
 
 const body = (variant: any, extra: any = {}) => ({
-  storeId: 'st1', name: 'Abacus', description: 'A wooden counting frame for learning numbers',
+  storeId: 'st1', name: 'Wooden Abacus counting frame', description: 'A wooden counting frame for learning numbers',
   variants: [{ price: 1234, compareAtPrice: 1500, stock: 3, shippingWeight: '600 g', options: [], ...variant }], ...extra,
 });
 
@@ -80,5 +80,31 @@ describe('ProductsService.addPhysicalProduct validation', () => {
     await reject({}, { description: 'Too short' }, /at least 20 characters/);
     await reject({ compareAtPrice: 1234 }, {}, /Compare-at must be higher than price/);
     await reject({ price: 450.75, compareAtPrice: null }, {}, /whole rupees/);
+  });
+});
+
+describe('contact info in the listing text', () => {
+  it('is saved but held for review (never rejected) with the matched text', async () => {
+    const svc = makeSvc();
+    const res = await svc.addPhysicalProduct('s1', body({}, { status: 'active', description: 'A wooden counting frame. Order on WhatsApp 0300-1234567' }));
+    const saved = svc.databaseService.repositories.productModel.create.mock.calls[0][0];
+    expect(saved.status).toBe('pending_review');
+    expect(saved.flags).toEqual(['contact_info']);
+    expect(saved.contactMatches.join(' ')).toContain('0300-1234567');
+    expect(res.message).toMatch(/contact details/);
+    expect(res.data.contactFlag).toBeTruthy();
+  });
+  it('a clean listing is untouched and a short title is refused', async () => {
+    const svc = makeSvc();
+    await svc.addPhysicalProduct('s1', body({}, { status: 'active' }));
+    expect(svc.databaseService.repositories.productModel.create.mock.calls[0][0].flags).toEqual([]);
+    await expect(makeSvc().addPhysicalProduct('s1', body({}, { name: 'Abacus' }))).rejects.toThrow(/at least 10 characters/);
+  });
+  it('capitalises the title and builds the slug from the full title', async () => {
+    const svc = makeSvc();
+    await svc.addPhysicalProduct('s1', body({}, { name: 'wooden abacus counting frame for class 1' }));
+    const saved = svc.databaseService.repositories.productModel.create.mock.calls[0][0];
+    expect(saved.name).toBe('Wooden abacus counting frame for class 1');
+    expect(saved.slug).toBe('wooden-abacus-counting-frame-for-class-1');
   });
 });

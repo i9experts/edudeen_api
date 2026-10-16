@@ -64,6 +64,15 @@ export class SeoResolutionService {
     return resolved;
   }
 
+  /** For a product slug that was renamed away: the CURRENT slug to 301 bots to (null when slug is current or unknown). */
+  async currentSlugForOldProductSlug(slug: string): Promise<string | null> {
+    if (typeof slug !== 'string' || !slug || /^[a-f0-9]{24}$/i.test(slug)) return null;
+    const { productModel } = this.db.repositories;
+    if (await productModel.exists({ slug, isDelete: false })) return null;
+    const p: any = await productModel.findOne({ previousSlugs: slug, status: 'active', isDelete: false, isTest: { $ne: true } }).select('slug').lean();
+    return p?.slug && p.slug !== slug ? p.slug : null;
+  }
+
   /** Called by any service that writes to Product.seo/Category.seo/Store.seo — must be invoked with the real entityId (not a slug), since that's how the cache key is built for writes. */
   async invalidate(entityType: SeoEntityType, entityId: string): Promise<void> {
     await this.redis.del(this.cacheKey(entityType, entityId));

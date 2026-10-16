@@ -8,6 +8,8 @@
   "scripts": {
     "admin:change-email": "node --env-file=.env --experimental-strip-types src/scripts/change-admin-email.ts",
     "seed:categories": "node --env-file=.env --experimental-strip-types src/scripts/seed-education-categories.ts",
+    "fix:slugs": "node --env-file=.env --experimental-strip-types src/scripts/fix-product-slugs.ts",
+    "fix:slugs:apply": "node --env-file=.env --experimental-strip-types src/scripts/fix-product-slugs.ts --apply",
     "seed:categories:apply": "node --env-file=.env --experimental-strip-types src/scripts/seed-education-categories.ts --apply",
     "seed:premium-demo": "node --env-file=.env --experimental-strip-types src/scripts/seed-premium-demo-products.ts",
     "seed:premium-demo:apply": "node --env-file=.env --experimental-strip-types src/scripts/seed-premium-demo-products.ts --apply",

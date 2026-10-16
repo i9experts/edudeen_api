@@ -45,6 +45,15 @@ export class SeoRenderHtmlController {
   @Get(':entityType/:slug')
   async renderHtml(@Param('entityType') entityType: string, @Param('slug') slug: string, @Res() res: Response) {
     assertValidEntityType(entityType);
+    // A renamed product: bots get a permanent redirect to the canonical URL instead of a duplicate page.
+    if (entityType === 'product') {
+      const current = await this.resolution.currentSlugForOldProductSlug(slug).catch(() => null);
+      if (current) {
+        const base = (process.env.WEB_APP_URL ?? '').replace(/\/+$/, '');
+        res.redirect(301, `/product/`);
+        return;
+      }
+    }
     let meta;
     try {
       meta = await this.resolution.resolve(entityType, slug);

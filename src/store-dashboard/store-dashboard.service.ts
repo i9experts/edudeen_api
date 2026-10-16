@@ -4,6 +4,7 @@ import { AnalyticsService } from 'src/analytics/analytics.service';
 import { hasDirectPayment } from 'src/common/direct-payment.util';
 import { buildOnboardingChecklist } from './onboarding-checklist.util';
 import { storePremiumStats } from 'src/premium/premium-stats.util';
+import { buildProfileCompleteness } from 'src/store/featured-stores.util';
 
 const SHELF_SIZE = 6;
 
@@ -24,7 +25,7 @@ export class StoreDashboardService {
 
     const store: any = await storeModel
       .findOne({ _id: storeId, sellerId, isDelete: false })
-      .select('logo coverImage directPayment')
+      .select('logo coverImage directPayment description')
       .lean();
     if (!store) throw new ForbiddenException('Store not found or unauthorized');
 
@@ -69,6 +70,10 @@ export class StoreDashboardService {
       price: priceOf.get(String(p._id))?.price ?? 0,
     }));
 
+    // Profile meter = the Featured-sellers rule (logo, banner, bio 30+, 5+ published non-test products).
+    const publishedForProfile = await productModel.countDocuments({ ...productFilter, status: 'active', isTest: { $ne: true } });
+    const profile = buildProfileCompleteness(store, publishedForProfile);
+
     const checklist = buildOnboardingChecklist({
       hasLogo: !!store.logo,
       hasBanner: !!store.coverImage || bannerCount > 0,
@@ -88,6 +93,7 @@ export class StoreDashboardService {
         activeProducts,
         shelf,
         checklist,
+        profile,
         premium: { ...premium, windowDays: 30 },
       },
     };

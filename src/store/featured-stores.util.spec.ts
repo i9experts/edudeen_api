@@ -1,4 +1,4 @@
-import { FEATURED_MIN_PRODUCTS, featuredStoreFilter, isFeaturedStoreEligible } from './featured-stores.util';
+import { buildProfileCompleteness, FEATURED_MIN_PRODUCTS, featuredStoreFilter, isFeaturedStoreEligible } from './featured-stores.util';
 
 describe('featured sellers rules', () => {
   const ok = { status: 'active', logo: 'l.png', coverImage: 'c.png', description: 'We make printable Quran learning resources for kids.' };
@@ -25,5 +25,16 @@ describe('featured sellers rules', () => {
     expect(f.logo).toEqual({ $nin: [null, ''] });
     expect(f.coverImage).toEqual({ $nin: [null, ''] });
     expect(f.$expr).toBeDefined();
+  });
+});
+
+describe('seller profile meter', () => {
+  it('matches the featured rule: logo, banner, 30+ char bio, 5+ published', () => {
+    const full = buildProfileCompleteness({ logo: 'l', coverImage: 'c', description: 'x'.repeat(30) }, 5);
+    expect(full.percent).toBe(100);
+    expect(full.complete).toBe(true);
+    const half = buildProfileCompleteness({ logo: 'l', coverImage: null, description: 'short' }, 2);
+    expect(half.percent).toBe(25);
+    expect(half.items.filter((i) => !i.done).map((i) => i.key)).toEqual(['banner', 'bio', 'products']);
   });
 });
