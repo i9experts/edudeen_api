@@ -60,3 +60,4 @@ config/firebase-service-account.json
 
 /stripe
 /stripe.exe
+.jest-cache

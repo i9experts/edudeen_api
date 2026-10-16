@@ -36,7 +36,7 @@ describe('createCampaign default rotation position', () => {
   it('takes highest held slot + 1, not the campaign count', async () => {
     const create = jest.fn().mockImplementation((d: any) => Promise.resolve({ _id: 'n1', ...d }));
     const lean = jest.fn().mockResolvedValue({ order: 2 });
-    const campaignModel: any = { create, findOne: jest.fn().mockReturnValue({ sort: () => ({ select: () => ({ lean }) }) }) };
+    const campaignModel: any = { create, findOne: jest.fn().mockImplementation((q: any) => (q && q.slug !== undefined ? Promise.resolve(null) : { sort: () => ({ select: () => ({ lean }) }) })) };
     const svc: any = Object.create(AdminMarketingService.prototype);
     svc.databaseService = { repositories: { campaignModel } };
     Object.defineProperty(svc, 'r', { get: () => svc.databaseService.repositories });
