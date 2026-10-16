@@ -88,6 +88,21 @@ export class BundlesService {
     return { success: true, data: shaped };
   }
 
+  /** Home-page shelf: the newest active bundles whose products are all still live (bundles of suspended stores or with a missing product are skipped). */
+  async listPublic(limit = 6, viewerId?: string | null) {
+    const lim = Math.min(12, Math.max(1, Math.floor(limit) || 6));
+    const activeStores = new Set((await this.r.storeModel.find({ status: 'active', isDelete: false }).select('_id').lean()).map((s: any) => String(s._id)));
+    const bundles = (await this.r.bundleModel.find({ isActive: true, isDelete: false }).sort({ createdAt: -1 }).limit(lim * 3).lean())
+      .filter((b: any) => activeStores.has(String(b.storeId)));
+    const shaped: any[] = [];
+    for (const b of bundles) {
+      if (shaped.length >= lim) break;
+      const s = await this.shape(b, viewerId);
+      if (s) shaped.push(s);
+    }
+    return { success: true, data: shaped };
+  }
+
   async bySlug(slug: string, viewerId?: string | null) {
     const bundle = await this.r.bundleModel.findOne({ slug: String(slug ?? ''), isActive: true, isDelete: false }).lean();
     const shaped = bundle ? await this.shape(bundle, viewerId) : null;

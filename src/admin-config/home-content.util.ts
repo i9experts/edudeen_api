@@ -46,6 +46,25 @@ export function sanitizeHomeUrdu(raw: unknown): Record<string, string> {
   return out;
 }
 
+/** Footer / support contact details shown on the public site. Every field is optional; blank = hidden. */
+export interface HomeContact { phone: string; whatsapp: string; address: string; email: string }
+
+const EMAIL_RE = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}$/;
+
+/** Trimmed, length-capped, markup-free contact block. A malformed email is dropped; phone/WhatsApp keep digits, + and separators only. */
+export function sanitizeHomeContact(raw: unknown): HomeContact {
+  const src = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const text = (v: unknown, max: number) => (typeof v === 'string' ? v.replace(/<[^>]*>/g, '').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, max) : '');
+  const phoneLike = (v: unknown) => text(v, 30).replace(/[^\d+\-\s()]/g, '').trim();
+  const email = text(src.email, 120).toLowerCase();
+  return {
+    phone: phoneLike(src.phone),
+    whatsapp: phoneLike(src.whatsapp),
+    address: text(src.address, 300),
+    email: EMAIL_RE.test(email) ? email : '',
+  };
+}
+
 /** Public view of the stored homeContent: a stored internal-test link is never exposed. */
 export function publicHomeContent(stored: Record<string, any> | null | undefined): Record<string, any> {
   const hc: Record<string, any> = { ...(stored ?? {}) };
@@ -53,5 +72,6 @@ export function publicHomeContent(stored: Record<string, any> | null | undefined
     if (hc[key] && !isPublicStoreUrl(hc[key])) hc[key] = '';
   }
   hc.statsThresholds = sanitizeStatsThresholds(hc.statsThresholds);
+  hc.contact = sanitizeHomeContact(hc.contact);
   return hc;
 }

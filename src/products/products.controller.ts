@@ -141,6 +141,20 @@ export class productController {
     return this.ProductsService.getPremiumDeals(clampInt(limit, 12, 1, 24), req.user?.userId ?? null);
   }
 
+  /** Public home shelf: real best sellers (by units on paid orders). */
+  @UseGuards(OptionalJwtAuthGuard)
+  @Get('bestsellers')
+  async bestsellers(@Req() req: any, @Query('limit') limit?: string) {
+    return this.ProductsService.getBestsellers(clampInt(limit, 10, 1, 24), req.user?.userId ?? null);
+  }
+
+  /** Public home shelf: free downloads and free samples. */
+  @UseGuards(OptionalJwtAuthGuard)
+  @Get('free-resources')
+  async freeResources(@Req() req: any, @Query('limit') limit?: string) {
+    return this.ProductsService.getFreeResources(clampInt(limit, 10, 1, 24), req.user?.userId ?? null);
+  }
+
   @Get('education/facets')
   async getEducationFacets() {
     return this.ProductsService.getEducationFacets();

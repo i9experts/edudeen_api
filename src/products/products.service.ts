@@ -1184,6 +1184,53 @@ export class ProductsService {
       .map((x) => x.p);
     return { success: true, message: 'Premium deals', data: { isPremium: true, products } };
   }
+  // ── Home-page shelves (public): Bestsellers + Free resources. Candidate ids are cached in Redis for 10 min; the
+  //    products are re-shaped per request so prices/campaigns/Premium stay current. Test products are never included.
+  private static readonly HOME_SHELF_TTL_S = 600;
+
+  private async cachedShelfIds(key: string, load: () => Promise<string[]>): Promise<string[]> {
+    try {
+      const hit = await this.redisService?.get(key);
+      if (hit) { const ids = JSON.parse(hit); if (Array.isArray(ids)) return ids; }
+    } catch { /* cache is optional */ }
+    const ids = await load();
+    try { await this.redisService?.set(key, JSON.stringify(ids), ProductsService.HOME_SHELF_TTL_S); } catch { /* ignore */ }
+    return ids;
+  }
+
+  /** Real best sellers: ordered by the number of units on paid orders (`purchaseCount`); products nobody has bought are left out. */
+  async getBestsellers(limit = 10, customerId?: string | null) {
+    const lim = Math.min(24, Math.max(1, Math.floor(limit) || 10));
+    const ids = await this.cachedShelfIds('home:bestsellers:v1', async () => {
+      const rows: any[] = await this.databaseService.repositories.productModel
+        .find({ status: 'active', isDelete: false, isTest: { $ne: true }, purchaseCount: { $gte: 1 } })
+        .sort({ purchaseCount: -1, averageRating: -1, _id: -1 }).limit(60).select('_id').lean();
+      return rows.map((r) => String(r._id));
+    });
+    // Over-ask: some candidates may belong to a store that has since gone offline.
+    const products = (await this.getShapedProductsByIds(ids.slice(0, lim * 3), customerId ?? null)).slice(0, lim);
+    return { success: true, data: { products } };
+  }
+
+  /** Free downloads: digital / educational products with a 0 price, then paid ones that offer a free sample file (flagged `freeKind`). */
+  async getFreeResources(limit = 10, customerId?: string | null) {
+    const lim = Math.min(24, Math.max(1, Math.floor(limit) || 10));
+    const { productModel, productVariantModel } = this.databaseService.repositories as any;
+    const loaded = await this.cachedShelfIds('home:free-resources:v1', async () => {
+      const base = { status: 'active', isDelete: false, isTest: { $ne: true }, productType: { $in: ['digital', 'educational'] } };
+      const zero: any[] = await productVariantModel.find({ isDelete: false, price: 0 }).select('productId').limit(400).lean();
+      const freeIds = [...new Set(zero.map((v) => String(v.productId)))].filter((id) => isValidObjectId(id));
+      const free: any[] = freeIds.length ? await productModel.find({ ...base, _id: { $in: freeIds } }).sort({ purchaseCount: -1, _id: -1 }).limit(60).select('_id').lean() : [];
+      const samples: any[] = await productModel.find({ ...base, 'digital.sampleFile.url': { $type: 'string' } }).sort({ purchaseCount: -1, _id: -1 }).limit(60).select('_id').lean();
+      const freeSet = new Set(free.map((r) => String(r._id)));
+      return [...free.map((r) => `f:${r._id}`), ...samples.filter((r) => !freeSet.has(String(r._id))).map((r) => `s:${r._id}`)];
+    });
+    const kindOf = new Map(loaded.map((k) => [k.slice(2), k[0] === 'f' ? 'free' : 'sample']));
+    const shaped: any[] = await this.getShapedProductsByIds(loaded.slice(0, lim * 3).map((k) => k.slice(2)), customerId ?? null);
+    const products = shaped.slice(0, lim).map((p) => ({ ...p, freeKind: kindOf.get(String(p._id)) ?? 'free' }));
+    return { success: true, data: { products } };
+  }
+
   async getShapedProductsByIds(
     productIds: string[],
     customerId?: string | null,

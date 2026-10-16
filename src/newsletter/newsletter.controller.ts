@@ -13,7 +13,7 @@ export class NewsletterController {
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('subscribe')
   subscribe(@Body() dto: SubscribeNewsletterDto) {
-    return this.newsletterService.subscribe(dto.email);
+    return this.newsletterService.subscribe(dto.email, dto.source ?? 'footer');
   }
 
   @Get('unsubscribe/:token')

@@ -16,6 +16,7 @@ import { CoursesService } from './courses.service';
 export class SavedListsController {
   constructor(private readonly lists: SavedListsService) {}
 
+
   @UseGuards(OptionalJwtAuthGuard)
   @Get('public/:slug')
   bySlug(@Req() req: any, @Param('slug') slug: string) {
@@ -183,6 +184,12 @@ export class BundlesController {
   @Get('public/:slug')
   bySlug(@Req() req: any, @Param('slug') slug: string) {
     return this.bundles.bySlug(slug, req.user?.userId ?? null);
+  }
+
+  @UseGuards(OptionalJwtAuthGuard)
+  @Get('public')
+  listPublic(@Req() req: any, @Query('limit') limit?: string) {
+    return this.bundles.listPublic(Number(limit) || 6, req.user?.userId ?? null);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

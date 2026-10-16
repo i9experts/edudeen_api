@@ -1,4 +1,4 @@
-import { isPublicStoreUrl, publicHomeContent, sanitizeHomeUrdu, sanitizeStatsThresholds } from './home-content.util';
+import { isPublicStoreUrl, publicHomeContent, sanitizeHomeContact, sanitizeHomeUrdu, sanitizeStatsThresholds } from './home-content.util';
 
 describe('home content helpers', () => {
   it('only public https store links count', () => {
@@ -25,4 +25,16 @@ describe('home content helpers', () => {
   it('urdu map keeps only known non-blank keys', () => {
     expect(sanitizeHomeUrdu({ heroTitle: ' بڑی دریافتیں ', heroText: '  ', bogus: 'x' })).toEqual({ heroTitle: 'بڑی دریافتیں' });
   });
-});
+
+  it('contact block: trimmed, markup removed, phone digits only, bad email dropped, missing = blank', () => {
+    expect(sanitizeHomeContact(undefined)).toEqual({ phone: '', whatsapp: '', address: '', email: '' });
+    expect(sanitizeHomeContact({ phone: ' +92 300-1234567 abc', whatsapp: '0300 1234567', address: '<b>12 Main Rd</b>,  Lahore', email: 'Help@Edudeen.com' }))
+      .toEqual({ phone: '+92 300-1234567', whatsapp: '0300 1234567', address: '12 Main Rd, Lahore', email: 'help@edudeen.com' });
+    expect(sanitizeHomeContact({ email: 'not-an-email' }).email).toBe('');
+    expect(sanitizeHomeContact({ address: 'x'.repeat(500) }).address).toHaveLength(300);
+  });
+
+  it('public home content always carries a sanitized contact block', () => {
+    expect(publicHomeContent({}).contact).toEqual({ phone: '', whatsapp: '', address: '', email: '' });
+    expect(publicHomeContent({ contact: { phone: '123' } }).contact.phone).toBe('123');
+  });});

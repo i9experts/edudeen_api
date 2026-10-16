@@ -4,7 +4,7 @@ import { blockingScope, maintenanceState, normalizeMaintenance, type Maintenance
 import { UpdateMaintenanceDto } from './dto/update-maintenance.dto';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
-import { isPublicStoreUrl, publicHomeContent, sanitizeHomeUrdu, sanitizeStatsThresholds } from './home-content.util';
+import { isPublicStoreUrl, publicHomeContent, sanitizeHomeContact, sanitizeHomeUrdu, sanitizeStatsThresholds } from './home-content.util';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { UpdateFeatureFlagsDto } from './dto/update-feature-flags.dto';
 import { UpdateAiConfigDto } from './dto/update-ai-config.dto';
@@ -20,6 +20,7 @@ import { UpdatePlatformFeesDto } from './dto/update-platform-fees.dto';
 import { SOCIAL_LINK_KEYS } from './schemas/platform-config.schema';
 import { sanitizeSellerPage } from './seller-page.util';
 import { effectiveChatbot, sanitizeChatbot } from '../chatbot/chatbot.config';
+import { configuredHostedProviderIds } from '../payment/providers/hosted-providers.registry';
 
 export type FeatureFlagKey =
   | 'aiStudio' | 'marketplace' | 'digitalUploads' | 'affiliateProgram'
@@ -342,15 +343,16 @@ export class AdminConfigService {
     for (const key of ['heroEyebrow', 'heroTitle', 'heroHighlight', 'heroText', 'heroPrimaryLabel', 'heroSecondaryLabel', 'heroBadge', 'featureEyebrow', 'featureHeading', 'featureText', 'featureLinkLabel', 'featuredCategory', 'creatorEyebrow', 'creatorHeading', 'creatorText', 'creatorLinkLabel']) {
       if (src[key] !== undefined) set[`homeContent.${key}`] = str(src[key], 300);
     }
-    for (const key of ['heroImageUrl', 'googlePlayUrl', 'appStoreUrl']) {
+    for (const key of ['heroImageUrl', 'heroImageMobileUrl', 'googlePlayUrl', 'appStoreUrl']) {
       if (src[key] === undefined) continue;
       const v = str(src[key], 500);
       if (v && !/^https?:\/\/\S+$/i.test(v)) throw new BadRequestException(`${key} must be a full https:// link`);
       // App-store links must be PUBLIC (no Play internal-test / TestFlight links).
-      if (v && key !== 'heroImageUrl' && !isPublicStoreUrl(v)) throw new BadRequestException(`${key} must be a public https:// store link (internal-test and TestFlight links are not allowed)`);
+      if (v && (key === 'googlePlayUrl' || key === 'appStoreUrl') && !isPublicStoreUrl(v)) throw new BadRequestException(`${key} must be a public https:// store link (internal-test and TestFlight links are not allowed)`);
       set[`homeContent.${key}`] = v;
     }
     if (src.statsThresholds !== undefined) set['homeContent.statsThresholds'] = sanitizeStatsThresholds(src.statsThresholds);
+    if (src.contact !== undefined) set['homeContent.contact'] = sanitizeHomeContact(src.contact);
     if (src.ur !== undefined) set['homeContent.ur'] = sanitizeHomeUrdu(src.ur);
     if (src.promiseItems !== undefined) {
       set['homeContent.promiseItems'] = (Array.isArray(src.promiseItems) ? src.promiseItems : []).map(x => str(x, 80)).filter(Boolean).slice(0, 6);
@@ -432,13 +434,26 @@ export class AdminConfigService {
         socialLinks,
         homeContent: publicHomeContent((config as any).homeContent),
         // Real, derived facts the homepage trust points may claim (never invented).
-        commerce: { codAvailable: await this.isCodOffered() },
+        commerce: { codAvailable: await this.isCodOffered(), paymentMethods: await this.publicPaymentMethods(config) },
         sellerPage: (config as any).sellerPage ?? {},
         chatbot: effectiveChatbot((config as any).chatbot),
         payout: {
           frequency: config.payoutConfig?.payoutFrequency ?? 'monthly',
         },
       },
+    };
+  }
+
+  /** Which payment methods the platform can really take right now (never a guess): card needs a Stripe key on the API, bank transfer needs the platform account filled in, JazzCash/Easypaisa need their provider credentials. */
+  private async publicPaymentMethods(config: any) {
+    const mp = config?.manualPaymentConfig;
+    const bank = !!mp && mp.enabled !== false && [mp.accountNumber, mp.iban, mp.jazzcashNumber, mp.easypaisaNumber].some((v) => typeof v === 'string' && v.trim());
+    const hosted = configuredHostedProviderIds('PKR');
+    return {
+      card: !!(process.env.STRIPE_SECRET_KEY ?? '').trim(),
+      bankTransfer: bank,
+      jazzcash: hosted.includes('jazzcash'),
+      easypaisa: hosted.includes('easypaisa'),
     };
   }
 
