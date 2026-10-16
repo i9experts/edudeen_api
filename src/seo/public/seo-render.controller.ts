@@ -1,8 +1,10 @@
 /* eslint-disable prettier/prettier */
 import { Controller, Get, Param, Res, NotFoundException, BadRequestException } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { SeoResolutionService, SeoEntityType } from '../services/seo-resolution.service';
+import { SeoPrerenderService, PrerenderPage } from '../services/seo-prerender.service';
 
 const VALID_ENTITY_TYPES: SeoEntityType[] = ['product', 'category', 'store'];
 
@@ -16,15 +18,10 @@ function assertValidEntityType(entityType: string): asserts entityType is SeoEnt
  * Public, unauthenticated meta-delivery surface — see architecture plan
  * Refinement #1. Two consumers:
  *  - `GET /api/seo/meta/:entityType/:entityId` — JSON, for the React SPA to
- *    read client-side (react-helmet-style tag injection) and for any future
- *    SSR head-renderer to consume directly.
- *  - `GET /seo-render/:entityType/:slug` — a minimal server-rendered HTML
- *    fragment with real `<title>`/`<meta>`/JSON-LD tags, intended to be
- *    served to bot user-agents (Googlebot, facebookexternalhit, Twitterbot,
- *    LinkedInBot, Slackbot) via a reverse-proxy/CDN "dynamic rendering" rule
- *    instead of the SPA shell — the standard technique for getting correct
- *    social-share previews out of a client-side-rendered app without a full
- *    SSR migration.
+ *    read client-side and for any future SSR head-renderer to consume directly.
+ *  - `GET /seo-render/...` — server-rendered HTML (real <title>/<meta>/JSON-LD plus the
+ *    page's content and links) served to bot user-agents by the Vercel rewrite in
+ *    vercel.json, instead of the SPA shell. People still get the SPA.
  */
 @ApiTags('SEO — Public Meta Delivery')
 @Controller('api/seo')
@@ -38,9 +35,49 @@ export class SeoMetaController {
   }
 }
 
+const HTML_TTL_MS = 120_000;
+const HTML_MAX = 400;
+
+@SkipThrottle()
 @Controller('seo-render')
 export class SeoRenderHtmlController {
-  constructor(private readonly resolution: SeoResolutionService) {}
+  private readonly cache = new Map<string, { at: number; html: string }>();
+
+  constructor(
+    private readonly resolution: SeoResolutionService,
+    private readonly prerender: SeoPrerenderService,
+  ) {}
+
+  private async cached(key: string, build: () => Promise<PrerenderPage>): Promise<string> {
+    const hit = this.cache.get(key);
+    if (hit && Date.now() - hit.at < HTML_TTL_MS) return hit.html;
+    const html = this.prerender.render(await build());
+    if (this.cache.size >= HTML_MAX) this.cache.delete(this.cache.keys().next().value as string);
+    this.cache.set(key, { at: Date.now(), html });
+    return html;
+  }
+
+  private send(res: Response, html: string, status = 200) {
+    res.status(status);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=300');
+    res.send(html);
+  }
+
+  @Get('home')
+  async home(@Res() res: Response) {
+    this.send(res, await this.cached('home', () => this.prerender.home()));
+  }
+
+  @Get('page/:slug')
+  async staticPage(@Param('slug') slug: string, @Res() res: Response) {
+    try {
+      this.send(res, await this.cached(`page:${slug}`, () => this.prerender.page(slug)));
+    } catch (e) {
+      if (e instanceof NotFoundException) return this.send(res, this.prerender.notFoundHtml(), 404);
+      throw e;
+    }
+  }
 
   @Get(':entityType/:slug')
   async renderHtml(@Param('entityType') entityType: string, @Param('slug') slug: string, @Res() res: Response) {
@@ -49,61 +86,21 @@ export class SeoRenderHtmlController {
     if (entityType === 'product') {
       const current = await this.resolution.currentSlugForOldProductSlug(slug).catch(() => null);
       if (current) {
-        const base = (process.env.WEB_APP_URL ?? '').replace(/\/+$/, '');
-        res.redirect(301, `/product/`);
+        res.redirect(301, `/product/${encodeURIComponent(current)}`);
         return;
       }
     }
-    let meta;
     try {
-      meta = await this.resolution.resolve(entityType, slug);
-    } catch {
-      throw new NotFoundException('Nothing to render for this entity.');
+      const html = await this.cached(`${entityType}:${slug}`, async () => {
+        const meta = await this.resolution.resolve(entityType, slug);
+        if (entityType === 'product') return this.prerender.product(meta);
+        if (entityType === 'category') return this.prerender.category(meta);
+        return this.prerender.store(meta);
+      });
+      this.send(res, html);
+    } catch (e) {
+      if (e instanceof NotFoundException) return this.send(res, this.prerender.notFoundHtml(), 404);
+      throw e;
     }
-
-    const jsonLdScripts = meta.jsonLd
-      .map((block) => `<script type="application/ld+json">${JSON.stringify(block).replace(/</g, '\\u003c')}</script>`)
-      .join('\n');
-
-    const html = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>${escapeHtml(meta.title)}</title>
-<meta name="description" content="${escapeHtml(meta.description)}">
-${meta.noindex ? '<meta name="robots" content="noindex,follow">' : ''}
-<link rel="canonical" href="${escapeHtml(meta.canonicalUrl)}">
-<meta property="og:title" content="${escapeHtml(meta.ogTitle)}">
-<meta property="og:description" content="${escapeHtml(meta.ogDescription)}">
-${meta.ogImage ? `<meta property="og:image" content="${escapeHtml(meta.ogImage)}">` : ''}
-<meta property="og:url" content="${escapeHtml(meta.url)}">
-<meta property="og:type" content="${meta.entityType === 'product' ? 'product' : 'website'}">
-<meta name="twitter:card" content="${escapeHtml(String(meta.twitterCard ?? "summary"))}">
-<meta name="twitter:title" content="${escapeHtml(meta.ogTitle)}">
-<meta name="twitter:description" content="${escapeHtml(meta.ogDescription)}">
-${meta.ogImage ? `<meta name="twitter:image" content="${escapeHtml(meta.ogImage)}">` : ''}
-${jsonLdScripts}
-</head>
-<body>
-<!-- Served to crawlers only (see vercel.json); people get the app. No meta-refresh: it would point a bot at the URL it just fetched. -->
-<main>
-<h1>${escapeHtml(meta.ogTitle || meta.title)}</h1>
-${meta.ogImage ? `<img src="${escapeHtml(meta.ogImage)}" alt="${escapeHtml(meta.ogTitle || meta.title)}">` : ''}
-<p>${escapeHtml(meta.description)}</p>
-<p><a href="${escapeHtml(meta.url)}">${escapeHtml(meta.title)}</a></p>
-</main>
-</body>
-</html>`;
-
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(html);
   }
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }

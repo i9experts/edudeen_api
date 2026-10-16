@@ -60,11 +60,11 @@ export class SeoSchemaGeneratorService {
     return {
       '@context': 'https://schema.org',
       '@type': 'Store',
-      '@id': `${PLATFORM_ORIGIN}/${input.slug}`,
+      '@id': `${PLATFORM_ORIGIN}/shop/${input.slug}`,
       name: input.name,
       description: input.description ?? undefined,
       logo: input.logo ?? undefined,
-      url: `${PLATFORM_ORIGIN}/${input.slug}`,
+      url: `${PLATFORM_ORIGIN}/shop/${input.slug}`,
     };
   }
 

@@ -7,6 +7,22 @@ import { UpsertSeoRuleDto } from '../dto/seo-rule.dto';
 
 const SINGLETON_KEY = 'global';
 
+/** Public pages stay crawlable; private areas and the API are not. */
+export const DEFAULT_ROBOTS_BODY = [
+  'User-agent: *',
+  'Allow: /',
+  'Disallow: /admin',
+  'Disallow: /store/',
+  'Disallow: /seller',
+  'Disallow: /cart',
+  'Disallow: /checkout',
+  'Disallow: /account',
+  'Disallow: /api/',
+  'Disallow: /login',
+  'Disallow: /register',
+  'Disallow: /order-success',
+].join('\n');
+
 const DEFAULT_ORGANIZATION_SCHEMA = {
   '@context': 'https://schema.org',
   '@type': 'Organization',
@@ -130,6 +146,9 @@ export class PlatformSeoService {
   /** Resolved robots.txt including sitemap directives — sitemap URLs stay in sync automatically since they're appended here, not stored in the settings body itself. */
   async getResolvedRobotsTxt(): Promise<string> {
     const settings = await this.getOrCreate();
-    return `${settings.robotsTxtBody}\nSitemap: https://edudeen.com/sitemap.xml\n`;
+    // Rows saved with the old one-line default (or nothing) get the full default; an admin-edited body is kept as is.
+    const stored = (settings.robotsTxtBody ?? '').trim();
+    const body = !stored || stored === 'User-agent: *\nDisallow: /api/' ? DEFAULT_ROBOTS_BODY : settings.robotsTxtBody;
+    return `${body.replace(/\s+$/, '')}\n\nSitemap: https://edudeen.com/sitemap.xml\n`;
   }
 }

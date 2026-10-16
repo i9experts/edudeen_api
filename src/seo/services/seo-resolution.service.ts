@@ -146,8 +146,10 @@ export class SeoResolutionService {
         price: defaultVariant?.price ?? null,
         availability: defaultVariant?.stock > 0 || product.type === 'digital' ? 'InStock' : 'OutOfStock',
         storeName,
+        // Real data only: rating shows up in JSON-LD once there is at least one review.
         averageRating: product.averageRating,
-        ratingCount: product.ratingSum,
+        ratingCount: product.totalRatings,
+        currency: defaultVariant?.currency ?? (store as any)?.baseCurrency ?? 'USD',
       }),
       this.schemaGenerator.buildBreadcrumbSchema([
         { name: 'Home', url: PLATFORM_ORIGIN },
@@ -175,8 +177,10 @@ export class SeoResolutionService {
   private async resolveCategory(idOrSlug: string): Promise<ResolvedSeoMeta> {
     const { categoryModel } = this.db.repositories;
     // Deleted / inactive categories have no public metadata; a non-ObjectId is a 404, not a CastError 500.
-    if (typeof idOrSlug !== 'string' || !/^[a-f0-9]{24}$/i.test(idOrSlug)) throw new NotFoundException('Category not found.');
-    const category = await categoryModel.findOne({ _id: idOrSlug, isDelete: false, status: 'active' }).lean();
+    // Addressable by id or by its (full, nested) slug: the web links categories as /c/<slug>.
+    if (typeof idOrSlug !== 'string' || !idOrSlug || idOrSlug.length > 200) throw new NotFoundException('Category not found.');
+    const isId = /^[a-f0-9]{24}$/i.test(idOrSlug);
+    const category = await categoryModel.findOne({ ...(isId ? { _id: idOrSlug } : { slug: idOrSlug }), isDelete: false, status: 'active' }).lean();
     if (!category) throw new NotFoundException('Category not found.');
 
     const settings = await this.platformSeoService.getSettings();
@@ -225,7 +229,7 @@ export class SeoResolutionService {
     const description = seo.metaDescription
       ?? renderTemplate(template?.descriptionTemplate, { storeName: store.name })
       ?? truncate(store.description ?? `Shop ${store.name} on Edudeen.`, 160);
-    const canonicalUrl = seo.canonicalUrlOverride ?? `${PLATFORM_ORIGIN}/${store.slug}`;
+    const canonicalUrl = seo.canonicalUrlOverride ?? `${PLATFORM_ORIGIN}/shop/${store.slug}`;
 
     return {
       entityType: 'store',

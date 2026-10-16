@@ -8,6 +8,7 @@ import { SeoRedirectsService } from './services/seo-redirects.service';
 import { SeoCanonicalService } from './services/seo-canonical.service';
 import { SeoResolutionService } from './services/seo-resolution.service';
 import { SeoSchemaGeneratorService } from './services/seo-schema-generator.service';
+import { SeoPrerenderService } from './services/seo-prerender.service';
 import { SeoContentService } from './services/seo-content.service';
 import { SeoLandingPagesService } from './services/seo-landing-pages.service';
 import { SeoSitemapService } from './services/seo-sitemap.service';
@@ -96,6 +97,7 @@ import { SellerSeoAnalyticsController } from './seller/seller-seo-analytics.cont
   ],
   providers: [
     PlatformSeoService,
+    SeoPrerenderService,
     SeoRedirectsService,
     SeoCanonicalService,
     SeoResolutionService,

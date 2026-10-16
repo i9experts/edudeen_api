@@ -6,6 +6,8 @@ import { DatabaseService } from 'src/database/databaseservice';
 import { QUEUE_NAMES, SEO_SITEMAP_REGENERATE_JOB } from 'src/queues/queue.constants';
 import { SITEMAP_URL_LIMIT_PER_CHUNK, SitemapType } from '../schemas/seo-sitemap-cache.schema';
 
+import { STATIC_PAGES } from './seo-prerender.service';
+
 const PLATFORM_ORIGIN = 'https://edudeen.com';
 
 /**
@@ -58,7 +60,8 @@ export class SeoSitemapService {
 
   private async regenerateProducts(storeId?: string) {
     const { productModel } = this.db.repositories;
-    const filter: Record<string, any> = { status: 'active', isDelete: false, isTest: { $ne: true } };
+    // Live, non-test, non-noindex products only (drafts, scheduled, pending review, rejected and hidden are excluded).
+    const filter: Record<string, any> = { status: 'active', isDelete: false, isTest: { $ne: true }, 'seo.noindex': { $ne: true } };
     // Only products of LIVE stores are indexed (suspended/pending stores' products used to be listed).
     const liveStores = await this.db.repositories.storeModel
       .find({ status: 'active', isDelete: false, ...(storeId ? { _id: storeId } : {}) }).select('_id').lean();
@@ -74,8 +77,9 @@ export class SeoSitemapService {
 
   private async regenerateStores() {
     const { storeModel } = this.db.repositories;
-    const stores = await storeModel.find({ status: 'active', isDelete: false }).select('slug updatedAt').lean();
-    const urls = stores.map((s: any) => ({ loc: `${PLATFORM_ORIGIN}/${s.slug}`, lastmod: s.updatedAt }));
+    const stores = await storeModel.find({ status: 'active', isDelete: false, 'seo.noindex': { $ne: true } }).select('slug updatedAt').lean();
+    // The storefront lives at /shop/<slug> on edudeen.com (the canonical URL the prerender also uses).
+    const urls = stores.map((s: any) => ({ loc: `${PLATFORM_ORIGIN}/shop/${s.slug}`, lastmod: s.updatedAt }));
     await this.writeChunks('stores', null, urls);
   }
 
@@ -85,7 +89,7 @@ export class SeoSitemapService {
     // read via CategoriesService.ensureSlug) are skipped here rather than
     // emitting a broken `/marketplace/undefined` sitemap entry.
     const categories = await categoryModel
-      .find({ status: 'active', isDelete: false, slug: { $exists: true, $ne: null } })
+      .find({ status: 'active', isDelete: false, slug: { $exists: true, $ne: null }, 'seo.noindex': { $ne: true } })
       .select('slug updatedAt')
       .lean();
     const urls = categories.map((c: any) => ({ loc: `${PLATFORM_ORIGIN}/c/${c.slug}`, lastmod: c.updatedAt }));
@@ -95,7 +99,9 @@ export class SeoSitemapService {
   private async regeneratePages() {
     const { seoLandingPageModel } = this.db.repositories;
     const pages = await seoLandingPageModel.find({ status: 'published', isDelete: false }).select('slug updatedAt').lean();
-    const urls = pages.map((p: any) => ({ loc: `${PLATFORM_ORIGIN}/pages/${p.slug}`, lastmod: p.updatedAt }));
+    // The home page and the public static pages always come first.
+    const staticUrls = [{ loc: `${PLATFORM_ORIGIN}/` }, ...Object.values(STATIC_PAGES).map((p) => ({ loc: `${PLATFORM_ORIGIN}${p.path}` }))];
+    const urls = [...staticUrls, ...pages.map((p: any) => ({ loc: `${PLATFORM_ORIGIN}/pages/${p.slug}`, lastmod: p.updatedAt }))];
     await this.writeChunks('pages', null, urls);
   }
 
@@ -115,10 +121,10 @@ export class SeoSitemapService {
     const urls = [
       ...pages
         .filter((p: any) => slugById.has(p.storeId))
-        .map((p: any) => ({ loc: `${PLATFORM_ORIGIN}/${slugById.get(p.storeId)}/${p.slug}`, lastmod: p.updatedAt })),
+        .map((p: any) => ({ loc: `${PLATFORM_ORIGIN}/shop/${slugById.get(p.storeId)}/${p.slug}`, lastmod: p.updatedAt })),
       ...posts
         .filter((p: any) => slugById.has(p.storeId))
-        .map((p: any) => ({ loc: `${PLATFORM_ORIGIN}/${slugById.get(p.storeId)}/blog/${p.slug}`, lastmod: p.updatedAt })),
+        .map((p: any) => ({ loc: `${PLATFORM_ORIGIN}/shop/${slugById.get(p.storeId)}/blog/${p.slug}`, lastmod: p.updatedAt })),
     ];
     await this.writeChunks('storefront_content', null, urls);
   }
