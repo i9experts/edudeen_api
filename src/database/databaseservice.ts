@@ -31,7 +31,7 @@ export class DatabaseService {
     private bannerModel: Model<schema.BannerDocument>,
     @InjectModel(schema.OnboardingSlide.name)
     private onboardingSlideModel: Model<schema.OnboardingSlideDocument>,
-    @InjectModel(schema.User.name)
+    @InjectModel(schema.Faq.name)
     private faqModel: Model<schema.FaqDocument>,
 
 

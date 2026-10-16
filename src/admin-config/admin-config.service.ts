@@ -346,7 +346,7 @@ export class AdminConfigService {
     for (const key of ['heroImageUrl', 'heroImageMobileUrl', 'googlePlayUrl', 'appStoreUrl']) {
       if (src[key] === undefined) continue;
       const v = str(src[key], 500);
-      if (v && !/^https?:\/\/\S+$/i.test(v)) throw new BadRequestException(`${key} must be a full https:// link`);
+      if (v && !/^https:\/\/\S+$/i.test(v)) throw new BadRequestException(`${key} must be a full https:// link`);
       // App-store links must be PUBLIC (no Play internal-test / TestFlight links).
       if (v && (key === 'googlePlayUrl' || key === 'appStoreUrl') && !isPublicStoreUrl(v)) throw new BadRequestException(`${key} must be a public https:// store link (internal-test and TestFlight links are not allowed)`);
       set[`homeContent.${key}`] = v;

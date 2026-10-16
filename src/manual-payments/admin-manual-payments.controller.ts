@@ -4,6 +4,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { ManualPaymentsService } from './manual-payments.service';
 import { RejectManualPaymentDto } from './dto/reject-manual-payment.dto';
 
@@ -22,26 +23,26 @@ export class AdminManualPaymentsController {
   }
 
   @Get(':proofId/proof-url')
-  async getProofUrl(@Param('proofId') proofId: string) {
+  async getProofUrl(@Param('proofId', ParseObjectIdPipe) proofId: string) {
     const data = await this.manualPaymentsService.adminGetProofUrl(proofId);
     return { success: true, data };
   }
 
   @Get(':proofId')
-  async getById(@Param('proofId') proofId: string) {
+  async getById(@Param('proofId', ParseObjectIdPipe) proofId: string) {
     const data = await this.manualPaymentsService.adminGetById(proofId);
     return { success: true, data };
   }
 
   @Patch(':proofId/approve')
-  async approve(@Req() req: any, @Param('proofId') proofId: string) {
+  async approve(@Req() req: any, @Param('proofId', ParseObjectIdPipe) proofId: string) {
     const data = await this.manualPaymentsService.adminApprove(proofId, req.user.userId, req.ip, req.headers['user-agent']);
     return { success: true, data };
   }
 
   @UsePipes(new ValidationPipe({ transform: true }))
   @Patch(':proofId/reject')
-  async reject(@Req() req: any, @Param('proofId') proofId: string, @Body() dto: RejectManualPaymentDto) {
+  async reject(@Req() req: any, @Param('proofId', ParseObjectIdPipe) proofId: string, @Body() dto: RejectManualPaymentDto) {
     const data = await this.manualPaymentsService.adminReject(proofId, req.user.userId, dto.reason, req.ip, req.headers['user-agent']);
     return { success: true, data };
   }

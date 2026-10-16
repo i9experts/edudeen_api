@@ -47,6 +47,7 @@ import { DatabaseService } from './databaseservice';
       { name: schema.Store.name, schema: schema.StoreSchema },
       { name: schema.StoreFollower.name, schema: schema.StoreFollowerSchema },
       { name: schema.Banner.name, schema: schema.BannerSchema },
+      { name: schema.Faq.name, schema: schema.FaqSchema },
       { name: schema.OnboardingSlide.name, schema: schema.OnboardingSlideSchema },
       { name: schema.Conversation.name, schema: schema.ConversationSchema },
       { name: schema.Message.name, schema: schema.MessageSchema },

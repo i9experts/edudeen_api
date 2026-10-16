@@ -28,6 +28,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { AdminReauthGuard } from '../admin-reauth/admin-reauth.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { PromotionPlacement } from '../common/promotion-placements.const';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 
 const BANNER_UPLOAD_MIME = /\/(jpg|jpeg|png|webp)$/;
 const BANNER_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
@@ -110,7 +111,7 @@ export class BannersController {
   @Roles('admin')
   @ApiBearerAuth()
   @Patch(':id')
-  updateBanner(@Param('id') id: string, @Body() dto: UpdateBannerDto) {
+  updateBanner(@Param('id', ParseObjectIdPipe) id: string, @Body() dto: UpdateBannerDto) {
     return this.bannersService.updateBanner(id, dto);
   }
 
@@ -119,7 +120,7 @@ export class BannersController {
   @Roles('admin')
   @ApiBearerAuth()
   @Patch(':id/pause')
-  pauseBanner(@Param('id') id: string) {
+  pauseBanner(@Param('id', ParseObjectIdPipe) id: string) {
     return this.bannersService.pauseBanner(id);
   }
 
@@ -128,7 +129,7 @@ export class BannersController {
   @Roles('admin')
   @ApiBearerAuth()
   @Patch(':id/resume')
-  resumeBanner(@Param('id') id: string) {
+  resumeBanner(@Param('id', ParseObjectIdPipe) id: string) {
     return this.bannersService.resumeBanner(id);
   }
 
@@ -137,7 +138,7 @@ export class BannersController {
   @Roles('admin')
   @ApiBearerAuth()
   @Delete(':id')
-  deleteBanner(@Param('id') id: string) {
+  deleteBanner(@Param('id', ParseObjectIdPipe) id: string) {
     return this.bannersService.deleteBanner(id);
   }
 }

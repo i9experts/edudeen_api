@@ -61,7 +61,7 @@ export type { Otp, OtpSchema } from '../otp/schemas/otp.schema';
 export type { OtpDocument } from '../otp/schemas/otp.schema';
 export { Banner, BannerDocument, BannerSchema } from '../banner/schemas/banner.schema';
 export { OnboardingSlide, OnboardingSlideDocument, OnboardingSlideSchema } from '../onboarding-slides/schemas/onboarding-slide.schema';
-export type { Faq, FaqSchema } from '../faqs/schemas/faq.schema';
+export { Faq, FaqSchema } from '../faqs/schemas/faq.schema';
 export type { FaqDocument } from '../faqs/schemas/faq.schema';
 export type { NewsletterSubscriber, NewsletterSubscriberSchema } from '../newsletter/schemas/newsletter-subscriber.schema';
 export type { NewsletterSubscriberDocument } from '../newsletter/schemas/newsletter-subscriber.schema';

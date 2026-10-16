@@ -155,6 +155,11 @@ export class AdminMarketingService {
     }
   }
 
+  private async nextOrderSlot(): Promise<number> {
+    const top = await this.r.campaignModel.findOne({ isDelete: false, status: { $ne: 'ended' } }).sort({ order: -1 }).select('order').lean();
+    return top && typeof (top as any).order === 'number' ? (top as any).order + 1 : 0;
+  }
+
   async createCampaign(dto: CreateCampaignDto, meta: AuditMeta) {
     if (new Date(dto.endDate) <= new Date(dto.startDate)) {
       throw new BadRequestException('endDate must be after startDate');
@@ -166,7 +171,8 @@ export class AdminMarketingService {
 
     // Defaults to "appended last" in the rotation, same convention as
     // Banner.order, unless the admin explicitly set a position.
-    const currentCount = dto.order == null ? await this.r.campaignModel.countDocuments({ isDelete: false }) : 0;
+    // (highest position held by a non-ended campaign + 1: a plain count collided with a held slot once a campaign was deleted).
+    const currentCount = dto.order == null ? await this.nextOrderSlot() : 0;
     const slug = await generateUniqueSlug(this.r.campaignModel, dto.name);
 
     const campaign = await this.r.campaignModel.create({

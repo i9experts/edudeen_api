@@ -8,7 +8,7 @@ import { AdminConfigService } from '../admin-config/admin-config.service';
 import { MediaLibraryService } from '../media-library/media-library.service';
 import { validateCreativeDimensions } from '../common/validate-creative-dimensions.util';
 import { BannerStatus } from './schemas/banner.schema';
-import { PromotionPlacement } from '../common/promotion-placements.const';
+import { PromotionPlacement, PROMOTION_PLACEMENTS } from '../common/promotion-placements.const';
 
 const DEFAULT_PLACEMENT: PromotionPlacement = 'marketplaceHero';
 
@@ -185,6 +185,7 @@ export class BannersService {
     if (!file) throw new BadRequestException('No image file provided');
 
     const placement = (placementInput as PromotionPlacement) ?? DEFAULT_PLACEMENT;
+    if (!PROMOTION_PLACEMENTS.includes(placement)) throw new BadRequestException('Unknown banner placement');
     validateCreativeDimensions(file, placement);
 
     const uploaded = await this.mediaLibraryService.uploadAndTrack(file, 'admin', adminId, {

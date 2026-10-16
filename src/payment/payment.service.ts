@@ -1582,6 +1582,7 @@ export class PaymentService {
   private formatOrder(order: any) {
     const allItems = order.sellerOrders.flatMap((so: any) =>
       so.items.map((item: any) => ({
+        productId: item.productId ? String(item.productId) : null,
         name: item.name,
         image: item.image ?? null,
         sku: item.sku ?? null,

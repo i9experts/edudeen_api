@@ -1,4 +1,4 @@
-﻿/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call -- mock-heavy test */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call -- mock-heavy test */
 import { BadRequestException } from '@nestjs/common';
 import { AdminMarketingService } from './admin-marketing.service';
 
@@ -29,5 +29,21 @@ describe('updateCampaign applies fields and status in ONE write', () => {
     const { svc, findByIdAndUpdate } = make({ ...base, endDate: new Date(Date.now() - 1000) });
     await expect(svc.updateCampaign('c1', { name: 'New', status: 'active' }, {})).rejects.toThrow(BadRequestException);
     expect(findByIdAndUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('createCampaign default rotation position', () => {
+  it('takes highest held slot + 1, not the campaign count', async () => {
+    const create = jest.fn().mockImplementation((d: any) => Promise.resolve({ _id: 'n1', ...d }));
+    const lean = jest.fn().mockResolvedValue({ order: 2 });
+    const campaignModel: any = { create, findOne: jest.fn().mockReturnValue({ sort: () => ({ select: () => ({ lean }) }) }) };
+    const svc: any = Object.create(AdminMarketingService.prototype);
+    svc.databaseService = { repositories: { campaignModel } };
+    Object.defineProperty(svc, 'r', { get: () => svc.databaseService.repositories });
+    svc.assertOrderAvailable = jest.fn();
+    svc.log = jest.fn();
+    const dto = { name: 'Eid', startDate: '2030-01-01T00:00:00Z', endDate: '2030-01-05T00:00:00Z' };
+    await svc.createCampaign(dto, { adminId: 'a' });
+    expect(create.mock.calls[0][0].order).toBe(3);
   });
 });
