@@ -75,6 +75,7 @@ import { CouriersModule } from './couriers/couriers.module';
 import { RetentionModule } from './retention/retention.module';
 import { ChildrenModule } from './children/children.module';
 import { PremiumModule } from './premium/premium.module';
+import { StaffModule } from './staff/staff.module';
 import { PhoneVerificationModule } from './phone-verification/phone-verification.module';
 
 @Module({
@@ -158,6 +159,7 @@ import { PhoneVerificationModule } from './phone-verification/phone-verification
     RetentionModule,
     ChildrenModule,
     PremiumModule,
+    StaffModule,
     PhoneVerificationModule,
   ],
   controllers: [AppController],

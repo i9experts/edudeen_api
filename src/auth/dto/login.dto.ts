@@ -1,4 +1,4 @@
-import { IsEmail, IsString, IsNotEmpty } from 'class-validator';
+import { IsEmail, IsString, IsNotEmpty, IsOptional, MaxLength } from 'class-validator';
 
 export class LoginDto {
   @IsEmail()
@@ -12,4 +12,10 @@ export class LoginDto {
   @IsString()
   @IsNotEmpty()
   role: string;
+
+  /** Staff accounts: 6-digit authenticator code, or a one-time recovery code. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  totp?: string;
 }

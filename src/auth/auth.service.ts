@@ -7,6 +7,9 @@ import {
   BadRequestException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
+import { StaffService } from '../staff/staff.service';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { RegisterDto } from './dto/register.dto';
@@ -35,6 +38,7 @@ export class AuthService {
     private readonly activityLogService: ActivityLogService,
 
     private readonly jwtService: JwtService,
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
   /** Deletes the Redis session key for this access token so `JwtAuthGuard` rejects it immediately, instead of waiting out its TTL. */
@@ -398,6 +402,11 @@ export class AuthService {
         throw new UnauthorizedException(
           'This account has been suspended. Please contact support.',
         );
+      }
+
+      // Staff (admin-panel team) must also pass: active + not expired + authenticator code.
+      if (role === 'admin' && (existingUser as any).isStaff) {
+        await this.moduleRef?.get(StaffService, { strict: false })?.gateLogin(existingUser as any, loginDto.totp, ip);
       }
 
       if (role === 'seller') {

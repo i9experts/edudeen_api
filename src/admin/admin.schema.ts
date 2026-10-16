@@ -63,6 +63,24 @@ export class Admin {
     // match this current DB value.
     @Prop({ default: 0 })
     tokenVersion: number;
+
+    // ── Staff (admin-panel team). An admin without `isStaff` is an OWNER with full access. ──
+    @Prop({ default: false, index: true }) isStaff: boolean;
+    @Prop({ type: String, enum: ['invited', 'active', 'suspended'], default: 'active' }) staffStatus: string;
+    @Prop({ type: String, default: null }) staffRoleId: string | null;
+    @Prop({ type: [String], default: [] }) permissionsAdd: string[];
+    @Prop({ type: [String], default: [] }) permissionsRemove: string[];
+    /** Access ends at this time (contractors); null = no end. */
+    @Prop({ type: Date, default: null }) accessExpiresAt: Date | null;
+    @Prop({ type: String, default: null }) invitedById: string | null;
+    // Two-factor (authenticator app). The secret is stored encrypted; mandatory for staff.
+    @Prop({ type: String, default: null }) totpSecretEnc: string | null;
+    @Prop({ default: false }) totpEnabled: boolean;
+    @Prop({ type: [String], default: [] }) recoveryHashes: string[];
+    @Prop({ default: 0 }) totpFailures: number;
+    @Prop({ type: Date, default: null }) totpLockedUntil: Date | null;
+    @Prop({ type: Date, default: null }) lastLoginAt: Date | null;
+    @Prop({ type: String, default: null }) lastLoginIp: string | null;
 }
 
 

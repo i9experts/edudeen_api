@@ -1,5 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { AdminConfigService } from './admin-config/admin-config.service';
+import { StaffService } from './staff/staff.service';
+import { createStaffAccessMiddleware } from './staff/staff-access.middleware';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import cookieParser from 'cookie-parser';
@@ -118,6 +120,9 @@ async function bootstrap() {
 
   // Registered AFTER enableCors so the 503 carries CORS headers (otherwise the browser hides the maintenance JSON from the web app).
   // Maintenance mode: block only the area an admin marked as down (see admin-config/maintenance.util.ts).
+  // Staff permissions: every request made with a STAFF token is checked against their role (owner accounts pass).
+  app.use(createStaffAccessMiddleware(app.get(StaffService)));
+
   const adminConfig = app.get(AdminConfigService);
   app.use(async (req: any, res: any, next: any) => {
     try {
