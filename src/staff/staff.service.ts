@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional, UnauthorizedException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { JwtService } from '@nestjs/jwt';
@@ -13,11 +13,13 @@ import {
 } from './staff.schemas';
 import { PERMISSIONS, ROLE_TEMPLATES, effectivePermissions, sanitizePermissions } from './permissions';
 import { newTotpSecret, otpauthUrl, verifyTotp } from './totp.util';
+import { accessWindowViolation, sanitizeIps, sanitizeWorkHours } from './access-window.util';
+import { EmailService } from '../otp/services/email.service';
 
 const INVITE_TTL_MS = 48 * 3600_000;
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const keys = () => [process.env.PAYOUT_ENCRYPTION_KEY, process.env.SEO_TOKEN_ENCRYPTION_KEY, process.env.JWT_SECRET].filter((k, i, a): k is string => !!k && a.indexOf(k) === i);
-const seal = (plain: string) => encryptSeoCredential(plain, keys()[0]);
+export const seal = (plain: string) => encryptSeoCredential(plain, keys()[0]);
 export const openSecret = (enc: string): string => {
   for (const k of keys()) { try { return decryptSeoCredential(enc, k); } catch { /* next key */ } }
   throw new Error('undecryptable');
@@ -43,6 +45,7 @@ export class StaffService {
     @InjectModel(StaffTask.name) private readonly taskModel: Model<StaffTaskDocument>,
     @InjectModel(StaffAudit.name) private readonly auditModel: Model<StaffAuditDocument>,
     private readonly jwt: JwtService,
+    @Optional() private readonly email?: EmailService,
   ) {}
 
   // ── Roles ───────────────────────────────────────────────────────────────────
@@ -96,7 +99,7 @@ export class StaffService {
       isOwner: !a.isStaff, staffStatus: a.isStaff ? a.staffStatus : 'active', staffRoleId: a.staffRoleId ?? null, roleName: role?.name ?? (a.isStaff ? '—' : 'Owner'),
       permissionsAdd: a.permissionsAdd ?? [], permissionsRemove: a.permissionsRemove ?? [],
       permissions: a.isStaff ? effectivePermissions(role?.permissions, a.permissionsAdd, a.permissionsRemove) : ['*'],
-      accessExpiresAt: a.accessExpiresAt ?? null, totpEnabled: !!a.totpEnabled, lastLoginAt: a.lastLoginAt ?? null, lastLoginIp: a.lastLoginIp ?? null, createdAt: a.createdAt,
+      accessExpiresAt: a.accessExpiresAt ?? null, allowedIps: a.allowedIps ?? [], workHours: a.workHours ?? null, totpEnabled: !!a.totpEnabled, lastLoginAt: a.lastLoginAt ?? null, lastLoginIp: a.lastLoginIp ?? null, createdAt: a.createdAt,
     };
   }
   async list() {
@@ -110,7 +113,7 @@ export class StaffService {
     return this.view(a);
   }
 
-  async invite(ownerId: string, dto: { email: string; name?: string; roleId: string; permissionsAdd?: string[]; permissionsRemove?: string[]; accessExpiresAt?: string | null }) {
+  async invite(ownerId: string, dto: { email: string; name?: string; roleId: string; permissionsAdd?: string[]; permissionsRemove?: string[]; accessExpiresAt?: string | null; allowedIps?: string[]; workHours?: any }) {
     const email = String(dto.email ?? '').trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new BadRequestException('A valid email is required');
     const role = await this.roleModel.findById(dto.roleId);
@@ -121,9 +124,10 @@ export class StaffService {
     const staff = await this.adminModel.create({
       name: dto.name?.trim() || email.split('@')[0], email, role: 'admin', isVerified: true, password: await bcrypt.hash(randomBytes(24).toString('hex'), 10),
       isStaff: true, staffStatus: 'invited', staffRoleId: String(role._id), permissionsAdd: sanitizePermissions(dto.permissionsAdd), permissionsRemove: sanitizePermissions(dto.permissionsRemove),
-      accessExpiresAt: exp, invitedById: ownerId,
+      accessExpiresAt: exp, invitedById: ownerId, allowedIps: sanitizeIps(dto.allowedIps), workHours: sanitizeWorkHours(dto.workHours),
     });
-    return { staff: await this.view(staff.toObject()), ...(await this.issueInvite(String(staff._id))) };
+    const inv = await this.issueInvite(String(staff._id));
+    return { staff: await this.view(staff.toObject()), ...inv, emailSent: await this.sendInviteEmail(staff.email, staff.name, inv.inviteToken, inv.expiresAt) };
   }
   private async issueInvite(adminId: string) {
     await this.inviteModel.deleteMany({ adminId });
@@ -135,7 +139,18 @@ export class StaffService {
   async resendInvite(id: string) {
     const a = await this.mustStaff(id);
     if (a.staffStatus !== 'invited') throw new BadRequestException('This person already finished setup');
-    return this.issueInvite(id);
+    const inv = await this.issueInvite(id);
+    return { ...inv, emailSent: await this.sendInviteEmail(a.email, a.name, inv.inviteToken, inv.expiresAt) };
+  }
+
+  /** Best effort: the owner can always copy the link instead. */
+  private async sendInviteEmail(to: string, name: string, token: string, expiresAt: Date): Promise<boolean> {
+    if (!this.email) return false;
+    const base = (process.env.WEB_APP_URL || 'https://edudeen.com').replace(/\/+$/, '');
+    const link = `/admin/accept-invite/`;
+    const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[ch]);
+    const html = `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;color:#141413"><h2 style="margin:0 0 12px">You're invited to the Edudeen team</h2><p>Hi ,</p><p>You have been given staff access to the Edudeen admin panel. Choose a password and set up two-step sign-in to get started.</p><p><a href="" style="display:inline-block;background:#174771;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:bold">Accept invitation</a></p><p style="font-size:12px;color:#5d6570">This link works once and expires on . If you were not expecting it, ignore this email.</p></div>`;
+    try { return await this.email.sendMail(to, 'You are invited to the Edudeen team', html); } catch (e: any) { this.logger.warn(`invite email failed: `); return false; }
   }
   private async mustStaff(id: string) {
     const a = await this.adminModel.findById(id);
@@ -143,13 +158,15 @@ export class StaffService {
     if (!a.isStaff) throw new ForbiddenException('The owner account cannot be changed here');
     return a;
   }
-  async update(id: string, dto: { name?: string; roleId?: string; permissionsAdd?: string[]; permissionsRemove?: string[]; accessExpiresAt?: string | null }) {
+  async update(id: string, dto: { name?: string; roleId?: string; permissionsAdd?: string[]; permissionsRemove?: string[]; accessExpiresAt?: string | null; allowedIps?: string[]; workHours?: any }) {
     const a = await this.mustStaff(id);
     if (dto.name?.trim()) a.name = dto.name.trim();
     if (dto.roleId) { if (!(await this.roleModel.exists({ _id: dto.roleId }))) throw new BadRequestException('Role not found'); a.staffRoleId = dto.roleId; }
     if (dto.permissionsAdd) a.permissionsAdd = sanitizePermissions(dto.permissionsAdd);
     if (dto.permissionsRemove) a.permissionsRemove = sanitizePermissions(dto.permissionsRemove);
     if (dto.accessExpiresAt !== undefined) a.accessExpiresAt = dto.accessExpiresAt ? new Date(dto.accessExpiresAt) : null;
+    if (dto.allowedIps) a.allowedIps = sanitizeIps(dto.allowedIps);
+    if (dto.workHours !== undefined) a.workHours = sanitizeWorkHours(dto.workHours);
     a.tokenVersion = (a.tokenVersion ?? 0) + 1; // new rights apply on the next sign-in
     await a.save();
     return this.view(a.toObject());
@@ -167,7 +184,8 @@ export class StaffService {
     const a = await this.mustStaff(id);
     a.totpEnabled = false; a.totpSecretEnc = null; a.recoveryHashes = []; a.staffStatus = 'invited'; a.tokenVersion = (a.tokenVersion ?? 0) + 1;
     await a.save();
-    return { ...(await this.issueInvite(id)), staff: await this.view(a.toObject()) };
+    const inv = await this.issueInvite(id);
+    return { ...inv, staff: await this.view(a.toObject()), emailSent: await this.sendInviteEmail(a.email, a.name, inv.inviteToken, inv.expiresAt) };
   }
   async remove(id: string) {
     const a = await this.mustStaff(id);
@@ -216,7 +234,8 @@ export class StaffService {
 
   /** Called by the login flow for staff after the password matched. Throws if the sign-in must not continue. */
   async gateLogin(a: AdminDocument, totp: string | undefined, ip?: string) {
-    const blocked = staffBlockReason(a as any);
+    if (!a.isStaff && !a.totpEnabled) return; // an owner who has not turned on two-step sign-in
+    const blocked = staffBlockReason(a as any) ?? (a.isStaff ? accessWindowViolation(a as any, ip) : null);
     if (blocked) throw new UnauthorizedException(blocked);
     if (!a.totpEnabled || !a.totpSecretEnc) throw new UnauthorizedException('Finish two-factor setup from your invitation email first.');
     if (!totp) throw new UnauthorizedException({ message: 'Enter the 6-digit code from your authenticator app.', code: 'TOTP_REQUIRED' });
@@ -237,12 +256,12 @@ export class StaffService {
   }
 
   // ── Access info for the middleware (cached by the caller) ───────────────────
-  async accessFor(adminId: string): Promise<{ isStaff: boolean; blocked: string | null; permissions: Set<string>; name: string; tokenVersion: number } | null> {
+  async accessFor(adminId: string): Promise<{ isStaff: boolean; blocked: string | null; permissions: Set<string>; name: string; tokenVersion: number; allowedIps: string[]; workHours: any } | null> {
     const a: any = await this.adminModel.findById(adminId).lean();
     if (!a || a.isDelete) return null;
-    if (!a.isStaff) return { isStaff: false, blocked: null, permissions: new Set(), name: a.name, tokenVersion: a.tokenVersion ?? 0 };
+    if (!a.isStaff) return { isStaff: false, blocked: null, permissions: new Set(), name: a.name, tokenVersion: a.tokenVersion ?? 0, allowedIps: [], workHours: null };
     const role: any = a.staffRoleId ? await this.roleModel.findById(a.staffRoleId).lean() : null;
-    return { isStaff: true, blocked: staffBlockReason(a), permissions: new Set(effectivePermissions(role?.permissions, a.permissionsAdd, a.permissionsRemove)), name: a.name, tokenVersion: a.tokenVersion ?? 0 };
+    return { isStaff: true, blocked: staffBlockReason(a), permissions: new Set(effectivePermissions(role?.permissions, a.permissionsAdd, a.permissionsRemove)), name: a.name, tokenVersion: a.tokenVersion ?? 0, allowedIps: a.allowedIps ?? [], workHours: a.workHours ?? null };
   }
   verifyToken(token: string): any | null { try { return this.jwt.verify(token); } catch { return null; } }
   async audit(row: { adminId: string; name?: string; method: string; path: string; status: number; ip?: string; denied?: string | null }) {
@@ -271,11 +290,24 @@ export class StaffService {
     if (!assignee) throw new BadRequestException('Choose who this is for');
     if (assignee.isStaff && assignee.staffStatus === 'suspended') throw new BadRequestException('That person is suspended');
     const link = dto.link && (TASK_LINK_TYPES as readonly string[]).includes(dto.link.type) && dto.link.id ? { type: dto.link.type, id: String(dto.link.id).slice(0, 80), label: String(dto.link.label ?? '').slice(0, 120) } : null;
-    return this.taskModel.create({
+    const created = await this.taskModel.create({
       title: dto.title.trim(), description: String(dto.description ?? '').slice(0, 2000), assigneeId: String(assignee._id), createdById: me.id,
       priority: (TASK_PRIORITIES as readonly string[]).includes(dto.priority) ? dto.priority : 'normal', dueAt: dto.dueAt ? new Date(dto.dueAt) : null, link,
     });
+    void this.notifyAssignee(String(assignee._id), created.title, created.priority, me.id);
+    return created;
   }
+  /** Email the assignee (best effort). The in-app side is the unread count on the Tasks tab. */
+  private async notifyAssignee(assigneeId: string, title: string, priority: string, byId: string) {
+    if (!this.email || assigneeId === byId) return;
+    const a: any = await this.adminModel.findById(assigneeId).select('email name').lean();
+    if (!a?.email) return;
+    const base = (process.env.WEB_APP_URL || 'https://edudeen.com').replace(/\/+$/, '');
+    const safe = title.replace(/[&<>]/g, ' ');
+    try { await this.email.sendMail(a.email, `New task: `, `<p>Hi ,</p><p>You have a new <b></b> task: <b></b>.</p><p><a href="/admin/collaboration">Open Collaboration</a></p>`); } catch { /* optional */ }
+  }
+  async unreadTaskCount(adminId: string) { return this.taskModel.countDocuments({ assigneeId: adminId, seenByAssignee: false, status: { $ne: 'done' } }); }
+  async markTasksSeen(adminId: string) { await this.taskModel.updateMany({ assigneeId: adminId, seenByAssignee: false }, { $set: { seenByAssignee: true } }); return { ok: true }; }
   async updateTask(me: { id: string; canAssign: boolean }, id: string, dto: any) {
     const t = await this.taskModel.findById(id);
     if (!t) throw new NotFoundException('Task not found');
@@ -287,7 +319,7 @@ export class StaffService {
       if (dto.description !== undefined) t.description = String(dto.description).slice(0, 2000);
       if ((TASK_PRIORITIES as readonly string[]).includes(dto.priority)) t.priority = dto.priority;
       if (dto.dueAt !== undefined) t.dueAt = dto.dueAt ? new Date(dto.dueAt) : null;
-      if (dto.assigneeId && dto.assigneeId !== t.assigneeId && (await this.adminModel.exists({ _id: dto.assigneeId, isDelete: { $ne: true } }))) t.assigneeId = String(dto.assigneeId);
+      if (dto.assigneeId && dto.assigneeId !== t.assigneeId && (await this.adminModel.exists({ _id: dto.assigneeId, isDelete: { $ne: true } }))) { t.assigneeId = String(dto.assigneeId); t.seenByAssignee = false; void this.notifyAssignee(t.assigneeId, t.title, t.priority, me.id); }
     }
     await t.save();
     return t;

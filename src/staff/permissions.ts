@@ -42,6 +42,7 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: 'config.manage', label: 'Change platform settings & maintenance', group: 'Platform', sensitive: true },
   { key: 'staff.view', label: 'See the team directory', group: 'Team' },
   { key: 'tasks.assign', label: 'Create and assign tasks', group: 'Team' },
+  { key: 'approvals.decide', label: 'Approve or reject other staff members\u0027 sensitive actions', group: 'Team', sensitive: true },
 ];
 
 /** Never grantable: only the owner can manage staff. */
@@ -72,7 +73,7 @@ export const ROLE_TEMPLATES: { slug: string; name: string; description: string; 
 type Rule = { re: RegExp; read?: string | null; write?: string | null };
 /** `null` = allowed for every staff member. First matching rule wins. */
 const RULES: Rule[] = [
-  { re: /^\/api\/admin\/staff\/(me|tasks)(\/|$)/, read: null, write: null }, // checked again inside the controller
+  { re: /^\/api\/admin\/staff\/(me|tasks|notes|approvals)(\/|$)/, read: null, write: null }, // checked again inside the controller
   { re: /^\/api\/admin\/reauth(\/|$)/, read: null, write: null },
   { re: /^\/api\/admin\/staff(\/|$)/, read: 'staff.view', write: 'staff.manage' },
   { re: /^\/api\/auth\/admin\/create-admin/, write: 'staff.manage', read: 'staff.manage' },

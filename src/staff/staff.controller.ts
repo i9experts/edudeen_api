@@ -7,6 +7,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { StaffService } from './staff.service';
+import { StaffExtrasService } from './staff-extras.service';
 
 /** Public: accepting an invitation and finishing two-factor setup (token-based, throttled). */
 @ApiTags('Staff (public invite)')
@@ -30,12 +31,12 @@ export class StaffInviteController {
 @Roles('admin')
 @Controller('api/admin/staff')
 export class StaffController {
-  constructor(private readonly staff: StaffService) {}
+  constructor(private readonly staff: StaffService, private readonly extras: StaffExtrasService) {}
 
   private async who(req: any) {
     const me = await this.staff.me(req.user.userId);
     const canAssign = me.isOwner || me.permissions.includes('tasks.assign');
-    return { me, ctx: { id: me._id, canAssign, name: me.name || me.email } };
+    return { me, ctx: { id: me._id, canAssign, name: me.name || me.email }, who: { id: me._id, name: me.name || me.email, isOwner: me.isOwner, permissions: me.permissions } };
   }
   private async owner(req: any) {
     const { me } = await this.who(req);
@@ -57,7 +58,26 @@ export class StaffController {
     return { success: true, data: await this.staff.auditList(adminId, Number(limit) || 100) };
   }
 
+  // ── Own two-step sign-in ─────────────────────────────────────────────────────
+  @Post('me/2fa/setup') async setup2fa(@Req() req: any) { return { success: true, data: await this.extras.setup2fa(req.user.userId) }; }
+  @Post('me/2fa/enable') async enable2fa(@Req() req: any, @Body() b: { code: string }) { return { success: true, data: await this.extras.enable2fa(req.user.userId, b?.code) }; }
+  @Post('me/2fa/disable') async disable2fa(@Req() req: any, @Body() b: { code: string }) { return { success: true, data: await this.extras.disable2fa(req.user.userId, b?.code) }; }
+
+  // ── Notes on buyers, sellers, stores, orders, listings (staff only) ──────────
+  @Get('notes') async notes(@Req() req: any, @Query('entityType') t: string, @Query('entityId') id: string) { const { who } = await this.who(req); return { success: true, data: await this.extras.listNotes(who, String(t), String(id ?? '')) }; }
+  @Post('notes') async addNote(@Req() req: any, @Body() b: { entityType: string; entityId: string; text: string }) { const { who } = await this.who(req); return { success: true, data: await this.extras.addNote(who, String(b?.entityType), String(b?.entityId ?? ''), b?.text) }; }
+  @Delete('notes/:id') async delNote(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) { const { who } = await this.who(req); return { success: true, data: await this.extras.deleteNote(who, id) }; }
+
+  // ── Two-person approvals ─────────────────────────────────────────────────────
+  @Get('approvals') async approvals(@Req() req: any, @Query('status') status?: string) { const { who } = await this.who(req); return { success: true, data: await this.extras.listApprovals(who, status) }; }
+  @Get('approvals/count') async approvalCount(@Req() req: any) { const { who } = await this.who(req); return { success: true, data: { pending: await this.extras.pendingApprovalCount(who) } }; }
+  @Post('approvals/:id/decide') async decide(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() b: { approve: boolean; note?: string }) { const { who } = await this.who(req); return { success: true, data: await this.extras.decide(who, id, b?.approve === true, b?.note) }; }
+  @Get('settings') async settings() { return { success: true, data: await this.extras.getSettings() }; }
+  @Put('settings') async saveSettings(@Req() req: any, @Body() b: any) { await this.owner(req); return { success: true, data: await this.extras.saveSettings(b ?? {}) }; }
+
   // ── Tasks (every staff member sees their own; assigning needs tasks.assign) ──
+  @Get('tasks/unread') async unread(@Req() req: any) { return { success: true, data: { count: await this.staff.unreadTaskCount(req.user.userId) } }; }
+  @Post('tasks/seen') async seen(@Req() req: any) { return { success: true, data: await this.staff.markTasksSeen(req.user.userId) }; }
   @Get('tasks') async tasks(@Req() req: any, @Query('scope') scope?: string, @Query('status') status?: string) {
     const { ctx } = await this.who(req);
     return { success: true, data: await this.staff.listTasks(ctx, scope === 'all' ? 'all' : 'mine', status) };

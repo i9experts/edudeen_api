@@ -1,6 +1,8 @@
 import { DENY, effectivePermissions, permissionForRequest, PERMISSIONS, ROLE_TEMPLATES, sanitizePermissions } from './permissions';
 import { base32Decode, base32Encode, newTotpSecret, totpAt, verifyTotp } from './totp.util';
 import { staffBlockReason } from './staff.service';
+import { accessWindowViolation, ipMatches, sanitizeIps, sanitizeWorkHours } from './access-window.util';
+import { approvalRouteFor } from './approvals';
 
 describe('staff permissions', () => {
   it('every role template only uses real permissions and never owner-only ones', () => {
@@ -53,5 +55,42 @@ describe('staff sign-in blocking', () => {
     expect(staffBlockReason({ isStaff: true, staffStatus: 'active', accessExpiresAt: new Date('2026-10-01') }, now)).toMatch(/ended/);
     expect(staffBlockReason({ isStaff: true, staffStatus: 'active', totpLockedUntil: new Date('2026-10-16T12:10:00Z') }, now)).toMatch(/Too many/);
     expect(staffBlockReason({ isStaff: true, staffStatus: 'active', accessExpiresAt: new Date('2027-01-01') }, now)).toBeNull();
+  });
+});
+
+describe('access window (IPs and working hours)', () => {
+  it('matches exact IPs and IPv4 ranges, and ignores the ::ffff: prefix', () => {
+    expect(ipMatches('203.0.113.7', '203.0.113.7')).toBe(true);
+    expect(ipMatches('203.0.113.0/24', '203.0.113.200')).toBe(true);
+    expect(ipMatches('203.0.113.0/24', '203.0.114.1')).toBe(false);
+    expect(accessWindowViolation({ allowedIps: ['203.0.113.7'] }, '::ffff:203.0.113.7')).toBeNull();
+    expect(accessWindowViolation({ allowedIps: ['203.0.113.7'] }, '198.51.100.9')).toMatch(/approved network/);
+    expect(accessWindowViolation({ allowedIps: [] }, '198.51.100.9')).toBeNull();
+  });
+  it('enforces working days and hours in the chosen timezone (incl. overnight shifts)', () => {
+    const wh = { days: [1, 2, 3, 4, 5], from: '09:00', to: '18:00', tz: 'Asia/Karachi' };
+    // Mon 2026-10-19 10:00 PKT = 05:00 UTC
+    expect(accessWindowViolation({ workHours: wh }, undefined, new Date('2026-10-19T05:00:00Z'))).toBeNull();
+    expect(accessWindowViolation({ workHours: wh }, undefined, new Date('2026-10-19T14:00:00Z'))).toMatch(/09:00–18:00/); // 19:00 PKT
+    expect(accessWindowViolation({ workHours: wh }, undefined, new Date('2026-10-18T05:00:00Z'))).toMatch(/working days/); // Sunday
+    const night = { days: [0, 1, 2, 3, 4, 5, 6], from: '22:00', to: '06:00', tz: 'UTC' };
+    expect(accessWindowViolation({ workHours: night }, undefined, new Date('2026-10-19T23:30:00Z'))).toBeNull();
+    expect(accessWindowViolation({ workHours: night }, undefined, new Date('2026-10-19T12:00:00Z'))).not.toBeNull();
+  });
+  it('sanitises input', () => {
+    expect(sanitizeIps(['1.2.3.4', ' ', 'bad value!', '1.2.3.4'])).toEqual(['1.2.3.4']);
+    expect(sanitizeWorkHours({ days: [1, 9], from: '9:00', to: '18:00' })).toBeNull();
+    expect(sanitizeWorkHours({ days: [1, 1, 2], from: '09:00', to: '18:00', tz: 'Nope/Zone' })?.tz).toBe('Asia/Karachi');
+  });
+});
+
+describe('two-person approvals', () => {
+  it('flags only the sensitive money actions', () => {
+    expect(approvalRouteFor('PATCH', '/api/admin/finance/payouts/abc/approve')?.key).toBe('payout');
+    expect(approvalRouteFor('PATCH', '/api/refund-request/abc/approve')?.key).toBe('refund');
+    expect(approvalRouteFor('PATCH', '/api/admin/manual-payments/abc/approve')?.key).toBe('payment_proof');
+    expect(approvalRouteFor('GET', '/api/admin/finance/payouts/abc/approve')).toBeNull();
+    expect(approvalRouteFor('PATCH', '/api/admin/finance/payouts/abc/reject')).toBeNull();
+    expect(approvalRouteFor('PATCH', '/api/admin/orders/abc')).toBeNull();
   });
 });

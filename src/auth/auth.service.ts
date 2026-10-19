@@ -405,7 +405,7 @@ export class AuthService {
       }
 
       // Staff (admin-panel team) must also pass: active + not expired + authenticator code.
-      if (role === 'admin' && (existingUser as any).isStaff) {
+      if (role === 'admin' && ((existingUser as any).isStaff || (existingUser as any).totpEnabled)) {
         await this.moduleRef?.get(StaffService, { strict: false })?.gateLogin(existingUser as any, loginDto.totp, ip);
       }
 

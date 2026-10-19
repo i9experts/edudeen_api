@@ -81,6 +81,9 @@ export class Admin {
     @Prop({ type: Date, default: null }) totpLockedUntil: Date | null;
     @Prop({ type: Date, default: null }) lastLoginAt: Date | null;
     @Prop({ type: String, default: null }) lastLoginIp: string | null;
+    // Optional limits: only these IPs / only these working hours (see staff/access-window.util.ts).
+    @Prop({ type: [String], default: [] }) allowedIps: string[];
+    @Prop({ type: Object, default: null }) workHours: { days: number[]; from: string; to: string; tz?: string } | null;
 }
 
 
