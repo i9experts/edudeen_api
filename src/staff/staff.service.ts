@@ -147,10 +147,10 @@ export class StaffService {
   private async sendInviteEmail(to: string, name: string, token: string, expiresAt: Date): Promise<boolean> {
     if (!this.email) return false;
     const base = (process.env.WEB_APP_URL || 'https://edudeen.com').replace(/\/+$/, '');
-    const link = `/admin/accept-invite/`;
+    const link = `${base}/admin/accept-invite/${token}`;
     const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[ch]);
-    const html = `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;color:#141413"><h2 style="margin:0 0 12px">You're invited to the Edudeen team</h2><p>Hi ,</p><p>You have been given staff access to the Edudeen admin panel. Choose a password and set up two-step sign-in to get started.</p><p><a href="" style="display:inline-block;background:#174771;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:bold">Accept invitation</a></p><p style="font-size:12px;color:#5d6570">This link works once and expires on . If you were not expecting it, ignore this email.</p></div>`;
-    try { return await this.email.sendMail(to, 'You are invited to the Edudeen team', html); } catch (e: any) { this.logger.warn(`invite email failed: `); return false; }
+    const html = `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;color:#141413"><h2 style="margin:0 0 12px">You're invited to the Edudeen team</h2><p>Hi ${esc(name || "there")},</p><p>You have been given staff access to the Edudeen admin panel. Choose a password and set up two-step sign-in to get started.</p><p><a href="${link}" style="display:inline-block;background:#174771;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:bold">Accept invitation</a></p><p style="font-size:12px;color:#5d6570">This link works once and expires on ${expiresAt.toUTCString()}. If you were not expecting it, ignore this email.</p></div>`;
+    try { return await this.email.sendMail(to, 'You are invited to the Edudeen team', html); } catch (e: any) { this.logger.warn(`invite email failed: ${e?.message}`); return false; }
   }
   private async mustStaff(id: string) {
     const a = await this.adminModel.findById(id);
@@ -318,7 +318,7 @@ export class StaffService {
     if (!a?.email) return;
     const base = (process.env.WEB_APP_URL || 'https://edudeen.com').replace(/\/+$/, '');
     const safe = title.replace(/[&<>]/g, ' ');
-    try { await this.email.sendMail(a.email, `New task: `, `<p>Hi ,</p><p>You have a new <b></b> task: <b></b>.</p><p><a href="/admin/collaboration">Open Collaboration</a></p>`); } catch { /* optional */ }
+    try { await this.email.sendMail(a.email, `New task: ${safe}`, `<p>Hi ${String(a.name || "there").replace(/[&<>]/g, " ")},</p><p>You have a new <b>${priority}</b> task: <b>${safe}</b>.</p><p><a href="${base}/admin/collaboration">Open Collaboration</a></p>`); } catch { /* optional */ }
   }
   async unreadTaskCount(adminId: string) { return this.taskModel.countDocuments({ assigneeId: adminId, seenByAssignee: false, status: { $ne: 'done' } }); }
   async markTasksSeen(adminId: string) { await this.taskModel.updateMany({ assigneeId: adminId, seenByAssignee: false }, { $set: { seenByAssignee: true } }); return { ok: true }; }
