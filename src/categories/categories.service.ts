@@ -342,14 +342,15 @@ export class CategoriesService {
 
   /** One aggregation pass over all buyer-visible products. `root` counts per main category (every product has one);
    *  `sub` counts per exact subCategoryId (any depth). */
-  private async getActiveProductCounts(): Promise<{ root: Map<string, number>; sub: Map<string, number>; rootCover: Map<string, string>; subCover: Map<string, string> }> {
+  private async getActiveProductCounts(): Promise<{ root: Map<string, number>; sub: Map<string, number>; rootCover: Map<string, string[]>; subCover: Map<string, string[]> }> {
     const productModel = this.databaseService.repositories.productModel;
     const base = { status: 'active', isDelete: false, isTest: { $ne: true } };
-    // Cover = first photo of the best-selling (then newest) product that has one.
+    // Up to 4 covers = first photo of the best-selling (then newest) products that have one.
     const coverGroup = (field: string, extra: object = {}): any[] => [
       { $match: { ...base, ...extra, 'images.0': { $exists: true } } },
       { $sort: { purchaseCount: -1, _id: -1 } },
-      { $group: { _id: field, cover: { $first: { $arrayElemAt: ['$images', 0] } } } },
+      { $group: { _id: field, covers: { $push: { $arrayElemAt: ['$images', 0] } } } },
+      { $project: { covers: { $slice: ['$covers', 4] } } },
     ];
     const [rootRows, subRows, rootCovers, subCovers] = await Promise.all([
       productModel.aggregate([
@@ -364,20 +365,22 @@ export class CategoriesService {
       productModel.aggregate(coverGroup('$subCategoryId', { subCategoryId: { $ne: null } })),
     ]);
     const toMap = (rows: { _id: string; count: number }[]) => new Map<string, number>((rows ?? []).map((r) => [String(r._id), r.count]));
-    const toCover = (rows: { _id: string; cover: string }[]) => new Map<string, string>((rows ?? []).filter((r) => r.cover).map((r) => [String(r._id), r.cover]));
+    const toCover = (rows: { _id: string; covers: string[] }[]) => new Map<string, string[]>((rows ?? []).filter((r) => r.covers?.length).map((r) => [String(r._id), r.covers]));
     return { root: toMap(rootRows), sub: toMap(subRows), rootCover: toCover(rootCovers), subCover: toCover(subCovers) };
   }
 
   /** Mutates each node (and its nested `children`) in place, setting `productCount`: for a main category every
    *  product filed under it; for a subcategory its own products plus every descendant's. */
-  private attachProductCounts(nodes: any[], counts: { root: Map<string, number>; sub: Map<string, number>; rootCover: Map<string, string>; subCover: Map<string, string> }, isRoot = false): number {
+  private attachProductCounts(nodes: any[], counts: { root: Map<string, number>; sub: Map<string, number>; rootCover: Map<string, string[]>; subCover: Map<string, string[]> }, isRoot = false): number {
     let total = 0;
     for (const node of nodes) {
       const id = String(node._id);
       const childrenCount = node.children?.length ? this.attachProductCounts(node.children, counts, false) : 0;
-      // A real product photo for tiles; a parent without its own falls back to a descendant's.
-      node.coverImage = (isRoot ? counts.rootCover.get(id) : counts.subCover.get(id))
-        ?? (node.children ?? []).find((c: any) => c.coverImage)?.coverImage ?? null;
+      // Up to 4 real product photos for tiles; a parent short of photos tops up from its descendants.
+      const covers: string[] = [...((isRoot ? counts.rootCover.get(id) : counts.subCover.get(id)) ?? [])];
+      for (const c of node.children ?? []) for (const u of c.coverImages ?? []) if (covers.length < 4 && !covers.includes(u)) covers.push(u);
+      node.coverImages = covers;
+      node.coverImage = covers[0] ?? null;
       node.productCount = isRoot ? (counts.root.get(id) ?? 0) : (counts.sub.get(id) ?? 0) + childrenCount;
       total += node.productCount;
     }
