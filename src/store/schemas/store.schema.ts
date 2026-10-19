@@ -374,6 +374,10 @@ export class Store {
   })
   productTypes!: ProductType[];
 
+  /** Running product/variant number used to build this store's SKUs (see products/sku.util.ts). */
+  @Prop({ type: Number, default: 0 })
+  skuSeq!: number;
+
   @Prop({
     type: [String],
     enum: Object.values(StoreTool),

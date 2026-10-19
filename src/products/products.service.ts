@@ -29,6 +29,7 @@ import { sanitizeDigitalForPublicView } from './product-public-view.util';
 import { classFilter, classIndex } from './class-levels';
 import { assertPriceRules, assertDescriptionRule, assertStockRule, cleanShippingWeight } from './price-rules.util';
 import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, cleanLearningMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
+import { allocateSkus } from './sku.util';
 import { generateProductSlug, nextPreviousSlugs } from 'src/common/slug.util';
 import { assertClassRangeRule, assertTitleRule, normalizeTitle, productWarnings } from './product-quality.util';
 import { CONTACT_FLAG, scanImagesForContactInfo, scanListingText } from './contact-info.util';
@@ -340,6 +341,7 @@ export class ProductsService {
       const label = v.options?.find((o: any) => o.name === LICENSE_OPTION_NAME)?.value;
       if (!label || !wanted.has(label)) { v.isDelete = true; await v.save(); }
     }
+    const licenseStore: any = await this.databaseService.repositories.storeModel.findById(product.storeId).select('name').lean();
     for (const t of extra) {
       const label = LICENSE_OPTION_LABEL[t.license] ?? t.license;
       const existing = variants.find((v: any) => v !== def && !v.isDelete && v.options?.some((o: any) => o.name === LICENSE_OPTION_NAME && o.value === label));
@@ -350,7 +352,7 @@ export class ProductsService {
       } else {
         await productVariantModel.create({
           productId,
-          sku: `SKU-${productId.slice(-6).toUpperCase()}-${t.license.slice(0, 3).toUpperCase()}`,
+          sku: (await allocateSkus(this.databaseService.repositories.storeModel, licenseStore ?? { _id: product.storeId }, 1))[0],
           price: t.price,
           currency,
           compareAtPrice: t.compareAtPrice,
@@ -1677,11 +1679,11 @@ export class ProductsService {
     });
 
     const defaultIndex = variants.findIndex((v: any) => v.isDefault === true);
+    const blankSkus = variants.filter((v: any) => !v.sku).length;
+    const autoSkus = blankSkus ? await allocateSkus(this.databaseService.repositories.storeModel, store as any, blankSkus) : [];
     const createdVariants = await Promise.all(
       variants.map((v: any, index: number) => {
-        const sku =
-          v.sku ||
-          `SKU-${product._id.toString().slice(-6).toUpperCase()}-${Date.now().toString().slice(-4)}-${index}`;
+        const sku = v.sku || autoSkus.shift()!;
         return productVariantModel.create({
           productId: product._id.toString(),
           sku,
@@ -1873,7 +1875,7 @@ export class ProductsService {
       scheduledAt: scheduledDate,
     });
 
-    const sku = `SKU-${product._id.toString().slice(-6).toUpperCase()}-${Date.now().toString().slice(-4)}`;
+    const [sku] = await allocateSkus(this.databaseService.repositories.storeModel, store as any, 1);
 
     const defaultVariant = await productVariantModel.create({
       productId: product._id.toString(),

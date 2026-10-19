@@ -6,6 +6,7 @@ import { DatabaseService } from 'src/database/databaseservice';
 import { CreateVariantDto } from './dto/create-variant.dto';
 import { UpdateVariantDto } from './dto/update-variant.dto';
 import { optionNameSet, optionsKey, VariantOptionInput } from '../products/variant-options.util';
+import { allocateSkus } from '../products/sku.util';
 
 @Injectable()
 export class ProductVariantsService {
@@ -87,9 +88,7 @@ export class ProductVariantsService {
     this.assertConsistentAndUnique(existing as any, options);
     await assertPremiumGap(this.premium, store as any, (product as any).premiumDiscountPercent, [{ price: dto.price, compareAtPrice: dto.compareAtPrice ?? null }]);
 
-    const sku =
-      dto.sku ||
-      `SKU-${product._id.toString().slice(-6).toUpperCase()}-${Date.now().toString().slice(-4)}`;
+    const sku = dto.sku || (await allocateSkus(storeModel, store as any, 1))[0];
 
     const variant = await productVariantModel.create({
       productId,

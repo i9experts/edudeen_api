@@ -15,6 +15,8 @@
     "seed:premium-demo:apply": "node --env-file=.env --experimental-strip-types src/scripts/seed-premium-demo-products.ts --apply",
     "fix:premium-conflicts": "node --env-file=.env --experimental-strip-types src/scripts/fix-premium-offer-conflicts.ts",
     "fix:premium-conflicts:apply": "node --env-file=.env --experimental-strip-types src/scripts/fix-premium-offer-conflicts.ts --apply",
+    "fix:skus": "node --env-file=.env --experimental-strip-types src/scripts/fix-variant-skus.ts",
+    "fix:skus:apply": "node --env-file=.env --experimental-strip-types src/scripts/fix-variant-skus.ts --apply",
     "backfill:pdf-pages": "node --env-file=.env --experimental-strip-types src/scripts/backfill-pdf-page-counts.ts",
     "backfill:pdf-pages:apply": "node --env-file=.env --experimental-strip-types src/scripts/backfill-pdf-page-counts.ts --apply",
     "backup:db": "node --env-file=.env scripts/backup-db.mjs",
