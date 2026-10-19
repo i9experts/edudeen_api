@@ -1009,15 +1009,14 @@ export class StoreService {
 
   // ── 3c. Top stores — cached for the home-screen row ───────────────────────
   async getTopStores(limit: number) {
-    const cacheKey = `top-stores:v3:${limit}`;
+    const cacheKey = `top-stores:v4:${limit}`;
     const cached = await this.redisService.get(cacheKey);
     if (cached) {
       return { success: true, data: { stores: JSON.parse(cached) } };
     }
 
     const { storeModel, productModel } = this.databaseService.repositories;
-    // Only finished stores are featured: logo, banner, a real bio (cheap checks in the query) and enough
-    // published, non-test listings (checked on the candidates below).
+    // Every approved (active) store with at least one published, non-test listing is featured (see featured-stores.util.ts).
     const candidates = await storeModel
       .find(featuredStoreFilter())
       .sort({ averageRating: -1, followersCount: -1 })

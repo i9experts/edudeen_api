@@ -4,6 +4,11 @@
 //  - NNNN   = running number inside that store (Store.skuSeq, bumped atomically), so numbers never repeat or skip around
 // A seller-typed SKU is always kept as typed; this only fills the blank ones.
 
+/** Tidies a seller-typed SKU: trims, collapses repeated separators (UZAIR--001 -> UZAIR-001), drops leading/trailing ones; '' when nothing is left. */
+export function cleanSku(raw: unknown): string {
+  return String(raw ?? '').trim().replace(/[\s_]+/g, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '');
+}
+
 export function storeSkuCode(store: { _id: unknown; name?: string | null }): string {
   const letters = String(store.name ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3).padEnd(3, 'X');
   const tail = String(store._id).slice(-2).toUpperCase();

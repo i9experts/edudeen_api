@@ -10,7 +10,7 @@ import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import { SUPPORTED_CURRENCIES } from 'src/exchange-rate/schemas/exchange-rate.schema';
 import { AddToCartDto, MAX_CART_LINE_QUANTITY } from './dto/add-to-cart.dto';
 import { PremiumEntitlementsService } from 'src/premium/premium-entitlements.service';
-import { premiumLinePrice, premiumPercentFor } from 'src/premium/premium.util';
+import { premiumLinePrice, premiumPercentFor, premiumTeaser } from 'src/premium/premium.util';
 
 /** Per-user cap so a wishlist can't grow without bound. */
 const MAX_WISHLIST_ITEMS = 200;
@@ -382,7 +382,10 @@ export class CartService {
         const pct = sellerPctOf(i.productId);
         if (!pct || !(i.unitPrice > 0)) return base; // no teaser on free items
         // Teaser for everyone: seller% + platform% combined, with the breakdown.
-        const teaser = { premiumPercent: Math.round((pct + (premiumTerms?.platformPercent ?? 0)) * 100) / 100, premiumSellerPercent: pct, premiumPlatformPercent: premiumTerms?.platformPercent ?? 0 };
+        // Measured against what the buyer pays now (after a running platform sale), so a sale is never counted twice.
+        const teaser = premiumTeaser(i.unitPrice, (i as any).compareAtPrice, cl ? cl.unit : i.unitPrice, pct, premiumTerms?.platformPercent ?? 0)
+          ?? (pl ? { premiumPercent: pl.calc.totalPercent, premiumSellerPercent: pl.calc.sellerPercent, premiumPlatformPercent: pl.calc.platformPercent } : null);
+        if (!teaser) return base;
         if (!pl) return { ...base, ...teaser };
         const unit = pl.calc.unit;
         premiumSavings += (i.unitPrice - unit) * i.quantity;

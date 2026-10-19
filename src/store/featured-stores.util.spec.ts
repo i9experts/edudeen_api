@@ -1,36 +1,24 @@
-import { buildProfileCompleteness, FEATURED_MIN_PRODUCTS, featuredStoreFilter, isFeaturedStoreEligible } from './featured-stores.util';
+import { buildProfileCompleteness, featuredStoreFilter, isFeaturedStoreEligible, PROFILE_MIN_PRODUCTS } from './featured-stores.util';
 
 describe('featured sellers rules', () => {
-  const ok = { status: 'active', logo: 'l.png', coverImage: 'c.png', description: 'We make printable Quran learning resources for kids.' };
-
-  it('accepts a complete active store with enough listings', () => {
-    expect(isFeaturedStoreEligible(ok, FEATURED_MIN_PRODUCTS)).toBe(true);
+  it('shows every approved store that has at least one published listing', () => {
+    expect(isFeaturedStoreEligible({ status: 'active' }, 1)).toBe(true);
+    expect(isFeaturedStoreEligible({ status: 'active' }, 9)).toBe(true);
   });
-  it('rejects a store with too few published items', () => {
-    expect(isFeaturedStoreEligible(ok, FEATURED_MIN_PRODUCTS - 1)).toBe(false);
+  it('hides stores with no published listing', () => {
+    expect(isFeaturedStoreEligible({ status: 'active' }, 0)).toBe(false);
   });
-  it('rejects missing logo, banner or a short/blank bio', () => {
-    expect(isFeaturedStoreEligible({ ...ok, logo: null }, 9)).toBe(false);
-    expect(isFeaturedStoreEligible({ ...ok, coverImage: '' }, 9)).toBe(false);
-    expect(isFeaturedStoreEligible({ ...ok, description: 'Too short' }, 9)).toBe(false);
-    expect(isFeaturedStoreEligible({ ...ok, description: null }, 9)).toBe(false);
-    expect(isFeaturedStoreEligible({ ...ok, description: ' '.repeat(40) }, 9)).toBe(false);
+  it('hides non-active stores', () => {
+    expect(isFeaturedStoreEligible({ status: 'pending' }, 9)).toBe(false);
   });
-  it('rejects non-active stores', () => {
-    expect(isFeaturedStoreEligible({ ...ok, status: 'pending' }, 9)).toBe(false);
-  });
-  it('mongo filter requires active, logo, cover and a bio length check', () => {
-    const f = featuredStoreFilter();
-    expect(f.status).toBe('active');
-    expect(f.logo).toEqual({ $nin: [null, ''] });
-    expect(f.coverImage).toEqual({ $nin: [null, ''] });
-    expect(f.$expr).toBeDefined();
+  it('mongo filter only needs an active, not-deleted store (no logo/bio gate)', () => {
+    expect(featuredStoreFilter()).toEqual({ status: 'active', isDelete: false });
   });
 });
 
 describe('seller profile meter', () => {
-  it('matches the featured rule: logo, banner, 30+ char bio, 5+ published', () => {
-    const full = buildProfileCompleteness({ logo: 'l', coverImage: 'c', description: 'x'.repeat(30) }, 5);
+  it('is a separate checklist: logo, banner, 30+ char bio, 5+ published', () => {
+    const full = buildProfileCompleteness({ logo: 'l', coverImage: 'c', description: 'x'.repeat(30) }, PROFILE_MIN_PRODUCTS);
     expect(full.percent).toBe(100);
     expect(full.complete).toBe(true);
     const half = buildProfileCompleteness({ logo: 'l', coverImage: null, description: 'short' }, 2);

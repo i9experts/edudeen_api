@@ -1,7 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import {
   addPeriod, applyPremiumToLine, cleanPremiumPercent, cleanPremiumSettings, cleanStorePremiumDiscount, listUnitPrice, monthKey, normalSalePercent,
-  premiumGapViolation, premiumLinePrice, premiumPercentFor, premiumUnitPrice, termsFromSettings,
+  premiumGapViolation, premiumLinePrice, premiumPercentFor, premiumTeaser, premiumUnitPrice, termsFromSettings,
 } from './premium.util';
 
 const line = (over: any = {}) => ({ price: 100, totalPrice: 200, quantity: 2, originalPrice: null, subscriberDiscountUSD: 0, campaignDiscountUSD: 0, autoDiscountUSD: 0, ...over });
@@ -151,5 +151,23 @@ describe('periods', () => {
   });
   it('monthKey is UTC YYYY-MM', () => {
     expect(monthKey(new Date('2026-03-31T23:59:59Z'))).toBe('2026-03');
+  });
+});
+
+describe('premiumTeaser (never double-counts a sale)', () => {
+  it('no sale: advertises the full seller + platform percent', () => {
+    expect(premiumTeaser(100, null, 100, 28, 5)).toEqual({ premiumPercent: 33, premiumSellerPercent: 28, premiumPlatformPercent: 5 });
+  });
+  it('an item already 16% off: 33% off list is only ~21% on top of what the buyer pays now', () => {
+    const t = premiumTeaser(84, 100, 84, 28, 5);
+    expect(t!.premiumPercent).toBe(20.24);
+    expect(t!.premiumSellerPercent + t!.premiumPlatformPercent).toBeCloseTo(20.24, 2);
+  });
+  it('a running platform sale price is the comparison, not the list price', () => {
+    expect(premiumTeaser(100, null, 80, 28, 5)!.premiumPercent).toBe(16.25);
+  });
+  it('no teaser when Premium would not beat the price the buyer already gets', () => {
+    expect(premiumTeaser(60, 100, 60, 28, 5)).toBeNull();
+    expect(premiumTeaser(100, null, 100, 0, 5)).toBeNull();
   });
 });

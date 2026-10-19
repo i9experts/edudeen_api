@@ -5,7 +5,7 @@ import { isValidObjectId, Model } from 'mongoose';
 import { DatabaseService } from '../database/databaseservice';
 import { RedisService } from '../redis/redis.service';
 import { PremiumMembership, PremiumMembershipDocument, PremiumSettings, PremiumSettingsDocument } from './premium.schemas';
-import { DEFAULT_CHILDREN_LIMIT, DEFAULT_PREMIUM_SETTINGS, Entitlements, NON_PREMIUM, premiumLinePrice, PremiumSettingsShape, PremiumTerms, premiumPercentFor, termsFromSettings } from './premium.util';
+import { DEFAULT_CHILDREN_LIMIT, DEFAULT_PREMIUM_SETTINGS, Entitlements, NON_PREMIUM, premiumLinePrice, premiumTeaser, PremiumSettingsShape, PremiumTerms, premiumPercentFor, termsFromSettings } from './premium.util';
 
 const CACHE_TTL_SECONDS = 60;
 const key = (userId: string) => `premium:ent:${userId}`;
@@ -121,8 +121,17 @@ export class PremiumEntitlementsService {
         if (!sellerPct) return p;
         // Free product (every variant priced 0): nothing to discount, so no Premium teaser.
         if (Array.isArray(p.variants) && p.variants.length > 0 && p.variants.every((v: any) => !(Number(v?.price) > 0))) return p;
-        const total = Math.round((sellerPct + terms.platformPercent) * 100) / 100;
-        const out: any = { ...p, premiumPercent: total, premiumSellerPercent: sellerPct, premiumPlatformPercent: terms.platformPercent };
+        let teaser = { premiumPercent: Math.round((sellerPct + terms.platformPercent) * 100) / 100, premiumSellerPercent: sellerPct, premiumPlatformPercent: terms.platformPercent };
+        if (Array.isArray(p.variants) && p.variants.length > 0) {
+          // Measured against the price the buyer pays now (after a running sale), so the sale is never counted twice.
+          const dv: any = p.variants.find((v: any) => v.isDefault) ?? p.variants[0];
+          const campUnit = typeof dv.campaignPrice === 'number' ? dv.campaignPrice : dv.price;
+          const normalUnit = Math.min(campUnit, typeof dv.subscriberPrice === 'number' ? dv.subscriberPrice : Infinity);
+          const t = premiumTeaser(dv.price, dv.originalCompareAtPrice ?? dv.compareAtPrice, normalUnit, sellerPct, terms.platformPercent);
+          if (t) teaser = t;
+          else if (!isMember) return p;
+        }
+        const out: any = { ...p, ...teaser };
         if (isMember && Array.isArray(p.variants)) {
           let applied = false;
           out.variants = p.variants.map((v: any) => {

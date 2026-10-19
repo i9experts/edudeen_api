@@ -23,7 +23,7 @@ describe('CategoriesService — admin management', () => {
       countDocuments: jest.fn().mockResolvedValue(0), updateOne: jest.fn().mockResolvedValue({}), bulkWrite: jest.fn().mockResolvedValue({}),
     };
     productModel = { countDocuments: jest.fn().mockResolvedValue(0), updateMany: jest.fn().mockResolvedValue({ modifiedCount: 3 }) };
-    storeModel = { countDocuments: jest.fn().mockResolvedValue(0), updateMany: jest.fn().mockResolvedValue({ modifiedCount: 1 }) };
+    storeModel = { countDocuments: jest.fn().mockResolvedValue(0), updateMany: jest.fn().mockResolvedValue({ modifiedCount: 1 }), find: jest.fn(() => ({ lean: jest.fn().mockResolvedValue([]) })) };
     activity = { log: jest.fn() };
     const db: any = { repositories: { categoryModel, productModel, storeModel } };
     service = new CategoriesService(db, activity);

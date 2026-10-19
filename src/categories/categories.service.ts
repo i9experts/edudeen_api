@@ -344,7 +344,10 @@ export class CategoriesService {
    *  `sub` counts per exact subCategoryId (any depth). */
   private async getActiveProductCounts(): Promise<{ root: Map<string, number>; sub: Map<string, number>; rootCover: Map<string, string[]>; subCover: Map<string, string[]> }> {
     const productModel = this.databaseService.repositories.productModel;
-    const base = { status: 'active', isDelete: false, isTest: { $ne: true } };
+    // SAME filters as the buyer browse query (ProductsService.getProductsByCategoryId): active, not deleted, not test,
+    // and sold by an ACTIVE store - so a category card's count always equals what 'Browse everything' lists.
+    const activeStoreIds = (await this.databaseService.repositories.storeModel.find({ status: 'active', isDelete: false }, { _id: 1 }).lean()).map((s: any) => String(s._id));
+    const base = { status: 'active', isDelete: false, isTest: { $ne: true }, storeId: { $in: activeStoreIds } };
     // Up to 4 covers = first photo of the best-selling (then newest) products that have one.
     const coverGroup = (field: string, extra: object = {}): any[] => [
       { $match: { ...base, ...extra, 'images.0': { $exists: true } } },

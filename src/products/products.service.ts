@@ -29,7 +29,7 @@ import { sanitizeDigitalForPublicView } from './product-public-view.util';
 import { classFilter, classIndex } from './class-levels';
 import { assertPriceRules, assertDescriptionRule, assertStockRule, cleanShippingWeight } from './price-rules.util';
 import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, cleanLearningMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
-import { allocateSkus } from './sku.util';
+import { allocateSkus, cleanSku } from './sku.util';
 import { generateProductSlug, nextPreviousSlugs } from 'src/common/slug.util';
 import { assertClassRangeRule, assertTitleRule, normalizeTitle, productWarnings } from './product-quality.util';
 import { CONTACT_FLAG, scanImagesForContactInfo, scanListingText } from './contact-info.util';
@@ -677,12 +677,12 @@ export class ProductsService {
       // resolution order as ProductsService.getProductById.
       let campaign = await campaignModel
         .findOne({ slug: campaignId, ...campaignBaseFilter })
-        .select('participatingStoreIds sponsorType')
+        .select('_id participatingStoreIds sponsorType')
         .lean();
       if (!campaign && isValidObjectId(campaignId)) {
         campaign = await campaignModel
           .findOne({ _id: campaignId, ...campaignBaseFilter })
-          .select('participatingStoreIds sponsorType')
+          .select('_id participatingStoreIds sponsorType')
           .lean();
       }
       // A platform-sponsored campaign applies to every store — no storeId
@@ -692,6 +692,9 @@ export class ProductsService {
       } else if (!campaign) {
         query.storeId = { $in: [] };
       }
+      // Strict per-product opt-in (marketing/campaign-eligibility.util.ts): only products the seller ticked for this
+      // sale are listed, so every result card carries the sale badge/price - the count matches what is shown.
+      if (campaign) query.campaignIds = String((campaign as any)._id);
     }
 
     // 1️⃣ Agar category ID di gayi hai to filter lagao
@@ -899,7 +902,8 @@ export class ProductsService {
         const seller = sellerMap.get(p.sellerId?.toString());
         return this.sanitizeDigitalForPublicView({
           ...p,
-          sellerName: seller ? seller.name : null,
+          // Buyers see the STORE, never the seller's personal name (seller name only if a store name is missing).
+          sellerName: storeNameMap.get(String(p.storeId)) ?? (seller ? seller.name : null),
           storeName: storeNameMap.get(String(p.storeId)) ?? null,
           sellerVerified: seller ? !!seller.isVerified : false,
           variants: this.applySubscriberPricing(
@@ -979,7 +983,8 @@ export class ProductsService {
         const seller = sellerMap.get(p.sellerId?.toString());
         return this.sanitizeDigitalForPublicView({
           ...p,
-          sellerName: seller ? seller.name : null,
+          // Buyers see the STORE, never the seller's personal name (seller name only if a store name is missing).
+          sellerName: storeNameMap.get(String(p.storeId)) ?? (seller ? seller.name : null),
           storeName: storeNameMap.get(String(p.storeId)) ?? null,
           sellerVerified: seller ? !!seller.isVerified : false,
           variants: this.applySubscriberPricing(
@@ -1418,7 +1423,8 @@ export class ProductsService {
       this.sanitizeDigitalForPublicView({
         ...product,
         variants: pricedVariants,
-        sellerName: seller ? seller.name : null,
+        // Buyers see the STORE, never the seller's personal name.
+        sellerName: (store && store.name) || (seller ? seller.name : null),
         sellerVerified: seller ? !!seller.isVerified : false,
         storeSlug: store ? store.slug : null,
         storeName: store ? store.name : null,
@@ -1679,6 +1685,7 @@ export class ProductsService {
     });
 
     const defaultIndex = variants.findIndex((v: any) => v.isDefault === true);
+    for (const v of variants) v.sku = cleanSku(v.sku);
     const blankSkus = variants.filter((v: any) => !v.sku).length;
     const autoSkus = blankSkus ? await allocateSkus(this.databaseService.repositories.storeModel, store as any, blankSkus) : [];
     const createdVariants = await Promise.all(

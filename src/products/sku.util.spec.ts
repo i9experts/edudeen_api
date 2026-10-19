@@ -1,4 +1,4 @@
-import { allocateSkus, formatSku, skuDatePart, storeSkuCode } from './sku.util';
+import { allocateSkus, cleanSku, formatSku, skuDatePart, storeSkuCode } from './sku.util';
 
 describe('seller SKUs', () => {
   const store = { _id: '64f0a1b2c3d4e5f6a7b8c94f', name: 'M.Publishers' };
@@ -16,6 +16,13 @@ describe('seller SKUs', () => {
 
   it('formats date + 4-digit running number', () => {
     expect(formatSku(store, 7, day)).toBe('MPU-4F-261019-0007');
+  });
+
+  it('cleans typed SKUs (no empty segments)', () => {
+    expect(cleanSku('UZAIR--001')).toBe('UZAIR-001');
+    expect(cleanSku('  -ab  cd_ef- ')).toBe('ab-cd-ef');
+    expect(cleanSku('---')).toBe('');
+    expect(cleanSku(undefined)).toBe('');
   });
 
   it('reserves consecutive numbers atomically', async () => {
