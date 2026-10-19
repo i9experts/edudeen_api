@@ -12,7 +12,7 @@ import {
   TASK_STATUSES, TASK_PRIORITIES, TASK_LINK_TYPES,
 } from './staff.schemas';
 import { PERMISSIONS, ROLE_TEMPLATES, effectivePermissions, sanitizePermissions } from './permissions';
-import { newTotpSecret, otpauthUrl, verifyTotp } from './totp.util';
+import { matchTotpStep, newTotpSecret, otpauthUrl, verifyTotp } from './totp.util';
 import { accessWindowViolation, sanitizeIps, sanitizeWorkHours } from './access-window.util';
 import { EmailService } from '../otp/services/email.service';
 
@@ -187,6 +187,14 @@ export class StaffService {
     const inv = await this.issueInvite(id);
     return { ...inv, staff: await this.view(a.toObject()), emailSent: await this.sendInviteEmail(a.email, a.name, inv.inviteToken, inv.expiresAt) };
   }
+  /** Ends every open session of this account at once (their tokens stop working). */
+  async signOutEverywhere(id: string) {
+    const a = await this.adminModel.findById(id);
+    if (!a) throw new NotFoundException('Account not found');
+    a.tokenVersion = (a.tokenVersion ?? 0) + 1;
+    await a.save();
+    return { signedOut: true };
+  }
   async remove(id: string) {
     const a = await this.mustStaff(id);
     a.isDelete = true; a.status = 'deleted'; a.staffStatus = 'suspended'; a.tokenVersion = (a.tokenVersion ?? 0) + 1;
@@ -240,7 +248,12 @@ export class StaffService {
     if (!a.totpEnabled || !a.totpSecretEnc) throw new UnauthorizedException('Finish two-factor setup from your invitation email first.');
     if (!totp) throw new UnauthorizedException({ message: 'Enter the 6-digit code from your authenticator app.', code: 'TOTP_REQUIRED' });
     const clean = String(totp).trim();
-    let ok = verifyTotp(openSecret(a.totpSecretEnc), clean);
+    const step = matchTotpStep(openSecret(a.totpSecretEnc), clean);
+    let ok = step !== null;
+    // A code works once: replaying a code someone saw over a shoulder or in a log does nothing.
+    if (ok && process.env.STAFF_TOTP_REPLAY_GUARD !== 'off' && a.lastTotpStep != null && (step as number) <= a.lastTotpStep) {
+      throw new UnauthorizedException({ message: 'That code was already used. Wait for the next one and try again.', code: 'TOTP_REPLAY' });
+    }
     if (!ok && /^[a-f0-9]{10}$/i.test(clean)) { // one-time recovery code
       const h = sha(clean.toLowerCase());
       if (a.recoveryHashes.includes(h)) { a.recoveryHashes = a.recoveryHashes.filter((x) => x !== h); ok = true; }
@@ -251,6 +264,7 @@ export class StaffService {
       await a.save();
       throw new UnauthorizedException({ message: 'Wrong code.', code: 'TOTP_INVALID' });
     }
+    if (step !== null) a.lastTotpStep = step;
     a.totpFailures = 0; a.totpLockedUntil = null; a.lastLoginAt = new Date(); a.lastLoginIp = ip ?? null;
     await a.save();
   }

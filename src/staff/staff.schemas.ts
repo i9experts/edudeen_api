@@ -110,6 +110,9 @@ export class StaffSettings {
   @Prop({ default: true }) approvalsEnabled: boolean;
   /** Which approval kinds are on (see approvals.ts). */
   @Prop({ type: [String], default: ['payout', 'payout_retry', 'refund', 'payment_proof'] }) approvalKinds: string[];
+  /** Payouts and payment proofs below these amounts need no second person (0 = no limit). Refunds always wait. */
+  @Prop({ default: 0 }) approvalThresholdUSD: number;
+  @Prop({ default: 0 }) approvalThresholdPKR: number;
 }
 export type StaffSettingsDocument = StaffSettings & Document;
 export const StaffSettingsSchema = SchemaFactory.createForClass(StaffSettings);

@@ -19,3 +19,10 @@ export function approvalRouteFor(method: string, path: string): ApprovalRoute | 
 }
 
 export const APPROVAL_TTL_MS = 24 * 3600_000;
+
+/** Amounts under the owner's limit run without waiting (0 = no limit, everything waits). Unknown amount/currency always waits. */
+export function isBelowThreshold(amount: number | null | undefined, currency: string | null | undefined, t: { usd?: number; pkr?: number }): boolean {
+  if (typeof amount !== 'number' || !Number.isFinite(amount)) return false;
+  const limit = String(currency ?? '').toUpperCase() === 'USD' ? t.usd : String(currency ?? '').toUpperCase() === 'PKR' ? t.pkr : 0;
+  return !!limit && limit > 0 && amount < limit;
+}

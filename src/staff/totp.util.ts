@@ -35,6 +35,18 @@ export function totpAt(secret: string, timeMs: number): string {
   return String(code % 1_000_000).padStart(6, '0');
 }
 
+/** The 30-second step a code belongs to (current or one either side for clock drift), or null if it is wrong. Used to stop a code being used twice. */
+export function matchTotpStep(secret: string, code: string, now = Date.now()): number | null {
+  const clean = String(code ?? '').replace(/\s/g, '');
+  if (!/^\d{6}$/.test(clean)) return null;
+  for (const d of [0, -1, 1]) {
+    const expected = Buffer.from(totpAt(secret, now + d * 30_000));
+    const given = Buffer.from(clean);
+    if (expected.length === given.length && timingSafeEqual(expected, given)) return Math.floor((now + d * 30_000) / 30_000);
+  }
+  return null;
+}
+
 /** Accepts the current code and one step either side (clock drift). */
 export function verifyTotp(secret: string, code: string, now = Date.now()): boolean {
   const clean = String(code ?? '').replace(/\s/g, '');

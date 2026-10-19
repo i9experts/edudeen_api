@@ -5,8 +5,9 @@ import { Model } from 'mongoose';
 import { randomBytes } from 'crypto';
 import { createHash } from 'crypto';
 import { Admin, AdminDocument } from '../admin/admin.schema';
+import { Payout, PayoutDocument, ManualPaymentProof, ManualPaymentProofDocument } from '../database/schema';
 import { StaffNote, StaffNoteDocument, StaffApproval, StaffApprovalDocument, StaffSettings, StaffSettingsDocument, NOTE_ENTITY_TYPES } from './staff.schemas';
-import { APPROVAL_ROUTES, APPROVAL_TTL_MS, approvalRouteFor } from './approvals';
+import { APPROVAL_ROUTES, APPROVAL_TTL_MS, approvalRouteFor, isBelowThreshold } from './approvals';
 import { newTotpSecret, otpauthUrl, verifyTotp } from './totp.util';
 import { openSecret, seal } from './staff.service';
 
@@ -24,6 +25,8 @@ export class StaffExtrasService {
     @InjectModel(StaffNote.name) private readonly noteModel: Model<StaffNoteDocument>,
     @InjectModel(StaffApproval.name) private readonly approvalModel: Model<StaffApprovalDocument>,
     @InjectModel(StaffSettings.name) private readonly settingsModel: Model<StaffSettingsDocument>,
+    @InjectModel(Payout.name) private readonly payoutModel: Model<PayoutDocument>,
+    @InjectModel(ManualPaymentProof.name) private readonly proofModel: Model<ManualPaymentProofDocument>,
   ) {}
 
   // ── Notes ───────────────────────────────────────────────────────────────────
@@ -53,13 +56,17 @@ export class StaffExtrasService {
   // ── Safety settings (owner) ─────────────────────────────────────────────────
   async getSettings() {
     const s = (await this.settingsModel.findOne().lean()) ?? { approvalsEnabled: true, approvalKinds: APPROVAL_ROUTES.map((r) => r.key) };
-    return { approvalsEnabled: s.approvalsEnabled !== false, approvalKinds: s.approvalKinds ?? [], available: APPROVAL_ROUTES.map((r) => ({ key: r.key, label: r.label })) };
+    return { approvalsEnabled: s.approvalsEnabled !== false, approvalKinds: s.approvalKinds ?? [], approvalThresholdUSD: (s as any).approvalThresholdUSD ?? 0, approvalThresholdPKR: (s as any).approvalThresholdPKR ?? 0, available: APPROVAL_ROUTES.map((r) => ({ key: r.key, label: r.label })) };
   }
-  async saveSettings(dto: { approvalsEnabled?: boolean; approvalKinds?: string[] }) {
+  async saveSettings(dto: { approvalsEnabled?: boolean; approvalKinds?: string[]; approvalThresholdUSD?: number; approvalThresholdPKR?: number }) {
     const known = new Set(APPROVAL_ROUTES.map((r) => r.key));
     const set: any = {};
     if (typeof dto.approvalsEnabled === 'boolean') set.approvalsEnabled = dto.approvalsEnabled;
     if (Array.isArray(dto.approvalKinds)) set.approvalKinds = [...new Set(dto.approvalKinds.filter((k) => known.has(k)))];
+    for (const k of ['approvalThresholdUSD', 'approvalThresholdPKR'] as const) {
+      const v = (dto as any)[k];
+      if (v !== undefined) { if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1e9) throw new BadRequestException('Limits must be a number of 0 or more'); set[k] = Math.round(v * 100) / 100; }
+    }
     await this.settingsModel.updateOne({}, { $set: set }, { upsert: true });
     return this.getSettings();
   }
@@ -75,6 +82,8 @@ export class StaffExtrasService {
     if (!route) return 'proceed';
     const s = await this.getSettings();
     if (!s.approvalsEnabled || !s.approvalKinds.includes(route.key)) return 'proceed';
+    // Small amounts the owner chose not to hold (never refunds: their amount isn't known until approved).
+    if (await this.underLimit(route.key, path, s)) return 'proceed';
     const now = new Date();
     // A granted approval for exactly this action is consumed once.
     const granted = await this.approvalModel.findOneAndUpdate(
@@ -87,6 +96,18 @@ export class StaffExtrasService {
     const created = await this.approvalModel.create({ requestedById: adminId, requestedByName: name, kind: route.key, label: route.label, method: method.toUpperCase(), path });
     return { requestId: String(created._id), label: route.label, created: true };
   }
+  private async underLimit(kind: string, path: string, s: { approvalThresholdUSD: number; approvalThresholdPKR: number }): Promise<boolean> {
+    if (!(s.approvalThresholdUSD > 0 || s.approvalThresholdPKR > 0)) return false;
+    const id = path.match(/\/([a-f0-9]{24})\//i)?.[1];
+    if (!id) return false;
+    try {
+      const t = { usd: s.approvalThresholdUSD, pkr: s.approvalThresholdPKR };
+      if (kind === 'payout' || kind === 'payout_retry') { const p: any = await this.payoutModel.findById(id).select('amount currency').lean(); return !!p && isBelowThreshold(p.amount, p.currency, t); }
+      if (kind === 'payment_proof') { const p: any = await this.proofModel.findById(id).select('amountUSD amountPKR').lean(); return !!p && (isBelowThreshold(p.amountUSD, 'USD', t) && s.approvalThresholdUSD > 0 || (!(s.approvalThresholdUSD > 0) && isBelowThreshold(p.amountPKR, 'PKR', t))); }
+    } catch { /* unknown -> hold */ }
+    return false;
+  }
+
   async listApprovals(me: Me, status?: string) {
     const filter: any = can(me, 'approvals.decide') ? {} : { requestedById: me.id };
     if (status) filter.status = status;

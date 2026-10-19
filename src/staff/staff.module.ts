@@ -7,6 +7,7 @@ import { AuthModule } from '../auth/auth.module';
 import { RedisModule } from '../redis/redis.module';
 import { StaffRole, StaffRoleSchema, StaffInvite, StaffInviteSchema, StaffTask, StaffTaskSchema, StaffAudit, StaffAuditSchema, StaffNote, StaffNoteSchema, StaffApproval, StaffApprovalSchema, StaffSettings, StaffSettingsSchema } from './staff.schemas';
 import { StaffExtrasService } from './staff-extras.service';
+import { Payout, PayoutSchema, ManualPaymentProof, ManualPaymentProofSchema } from '../database/schema';
 import { EmailService } from '../otp/services/email.service';
 import { StaffService } from './staff.service';
 import { StaffController, StaffInviteController } from './staff.controller';
@@ -19,6 +20,7 @@ import { StaffController, StaffInviteController } from './staff.controller';
       { name: Admin.name, schema: AdminSchema }, { name: StaffRole.name, schema: StaffRoleSchema }, { name: StaffInvite.name, schema: StaffInviteSchema },
       { name: StaffTask.name, schema: StaffTaskSchema }, { name: StaffAudit.name, schema: StaffAuditSchema },
       { name: StaffNote.name, schema: StaffNoteSchema }, { name: StaffApproval.name, schema: StaffApprovalSchema }, { name: StaffSettings.name, schema: StaffSettingsSchema },
+      { name: Payout.name, schema: PayoutSchema }, { name: ManualPaymentProof.name, schema: ManualPaymentProofSchema },
     ]),
   ],
   controllers: [StaffController, StaffInviteController],

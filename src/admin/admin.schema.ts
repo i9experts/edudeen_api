@@ -83,6 +83,8 @@ export class Admin {
     @Prop({ type: String, default: null }) lastLoginIp: string | null;
     // Optional limits: only these IPs / only these working hours (see staff/access-window.util.ts).
     @Prop({ type: [String], default: [] }) allowedIps: string[];
+    /** Last authenticator step accepted — a code can be used only once. */
+    @Prop({ type: Number, default: null }) lastTotpStep: number | null;
     @Prop({ type: Object, default: null }) workHours: { days: number[]; from: string; to: string; tz?: string } | null;
 }
 

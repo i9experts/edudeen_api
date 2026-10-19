@@ -58,6 +58,8 @@ export class StaffController {
     return { success: true, data: await this.staff.auditList(adminId, Number(limit) || 100) };
   }
 
+  @Post('me/sign-out-everywhere') async signOutMe(@Req() req: any) { return { success: true, data: await this.staff.signOutEverywhere(req.user.userId) }; }
+
   // ── Own two-step sign-in ─────────────────────────────────────────────────────
   @Post('me/2fa/setup') async setup2fa(@Req() req: any) { return { success: true, data: await this.extras.setup2fa(req.user.userId) }; }
   @Post('me/2fa/enable') async enable2fa(@Req() req: any, @Body() b: { code: string }) { return { success: true, data: await this.extras.enable2fa(req.user.userId, b?.code) }; }
@@ -93,6 +95,7 @@ export class StaffController {
   @Patch(':id') async update(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() b: any) { await this.owner(req); return { success: true, data: await this.staff.update(id, b ?? {}) }; }
   @Post(':id/suspend') async suspend(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) { await this.owner(req); return { success: true, data: await this.staff.setSuspended(id, true) }; }
   @Post(':id/reactivate') async reactivate(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) { await this.owner(req); return { success: true, data: await this.staff.setSuspended(id, false) }; }
+  @Post(':id/sign-out') async signOut(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) { await this.owner(req); return { success: true, data: await this.staff.signOutEverywhere(id) }; }
   @Post(':id/resend-invite') async resend(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) { await this.owner(req); return { success: true, data: await this.staff.resendInvite(id) }; }
   @Post(':id/reset-2fa') async reset2fa(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) { await this.owner(req); return { success: true, data: await this.staff.reset2fa(id) }; }
   @Delete(':id') async remove(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) { await this.owner(req); return { success: true, data: await this.staff.remove(id) }; }
