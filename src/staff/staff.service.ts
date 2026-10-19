@@ -1,10 +1,10 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, randomInt } from 'crypto';
 import { Admin, AdminDocument } from '../admin/admin.schema';
 import { encryptSeoCredential, decryptSeoCredential } from '../common/seo-token-encryption.util';
 import {
@@ -223,10 +223,12 @@ export class StaffService {
     if (pw.length < 10 || pw.length > 72 || !/[A-Za-z]/.test(pw) || !/\d/.test(pw)) throw new BadRequestException('Use 10–72 characters with letters and numbers.');
     a.password = await bcrypt.hash(pw, 12);
     if (dto.name?.trim()) a.name = dto.name.trim();
-    const secret = newTotpSecret();
-    a.totpSecretEnc = seal(secret); a.totpEnabled = false;
+    // Staff sign in with a 6-digit code e-mailed at every login (no app needed); an authenticator is optional later.
+    a.staffStatus = 'active'; a.status = 'active';
     await a.save();
-    return { secret, otpauthUrl: otpauthUrl(secret, a.email) };
+    const { inv } = await this.inviteByToken(token);
+    inv.usedAt = new Date(); await inv.save();
+    return { done: true, method: 'email' };
   }
   async activate2fa(token: string, code: string) {
     const { inv, a } = await this.inviteByToken(token);
@@ -245,7 +247,7 @@ export class StaffService {
     if (!a.isStaff && !a.totpEnabled) return; // an owner who has not turned on two-step sign-in
     const blocked = staffBlockReason(a as any) ?? (a.isStaff ? accessWindowViolation(a as any, ip) : null);
     if (blocked) throw new UnauthorizedException(blocked);
-    if (!a.totpEnabled || !a.totpSecretEnc) throw new UnauthorizedException('Finish two-factor setup from your invitation email first.');
+    if (!a.totpEnabled || !a.totpSecretEnc) { await this.emailCodeGate(a, totp, ip); return; }
     if (!totp) throw new UnauthorizedException({ message: 'Enter the 6-digit code from your authenticator app.', code: 'TOTP_REQUIRED' });
     const clean = String(totp).trim();
     const step = matchTotpStep(openSecret(a.totpSecretEnc), clean);
@@ -269,6 +271,34 @@ export class StaffService {
     await a.save();
   }
 
+  /** Second step for staff without an authenticator: a 6-digit code sent to their e-mail (10 min, 5 tries, one use). */
+  private async emailCodeGate(a: AdminDocument, code: string | undefined, ip?: string) {
+    const clean = String(code ?? '').trim();
+    const now = Date.now();
+    if (!clean) {
+      const recent = a.emailCodeSentAt && now - a.emailCodeSentAt.getTime() < 45_000;
+      if (!recent) {
+        const fresh = String(randomInt(0, 1_000_000)).padStart(6, '0');
+        a.emailCodeHash = sha(`${a._id}:${fresh}`); a.emailCodeExpiresAt = new Date(now + 10 * 60_000); a.emailCodeSentAt = new Date(now); a.emailCodeTries = 0;
+        await a.save();
+        const html = `<div style="font-family:Arial,sans-serif;max-width:420px;margin:auto;color:#141413"><h2 style="margin:0 0 12px">Your Edudeen sign-in code</h2><p style="font-size:30px;letter-spacing:6px;font-weight:bold;margin:12px 0">${fresh}</p><p style="font-size:13px;color:#5d6570">It works once and expires in 10 minutes. If this was not you, ignore this email and tell the owner.</p></div>`;
+        let sent = false;
+        try { sent = !!this.email && (await this.email.sendMail(a.email, 'Your Edudeen sign-in code', html)); } catch (e: any) { this.logger.warn(`sign-in code email failed: ${e?.message}`); }
+        if (!sent) { a.emailCodeHash = null; await a.save(); throw new ServiceUnavailableException('We could not send the sign-in code. Try again in a minute or ask the owner.'); }
+      }
+      throw new UnauthorizedException({ message: `We emailed a 6-digit code to ${a.email}. Enter it below (leave it empty and press Sign in after a minute to get a new one).`, code: 'EMAIL_CODE_REQUIRED' });
+    }
+    const valid = a.emailCodeHash && a.emailCodeExpiresAt && a.emailCodeExpiresAt.getTime() > now && (a.emailCodeTries ?? 0) < 5 && sha(`${a._id}:${clean}`) === a.emailCodeHash;
+    if (!valid) {
+      a.emailCodeTries = (a.emailCodeTries ?? 0) + 1;
+      a.totpFailures = (a.totpFailures ?? 0) + 1;
+      if (a.totpFailures >= 5) { a.totpLockedUntil = new Date(now + 15 * 60_000); a.totpFailures = 0; a.emailCodeHash = null; }
+      await a.save();
+      throw new UnauthorizedException({ message: 'Wrong code, or it has expired. Leave the box empty and press Sign in to get a new one.', code: 'TOTP_INVALID' });
+    }
+    a.emailCodeHash = null; a.emailCodeExpiresAt = null; a.emailCodeTries = 0; a.totpFailures = 0; a.totpLockedUntil = null; a.lastLoginAt = new Date(); a.lastLoginIp = ip ?? null;
+    await a.save();
+  }
   // ── Access info for the middleware (cached by the caller) ───────────────────
   async accessFor(adminId: string): Promise<{ isStaff: boolean; blocked: string | null; permissions: Set<string>; name: string; tokenVersion: number; allowedIps: string[]; workHours: any } | null> {
     const a: any = await this.adminModel.findById(adminId).lean();

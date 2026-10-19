@@ -76,6 +76,10 @@ export class Admin {
     // Two-factor (authenticator app). The secret is stored encrypted; mandatory for staff.
     @Prop({ type: String, default: null }) totpSecretEnc: string | null;
     @Prop({ default: false }) totpEnabled: boolean;
+    @Prop({ type: String, default: null }) emailCodeHash: string | null;
+    @Prop({ type: Date, default: null }) emailCodeExpiresAt: Date | null;
+    @Prop({ type: Date, default: null }) emailCodeSentAt: Date | null;
+    @Prop({ default: 0 }) emailCodeTries: number;
     @Prop({ type: [String], default: [] }) recoveryHashes: string[];
     @Prop({ default: 0 }) totpFailures: number;
     @Prop({ type: Date, default: null }) totpLockedUntil: Date | null;
