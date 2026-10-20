@@ -239,6 +239,8 @@ export class AdminMarketplaceService {
         productType: product.productType,
         educationLevel: product.educationLevel,
         customLevel: product.customLevel,
+        classFrom: product.classFrom ?? null,
+        classTo: product.classTo ?? null,
         status: product.status,
         scheduledAt: product.scheduledAt,
         reviewNote: product.reviewNote ?? null,
