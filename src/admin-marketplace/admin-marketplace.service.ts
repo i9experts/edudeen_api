@@ -272,7 +272,7 @@ export class AdminMarketplaceService {
         seller: seller ? { id: String((seller as any)._id), name: (seller as any).name, email: (seller as any).email } : null,
         store: store ? { id: String((store as any)._id), name: (store as any).name, slug: (store as any).slug, status: (store as any).status, badges: (store as any).badges ?? [] } : null,
         // Seller edit waiting for approval: before/after rows (the fields above are still the LIVE version).
-        pendingEdit: product.pendingEdit?.changes ? { submittedAt: product.pendingEdit.submittedAt, diff: buildEditDiff(product, product.pendingEdit.changes, { category: editCategory, subCategory: editSubCategory }) } : null,
+        pendingEdit: product.pendingEdit?.changes ? { submittedAt: product.pendingEdit.submittedAt, diff: buildEditDiff(product, product.pendingEdit.changes, { category: editCategory, subCategory: editSubCategory, variant: (variants as any[]).find((v) => v.isDefault) ?? (variants as any[])[0] ?? null, variants: variants as any[] }) } : null,
         variants: variants.map((v: any) => ({ id: String(v._id), price: v.price, compareAtPrice: v.compareAtPrice ?? null, currency: v.currency ?? 'PKR', options: v.options ?? [], stock: v.stock, isDefault: !!v.isDefault })),
         digital: product.digital ? {
           licenseType: product.digital.licenseType, downloadLimit: product.digital.downloadLimit,
@@ -300,12 +300,25 @@ export class AdminMarketplaceService {
     // A seller's edit to a live listing: publish the held changes, status stays as it is.
     const pending = (current as any).pendingEdit as { changes?: Record<string, unknown>; submittedAt?: Date } | null;
     if (pending?.changes && pending.submittedAt) {
+      const { __price, __compareAtPrice, __variants, ...contentChanges } = pending.changes as Record<string, unknown>;
       const edited = await this.r.productModel.findOneAndUpdate(
         { _id: id, isDelete: false, 'pendingEdit.submittedAt': pending.submittedAt },
-        { $set: { ...pending.changes, pendingEdit: null, lastEditRejection: null, reviewedAt: now, reviewNote: note?.trim() || null, flags: [], contactMatches: [], flagReason: null } },
+        { $set: { ...contentChanges, pendingEdit: null, lastEditRejection: null, reviewedAt: now, reviewNote: note?.trim() || null, flags: [], contactMatches: [], flagReason: null } },
         { returnDocument: 'after' },
       );
       if (!edited) throw new ConflictException('Someone else just reviewed this listing — refresh the queue');
+      if (__price !== undefined || __compareAtPrice !== undefined) {
+        await this.r.productVariantModel.findOneAndUpdate(
+          { productId: id, isDefault: true, isDelete: false },
+          { $set: { ...(__price !== undefined ? { price: __price } : {}), ...(__compareAtPrice !== undefined ? { compareAtPrice: __compareAtPrice } : {}) } },
+        );
+      }
+      for (const [vid, ch] of Object.entries((__variants ?? {}) as Record<string, { price?: number; compareAtPrice?: number | null }>)) {
+        await this.r.productVariantModel.findOneAndUpdate(
+          { _id: vid, productId: id, isDelete: false },
+          { $set: { ...(ch.price !== undefined ? { price: ch.price } : {}), ...('compareAtPrice' in ch ? { compareAtPrice: ch.compareAtPrice } : {}) } },
+        );
+      }
       this.log('listing_edit_approved', `Edit of listing "${edited.name}" approved and published`, meta, id);
       this.notifySeller(edited, NOTIFICATION_TYPES.LISTING_APPROVED, `Changes to "${edited.name}" are live`, 'Your edit was approved and is now visible on Edudeen.');
       return { success: true, message: 'Changes approved — now live', data: { status: edited.status } };

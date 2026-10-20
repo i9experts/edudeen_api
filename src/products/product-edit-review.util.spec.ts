@@ -22,6 +22,21 @@ describe('product edit review', () => {
     expect(out.pendingEditInfo.fields).toEqual(['name']);
   });
 
+  it('diff shows a held price against the live variant', () => {
+    const rows = buildEditDiff(live as any, { __price: 900 }, { variant: { price: 1200, currency: 'PKR' } });
+    expect(rows[0]).toMatchObject({ label: 'Price', before: 'PKR 1,200', after: 'PKR 900' });
+  });
+
+  it('overlay drops variant-level price keys from the product', () => {
+    const out: any = overlayPendingEdit({ ...live, pendingEdit: { changes: { __price: 900 }, submittedAt: new Date() } } as any);
+    expect(out.__price).toBeUndefined();
+  });
+
+  it('diff shows held per-variant prices with their options', () => {
+    const rows = buildEditDiff(live as any, { __variants: { v1: { price: 500 } } }, { variant: { currency: 'PKR' }, variants: [{ _id: 'v1', price: 600, options: [{ name: 'Size', value: 'A4' }] }] });
+    expect(rows[0]).toMatchObject({ label: 'Price (A4)', before: 'PKR 600', after: 'PKR 500' });
+  });
+
   it('diff lists before/after and hides internal keys', () => {
     const rows = buildEditDiff(live as any, { name: 'New title here', slug: 'new-title' });
     expect(rows).toHaveLength(1);

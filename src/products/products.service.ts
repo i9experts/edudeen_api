@@ -1972,15 +1972,22 @@ export class ProductsService {
 
     if (!product) throw new NotFoundException('Product not found');
 
-    const variants = await productVariantModel
+    let variants: any[] = await productVariantModel
       .find({
         productId,
         isDelete: false,
       })
       .lean();
+    const heldVariants = (product as any).pendingEdit?.changes?.__variants as Record<string, Record<string, unknown>> | undefined;
+    if (heldVariants) variants = variants.map((v) => (heldVariants[String(v._id)] ? { ...v, ...heldVariants[String(v._id)] } : v));
 
-    const defaultVariant =
+    let defaultVariant: any =
       variants.find((v: any) => v.isDefault) || variants[0] || null;
+    const pendingChanges: any = (product as any).pendingEdit?.changes;
+    if (defaultVariant && pendingChanges && ('__price' in pendingChanges || '__compareAtPrice' in pendingChanges)) {
+      // The seller's own pending price shows in the form (buyers still pay the live price).
+      defaultVariant = { ...defaultVariant, ...('__price' in pendingChanges ? { price: pendingChanges.__price } : {}), ...('__compareAtPrice' in pendingChanges ? { compareAtPrice: pendingChanges.__compareAtPrice } : {}) };
+    }
 
     return {
       success: true,
@@ -2246,11 +2253,24 @@ export class ProductsService {
     const split = splitEditForReview(productPlain, productUpdate);
     let writeUpdate: any = productUpdate;
     let editSentForReview = false;
+    // Price of a digital/educational listing lives on its default variant: a changed price waits for approval too.
+    const heldPrice: Record<string, unknown> = {};
+    let heldVariantView: any = null;
+    if (split.hold && product.type !== 'physical' && (price !== undefined || compareAtPrice !== undefined)) {
+      const dv: any = await productVariantModel.findOne({ productId, isDefault: true, isDelete: false }).lean();
+      if (dv) {
+        if (price !== undefined && Number(price) !== Number(dv.price)) heldPrice.__price = Number(price);
+        if (compareAtPrice !== undefined && (compareAtPrice ?? null) !== (dv.compareAtPrice ?? null)) heldPrice.__compareAtPrice = compareAtPrice ?? null;
+        if (Object.keys(heldPrice).length) heldVariantView = { ...dv, ...(heldPrice.__price !== undefined ? { price: heldPrice.__price } : {}), ...('__compareAtPrice' in heldPrice ? { compareAtPrice: heldPrice.__compareAtPrice } : {}) };
+      }
+    }
+    const priceHeld = Object.keys(heldPrice).length > 0;
     if (split.hold) {
       writeUpdate = { ...split.immediate };
       const priorChanges: Record<string, unknown> = productPlain.pendingEdit?.changes ?? {};
-      const mergedChanges = { ...priorChanges, ...split.held };
-      if (Object.keys(split.held).length > 0) {
+      const heldNow = { ...split.held, ...heldPrice };
+      const mergedChanges = { ...priorChanges, ...heldNow };
+      if (Object.keys(heldNow).length > 0) {
         // The contact-info flag moved into the held content, so the live listing is not pulled off the shelf by it.
         if (flaggedStatusBefore) { if (flaggedStatusBefore.had) writeUpdate.status = flaggedStatusBefore.value; else delete writeUpdate.status; }
         editSentForReview = true;
@@ -2279,8 +2299,8 @@ export class ProductsService {
     // and no dedicated variant-management endpoints — price/compareAtPrice
     // edits for them stay routed through here. Physical products manage
     // price per-variant exclusively via the product-variants module now.
-    let updatedVariant: any;
-    if (product.type !== 'physical' && (price !== undefined || compareAtPrice !== undefined)) {
+    let updatedVariant: any = heldVariantView ?? undefined;
+    if (product.type !== 'physical' && (price !== undefined || compareAtPrice !== undefined) && !priceHeld) {
       if (price !== undefined) assertValidPrice(price, 'Price');
       if (compareAtPrice !== undefined) assertValidPrice(compareAtPrice, 'compareAtPrice', { nullable: true });
       const variantUpdate: any = {};

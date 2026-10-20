@@ -146,6 +146,9 @@ export class InventoryService {
         scheduledAt: product.scheduledAt ?? null,
         // Why an admin sent the listing back (status 'rejected').
         reviewNote: (product as any).reviewNote ?? null,
+        // A seller edit of this live listing is waiting for admin approval / was declined.
+        hasPendingEdit: !!(product as any).pendingEdit?.submittedAt,
+        editRejection: (product as any).lastEditRejection?.reason ?? null,
         price,
         compareAtPrice: defaultVariant?.compareAtPrice ?? null,
         allTimeSales: product.purchaseCount || 0,

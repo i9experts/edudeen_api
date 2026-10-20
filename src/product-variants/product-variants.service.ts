@@ -7,6 +7,7 @@ import { CreateVariantDto } from './dto/create-variant.dto';
 import { UpdateVariantDto } from './dto/update-variant.dto';
 import { optionNameSet, optionsKey, VariantOptionInput } from '../products/variant-options.util';
 import { allocateSkus, cleanSku } from '../products/sku.util';
+import { holdsEditsForReview } from '../products/product-edit-review.util';
 
 @Injectable()
 export class ProductVariantsService {
@@ -160,8 +161,28 @@ export class ProductVariantsService {
     }
 
     const update: any = {};
-    if (dto.price !== undefined) update.price = dto.price;
-    if (dto.compareAtPrice !== undefined) update.compareAtPrice = dto.compareAtPrice;
+    // A live, admin-approved listing: a changed price waits for approval (stock and options stay immediate).
+    let heldPriceView: Record<string, unknown> | null = null;
+    if (holdsEditsForReview(ownedProduct as any)) {
+      const held: Record<string, unknown> = {};
+      if (dto.price !== undefined && Number(dto.price) !== Number((variant as any).price)) held.price = dto.price;
+      if (dto.compareAtPrice !== undefined && (dto.compareAtPrice ?? null) !== ((variant as any).compareAtPrice ?? null)) held.compareAtPrice = dto.compareAtPrice ?? null;
+      if (Object.keys(held).length) {
+        const plain: any = (ownedProduct as any).toObject ? (ownedProduct as any).toObject() : ownedProduct;
+        const prior = plain.pendingEdit?.changes ?? {};
+        const variants = { ...(prior.__variants ?? {}), [variantId]: { ...(prior.__variants?.[variantId] ?? {}), ...held } };
+        const changes = { ...prior, __variants: variants };
+        await this.databaseService.repositories.productModel.findByIdAndUpdate(productId, {
+          $set: {
+            pendingEdit: { changes, fields: Object.keys(changes), submittedAt: JSON.stringify(variants) === JSON.stringify(prior.__variants ?? {}) && plain.pendingEdit?.submittedAt ? plain.pendingEdit.submittedAt : new Date() },
+            lastEditRejection: null,
+          },
+        });
+        heldPriceView = held;
+      }
+    }
+    if (dto.price !== undefined && !(heldPriceView && 'price' in heldPriceView)) update.price = dto.price;
+    if (dto.compareAtPrice !== undefined && !(heldPriceView && 'compareAtPrice' in heldPriceView)) update.compareAtPrice = dto.compareAtPrice;
     if (dto.options !== undefined) update.options = dto.options;
     if (dto.stock !== undefined) update.stock = dto.stock;
     if (dto.unlimitedStock !== undefined) update.unlimitedStock = !!dto.unlimitedStock;
@@ -170,10 +191,12 @@ export class ProductVariantsService {
     if (dto.stock !== undefined) assertStockRule(dto.stock, dto.unlimitedStock !== undefined ? !!dto.unlimitedStock : !!(variant as any).unlimitedStock);
     if (dto.images !== undefined) update.images = dto.images;
 
-    const updated =
+    let updated: any =
       Object.keys(update).length > 0
         ? await productVariantModel.findByIdAndUpdate(variantId, update, { returnDocument: 'after' })
         : variant;
+    // The seller's response shows their own pending price; buyers still pay the live one.
+    if (heldPriceView && updated) updated = { ...(updated.toObject ? updated.toObject() : updated), ...heldPriceView };
 
     if (dto.isDefault === true && !variant.isDefault) {
       await this.reassignDefault(productId, variantId);
