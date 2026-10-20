@@ -792,9 +792,9 @@ export class OrdersService {
               : 'Your order was delivered',
           body:
             status === 'shipped'
-              ? `Order #${orderId} is on its way${tracking?.carrier ? ` via ${tracking.carrier}` : ''}.`
-              : `Order #${orderId} has been delivered.`,
-          data: { orderId, status, link: `/account/orders/${orderId}` },
+              ? `Order #${order.orderNumber ?? orderId} is on its way${tracking?.carrier ? ` via ${tracking.carrier}` : ''}.`
+              : `Order #${order.orderNumber ?? orderId} has been delivered.`,
+          data: { orderId, orderNumber: order.orderNumber, status, link: `/account/orders/${orderId}` },
           email: orderStatusEmail(order.orderNumber ?? orderId, status, tracking),
           channelEvent: {
             event: status === 'shipped' ? 'order_shipped' : 'order_delivered',
@@ -914,8 +914,8 @@ export class OrdersService {
         recipientRole: 'user',
         type: NOTIFICATION_TYPES.PAYMENT_SUCCESS,
         title: 'Payment received',
-        body: `We've received your payment for order #${orderId}.`,
-        data: { orderId, link: `/account/orders/${orderId}` },
+        body: `We've received your payment for order #${order.orderNumber ?? orderId}.`,
+        data: { orderId, orderNumber: order.orderNumber, link: `/account/orders/${orderId}` },
       })
       .catch(() => {});
 

@@ -6,6 +6,13 @@ import { DatabaseService } from 'src/database/databaseservice';
 
 const ADDRESS_TEXT_FIELDS = ['label', 'recipientName', 'phoneNumber', 'addressLine1', 'addressLine2', 'state', 'city', 'zipCode', 'country'] as const;
 
+/** True when line 2 just repeats line 1 (ignoring case/extra spaces). */
+function sameLine(a: unknown, b: unknown): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const norm = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
+  return norm(a) !== '' && norm(a) === norm(b);
+}
+
 /**
  * The only address fields a user may write. updateAddress used to `$set` the whole request body, so a user could
  * rewrite `userId` (hand an address to someone else), flip `isDelete` (resurrect a deleted one) or set `status`.
@@ -49,7 +56,10 @@ export class AddressService {
         throw new NotFoundException('No buyer account found for this sign-in. Please switch to your buyer account to continue.');
       }
 
-      if (body.isDefault) {
+      // A user's first address is always their default.
+      const existingCount = await this.databaseService.repositories.addressModel.countDocuments({ userId, isDelete: false });
+      const makeDefault = !!body.isDefault || existingCount === 0;
+      if (makeDefault) {
         await this.databaseService.repositories.addressModel.updateMany(
             { userId, isDelete: false },
           { $set: { isDefault: false } },
@@ -64,14 +74,14 @@ export class AddressService {
   recipientName: body.recipientName,
   phoneNumber: body.phoneNumber,
   addressLine1: body.addressLine1,
-  addressLine2: body.addressLine2 || null,
+  addressLine2: sameLine(body.addressLine1, body.addressLine2) ? null : (body.addressLine2 || null),
   state: body.state,
   city: body.city,
   zipCode: body.zipCode,
   country: body.country || null,
   latitude: body.latitude ?? null,
   longitude: body.longitude ?? null,
-  isDefault: body.isDefault || false,
+  isDefault: makeDefault,
 });
       return {
         success: true,
@@ -107,6 +117,13 @@ export class AddressService {
     try {
       if (typeof addressId !== 'string' || !isValidObjectId(addressId)) throw new BadRequestException('Invalid addressId');
       const fields = pickAddressUpdate(body);
+      if (typeof fields.addressLine2 === 'string') {
+        let line1 = fields.addressLine1;
+        if (line1 === undefined) {
+          line1 = (await this.databaseService.repositories.addressModel.findOne({ _id: addressId, userId, isDelete: false }).select('addressLine1').lean())?.addressLine1;
+        }
+        if (sameLine(line1, fields.addressLine2)) fields.addressLine2 = null;
+      }
       if (fields.isDefault === true) {
         await this.databaseService.repositories.addressModel.updateMany(
           { userId, isDelete: false, _id: { $ne: addressId } },

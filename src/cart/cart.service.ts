@@ -690,23 +690,42 @@ export class CartService {
   async getWishlist(userId: string, storeId?: string) {
     try {
       // User wishlist — one store, or every store on the main site.
-      const wishlist = await this.databaseService.repositories.wishListModel
+      const { wishListModel, productModel, storeModel, productVariantModel } = this.databaseService.repositories;
+      const wishlist = await wishListModel
         .find({ userId, ...(storeId ? { storeId } : {}) })
         .sort({ createdAt: -1 })
-        .limit(MAX_WISHLIST_ITEMS);
+        .limit(MAX_WISHLIST_ITEMS)
+        .lean();
+
+      // Three batched lookups (products, stores, variants) instead of 2-3 queries per saved item.
+      const validIds = (ids: any[]) => [...new Set(ids.filter((id) => typeof id === 'string' && isValidObjectId(id)))];
+      const [products, variants] = await Promise.all([
+        productModel.find({ _id: { $in: validIds(wishlist.map((w) => w.productId)) }, status: 'active', isDelete: false }).lean(),
+        productVariantModel.find({ _id: { $in: validIds(wishlist.map((w) => w.productVariantId)) }, isDelete: false }).lean(),
+      ]);
+      const liveStores = await storeModel
+        .find({ _id: { $in: validIds(products.map((p) => String(p.storeId))) }, status: 'active', isDelete: false })
+        .select('_id')
+        .lean();
+      const liveStoreIds = new Set(liveStores.map((s) => String(s._id)));
+      const productById = new Map(products.filter((p) => liveStoreIds.has(String(p.storeId))).map((p) => [String(p._id), p]));
+      const variantById = new Map(variants.map((v) => [String(v._id), v]));
 
       const groupedWishlist: any[] = [];
+      const groupIndex = new Map<string, any>();
       for (const item of wishlist) {
         // Removed / draft / suspended-store products silently drop out instead of being served.
-        const product = await this.loadViewableProduct(item.productId);
-        if (!product) continue;
-        const variant = await this.loadVariantLean(item.productVariantId);
+        const raw = productById.get(String(item.productId));
+        if (!raw) continue;
+        const variant = variantById.get(String(item.productVariantId)) ?? null;
 
-        const existingProduct = groupedWishlist.find((data) => data.product._id.toString() === product._id.toString());
+        const existingProduct = groupIndex.get(String(raw._id));
         if (existingProduct) {
           if (variant) existingProduct.variants.push(variant);
         } else {
-          groupedWishlist.push({ product, variants: variant ? [variant] : [] });
+          const entry = { product: sanitizeDigitalForPublicView(raw), variants: variant ? [variant] : [] };
+          groupIndex.set(String(raw._id), entry);
+          groupedWishlist.push(entry);
         }
       }
 

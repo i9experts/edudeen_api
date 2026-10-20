@@ -298,7 +298,7 @@ export class ChatSupportService {
         await this.notifications.notify({
           recipientId: String(conv.userId), recipientRole: conv.userKind === 'seller' ? 'seller' : 'user',
           type: NOTIFICATION_TYPES.SUPPORT_REPLY, title: 'The Edudeen team replied', body: text.slice(0, 140),
-          data: { link: '/?openChat=1', conversationId: String(conv._id), shortCode: conv.shortCode },
+          data: { link: conv.userKind === 'seller' ? '/?openChat=1' : '/account/dashboard?openChat=1', conversationId: String(conv._id), shortCode: conv.shortCode },
         });
       }
       const seen = conv.lastUserSeenAt ? Date.now() - new Date(conv.lastUserSeenAt).getTime() < SEEN_WINDOW_MS : false;
