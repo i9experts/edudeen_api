@@ -107,6 +107,19 @@ export class UsersService {
     };
   }
 
+  /** Sign out every other device: bump tokenVersion (old tokens stop working) and give this device a fresh pair. */
+  async logoutOtherDevices(userId: string, role: string) {
+    const repos = this.db.repositories;
+    const model: any = role === 'user' ? repos.userModel : role === 'seller' ? repos.sellerModel : role === 'admin' ? repos.adminModel : null;
+    if (!model) throw new UnauthorizedException('Invalid user type');
+    const user = await model.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
+    await user.save();
+    const token = await this.authService.issueSession(user);
+    return { success: true, message: 'Signed out of all other devices', data: { token } };
+  }
+
   // Buyers and sellers are separate collections (see changePassword's comment
   // above) — this must branch on role too, or a seller's delete request 404s
   // against the buyer collection while their seller account stays fully live.

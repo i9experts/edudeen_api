@@ -39,6 +39,14 @@ export class RatingController {
     return this.ratingService.addReview(userId, body);
   }
 
+  /** Product ids the buyer has already reviewed (for the "Waiting for your review" list). Must stay above any `:id` routes. */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('user')
+  @Get('my-reviewed-ids')
+  async getMyReviewedIds(@Req() req: any) {
+    return this.ratingService.getMyReviewedProductIds(req.user.userId);
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('user')
   @Get('my-reviews')

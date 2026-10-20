@@ -237,6 +237,11 @@ export class RatingService {
     return { success: true, message: 'Review deleted' };
   }
 
+  async getMyReviewedProductIds(userId: string) {
+    const ids = await this.r.ratingModel.distinct('productId', { userId, isDelete: false });
+    return { success: true, message: 'Reviewed products fetched', data: { productIds: ids.map(String) } };
+  }
+
   async getMyReviews(userId: string, query: any) {
     const { ratingModel, productModel } = this.r;
 

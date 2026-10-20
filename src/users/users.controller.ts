@@ -47,6 +47,12 @@ export class UsersController {
     return this.usersService.deleteAccount(req.user.userId, req.user.role);
   }
 
+  @Put('logout-others')
+  @ApiOperation({ summary: 'Sign out of every other device' })
+  logoutOthers(@Req() req: any) {
+    return this.usersService.logoutOtherDevices(req.user.userId, req.user.role);
+  }
+
   @Put('change-password')
   @ApiOperation({ summary: 'Change user password' })
   @ApiResponse({ status: 200, description: 'Password changed successfully' })
