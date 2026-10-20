@@ -23,6 +23,7 @@ import {
   periodTotals as periodTotalsUtil,
   repeatBuyerPercent as repeatBuyerPercentUtil,
   repeatBuyerStats as repeatBuyerStatsUtil,
+  periodBuyerIds as periodBuyerIdsUtil,
   returningBuyerSet as returningBuyerSetUtil,
   sellerOrderMatchStage,
 } from './utils/order-aggregation.util';
@@ -213,7 +214,10 @@ export class AnalyticsService {
       // Same query as repeatBuyerPercent: returning = buyers with >= 2 orders, new = the rest.
       const repeatBuyerPct = repeatStats.percent;
       const returningCustomersCount = repeatStats.repeat;
-      const newCustomersCount = Math.max(0, repeatStats.total - repeatStats.repeat);
+      // New = period buyers whose first-ever order with this scope falls in [from, to].
+      const periodBuyers = await periodBuyerIdsUtil(this.r.orderModel, from, to, scope);
+      const priorBuyers = await returningBuyerSetUtil(this.r.orderModel, periodBuyers, from, scope);
+      const newCustomersCount = periodBuyers.filter((id) => !priorBuyers.has(id)).length;
 
       const refundRatePercent = current.grossRevenue > 0 ? this.round((current.refundAmount / current.grossRevenue) * 100) : 0;
 

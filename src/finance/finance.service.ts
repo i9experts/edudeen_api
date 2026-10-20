@@ -1148,6 +1148,7 @@ export class FinanceService {
       currency,
       // New names first; the old commission* names stay as aliases for existing clients.
       platformFeeRate: commissionRate.rate,
+      platformFeeText: await this.platformFeeText(),
       platformFee: s.commission,
       codPlatformFeeOwed: s.codCommissionOwed,
       commissionRate: commissionRate.rate,
@@ -1839,6 +1840,16 @@ export class FinanceService {
     if (perType) return perType;
     const { rate, source } = await this.commissionRulesService.resolveRate(storeId);
     return { rate, source, platformFee: this.round(saleAmount * rate) };
+  }
+
+  /** Seller-facing text of the configured platform fees, e.g. "20% digital, 10% physical" (null when unset). */
+  private async platformFeeText(): Promise<string | null> {
+    const fees: any = typeof this.adminConfigService?.getPlatformFees === 'function'
+      ? await this.adminConfigService.getPlatformFees().catch(() => null) : null;
+    const label = (r: any) => (r?.mode === 'percentage' ? `${Number(Number(r.value).toFixed(2))}%` : r?.mode === 'fixed' ? `$${Number(Number(r.value).toFixed(2))} per item` : null);
+    const d = label(fees?.digital); const p = label(fees?.physical);
+    if (d && p) return d === p ? `${d} per sale` : `${d} digital, ${p} physical`;
+    return d ? `${d} digital` : p ? `${p} physical` : null;
   }
 
   /** Single fee rate (0-1) shown in seller screens: the admin's Platform fees when digital and physical are

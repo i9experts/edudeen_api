@@ -23,6 +23,9 @@ export interface LogActivityInput {
   metadata?: object | null;
 }
 
+/** Seller-facing "Security alerts": failed logins, password/email changes, new device/IP only. */
+export const SECURITY_ALERT_ACTIONS = ['login_failed', 'password_changed', 'email_changed', 'new_device_login', 'new_ip_login'];
+
 @Injectable()
 export class ActivityLogService {
   private readonly logger = new Logger(ActivityLogService.name);
@@ -136,7 +139,7 @@ export class ActivityLogService {
       activityLogModel.countDocuments({ storeId, createdAt: { $gte: ninetyDaysAgo } }),
       activityLogModel.countDocuments({ storeId, createdAt: { $gte: startOfToday } }),
       activityLogModel.distinct('actorId', { storeId, createdAt: { $gte: startOfToday }, actorId: { $ne: null } }),
-      activityLogModel.countDocuments({ storeId, isSecurityAlert: true, action: { $ne: 'login_success' }, createdAt: { $gte: ninetyDaysAgo } }),
+      activityLogModel.countDocuments({ storeId, isSecurityAlert: true, category: 'security', action: { $in: SECURITY_ALERT_ACTIONS }, createdAt: { $gte: ninetyDaysAgo } }),
       activityLogModel
         .findOne({ storeId, category: 'security', action: 'login_success' })
         .sort({ createdAt: -1 })
@@ -174,7 +177,8 @@ export class ActivityLogService {
     }
     if (query.isSecurityAlert !== undefined) {
       filter.isSecurityAlert = query.isSecurityAlert === 'true' || query.isSecurityAlert === true;
-      if (filter.isSecurityAlert) filter.action = { $ne: 'login_success' };
+      if (filter.isSecurityAlert && !filter.storeId) filter.action = { $ne: 'login_success' };
+      else if (filter.isSecurityAlert) { filter.category = 'security'; filter.action = { $in: SECURITY_ALERT_ACTIONS }; }
     }
     const term = searchTerm(query.search);
     if (term) {

@@ -142,6 +142,15 @@ export async function repeatBuyerStats(orderModel: Model<any>, from: Date, to: D
 export async function repeatBuyerPercent(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>): Promise<number> {
   return (await repeatBuyerStats(orderModel, from, to, scopeMatch)).percent;
 }
+/** Distinct buyers with a non-cancelled order in scope within [from, to]. */
+export async function periodBuyerIds(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>): Promise<string[]> {
+  const rows = await orderModel.aggregate([
+    ...sellerOrderMatchStage(from, to, scopeMatch),
+    { $match: { 'sellerOrders.status': { $ne: 'cancelled' } } },
+    { $group: { _id: '$userId' } },
+  ]);
+  return rows.map((r: any) => r._id);
+}
 /** Buyers among `buyerIds` who already had a non-cancelled order (within `scopeMatch`'s scope) before `from`. */
 export async function returningBuyerSet(orderModel: Model<any>, buyerIds: string[], from: Date, scopeMatch?: Record<string, any>): Promise<Set<string>> {
   if (buyerIds.length === 0) return new Set();

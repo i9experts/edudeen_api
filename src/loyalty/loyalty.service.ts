@@ -479,7 +479,8 @@ export class LoyaltyService {
 
     const program = await loyaltyProgramModel.findOne({ storeId });
     // Distinct people (a duplicate member row for the same buyer must not inflate the count).
-    const programMembers = (await loyaltyMemberModel.distinct('userId', { storeId })).length;
+    // Members only exist for this store's enabled program; a disabled/missing program has none.
+    const programMembers = program?.isEnabled ? (await loyaltyMemberModel.distinct('userId', { storeId })).length : 0;
 
     const [pointsIssued30d, pointsRedeemedTotal, activityByType] = await Promise.all([
       loyaltyTransactionModel.aggregate([
