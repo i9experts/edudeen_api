@@ -340,6 +340,15 @@ export class Product {
   @Prop({ type: String, default: null })
   flagReason: string | null;
 
+  // Seller edits to a LIVE (admin-approved) listing wait here until an admin approves them; the live fields stay as
+  // they were. `changes` is a $set-ready object. Reject drops it; approve applies it (see AdminMarketplaceService).
+  @Prop({ type: Object, default: null })
+  pendingEdit: { changes: Record<string, unknown>; submittedAt: Date; fields: string[] } | null;
+
+  // Why the last edit was sent back, so the seller can see it (cleared by the next submitted edit).
+  @Prop({ type: Object, default: null })
+  lastEditRejection: { reason: string; at: Date } | null;
+
   // Admin-assigned trust badges (set in the listing review; see products/trust-badges.util.ts).
   // Plain nested object, null until an admin sets something.
   @Prop({ type: Object, default: null })

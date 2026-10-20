@@ -28,6 +28,7 @@ import { fetchPdfPageCount, isPdfName } from './pdf-page-count.util';
 import { sanitizeDigitalForPublicView } from './product-public-view.util';
 import { classFilter, classIndex } from './class-levels';
 import { assertPriceRules, assertDescriptionRule, assertStockRule, cleanShippingWeight } from './price-rules.util';
+import { splitEditForReview, overlayPendingEdit } from './product-edit-review.util';
 import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, cleanLearningMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
 import { allocateSkus, cleanSku } from './sku.util';
 import { generateProductSlug, nextPreviousSlugs } from 'src/common/slug.util';
@@ -463,6 +464,8 @@ export class ProductsService {
 
   /** The seller's free sample (a separate file from what buyers get), as a   *  short-lived link. Rate-limited the same way as previews. */
   async getProductSample(idOrSlug: string, clientIp: string) {
+    // Owner decision: buyers no longer get a free-sample download (the Preview viewer replaces it).
+    if (process.env.PUBLIC_FREE_SAMPLE !== 'true') throw new NotFoundException('Free samples are not offered');
     const count = await this.redisService.incrWithTtl(`sample:rl:${clientIp}:${idOrSlug}`, PREVIEW_RATE_LIMIT_WINDOW_SECONDS);
     if (count !== null && count > PREVIEW_RATE_LIMIT_MAX) {
       throw new HttpException({ success: false, message: 'Too many requests — please try again later' }, HttpStatus.TOO_MANY_REQUESTS);
@@ -1982,7 +1985,8 @@ export class ProductsService {
     return {
       success: true,
       message: 'Product fetched successfully',
-      data: { product, variants, defaultVariant },
+      // The seller sees their own pending edit in the form; buyers still see the live version.
+      data: { product: (product as any).pendingEdit?.changes ? overlayPendingEdit(product as any) : product, variants, defaultVariant },
     };
   }
 
@@ -2154,6 +2158,7 @@ export class ProductsService {
     // Title warnings, class range (to go live) and the contact-info scan - only for what this request touches.
     let editWarnings: string[] = [];
     let editScan: { flagged: boolean; matches: string[]; reason: string | null } | null = null;
+    let flaggedStatusBefore: { had: boolean; value?: string } | null = null;
     {
       const effTitle = productUpdate.name ?? product.name;
       const effFrom = productUpdate.classFrom !== undefined ? productUpdate.classFrom : product.classFrom;
@@ -2165,7 +2170,10 @@ export class ProductsService {
         editScan = quality.scan;
         Object.assign(productUpdate, this.qualityFields(quality.scan));
         // Held for review instead of staying/going live while it shows contact details.
-        if (quality.scan.flagged && ['active', 'scheduled'].includes(productUpdate.status ?? product.status)) productUpdate.status = 'pending_review';
+        if (quality.scan.flagged && ['active', 'scheduled'].includes(productUpdate.status ?? product.status)) {
+          flaggedStatusBefore = { had: productUpdate.status !== undefined, value: productUpdate.status };
+          productUpdate.status = 'pending_review';
+        }
       }
     }
 
@@ -2233,14 +2241,39 @@ export class ProductsService {
       await assertPremiumGap(this.premiumService, gapStore as any, own, prices, (productUpdate.premiumOptOut !== undefined ? productUpdate.premiumOptOut : (product as any).premiumOptOut) === true);
     }
 
-    const updatedProduct =
-      Object.keys(productUpdate).length > 0
-        ? await productModel.findByIdAndUpdate(productId, productUpdate, {
+    // An approved listing that is live: content edits wait for admin approval, buyers keep seeing the old version.
+    const productPlain = (product as any).toObject ? (product as any).toObject() : (product as any);
+    const split = splitEditForReview(productPlain, productUpdate);
+    let writeUpdate: any = productUpdate;
+    let editSentForReview = false;
+    if (split.hold) {
+      writeUpdate = { ...split.immediate };
+      const priorChanges: Record<string, unknown> = productPlain.pendingEdit?.changes ?? {};
+      const mergedChanges = { ...priorChanges, ...split.held };
+      if (Object.keys(split.held).length > 0) {
+        // The contact-info flag moved into the held content, so the live listing is not pulled off the shelf by it.
+        if (flaggedStatusBefore) { if (flaggedStatusBefore.had) writeUpdate.status = flaggedStatusBefore.value; else delete writeUpdate.status; }
+        editSentForReview = true;
+        if (JSON.stringify(mergedChanges) !== JSON.stringify(priorChanges)) {
+          const fields = Object.keys(mergedChanges).filter((k) => !['slug', 'previousSlugs', 'normalizedCustomLevel', 'flags', 'contactMatches', 'flagReason'].includes(k));
+          writeUpdate.pendingEdit = { changes: mergedChanges, fields, submittedAt: new Date() };
+          writeUpdate.lastEditRejection = null;
+          this.activityLogService.log({
+            storeId: product.storeId, category: 'products', action: 'listing_edit_submitted',
+            description: `Seller edited live listing "${product.name}" (${fields.join(', ')}) - waiting for admin review`,
+            actorId: sellerId, actorRole: 'seller', targetId: productId, targetType: 'product',
+          } as any);
+        }
+      }
+    }
+    let updatedProduct: any =
+      Object.keys(writeUpdate).length > 0
+        ? await productModel.findByIdAndUpdate(productId, writeUpdate, {
             runValidators: true,
             returnDocument: 'after',
           })
         : product;
-    if (productUpdate.digital) void this.fillPdfPageCounts(productId);
+    if (writeUpdate.digital) void this.fillPdfPageCounts(productId);
 
     // Digital/educational products still have exactly one (default) variant
     // and no dedicated variant-management endpoints — price/compareAtPrice
@@ -2269,10 +2302,14 @@ export class ProductsService {
     }
 
     void scanImagesForContactInfo(productId, Array.isArray(images) ? images : (product as any).images ?? []); // TODO(OCR) no-op hook
+    const pendingNow = !!(updatedProduct as any)?.pendingEdit?.changes;
+    const outProduct = pendingNow ? overlayPendingEdit(typeof (updatedProduct as any)?.toObject === 'function' ? (updatedProduct as any).toObject() : updatedProduct) : updatedProduct;
     return {
       success: true,
-      message: 'Product updated successfully' + (editScan ? this.contactNote(editScan) : ''),
-      data: { product: updatedProduct, variant: updatedVariant, warnings: editWarnings, contactFlag: editScan?.flagged ? { matches: editScan.matches, reason: editScan.reason } : null },
+      message: editSentForReview || pendingNow
+        ? 'Your changes were sent to Edudeen for review. The live listing stays as it is until they are approved.'
+        : 'Product updated successfully' + (editScan ? this.contactNote(editScan) : ''),
+      data: { product: outProduct, pendingReview: editSentForReview || pendingNow, variant: updatedVariant, warnings: editWarnings, contactFlag: editScan?.flagged ? { matches: editScan.matches, reason: editScan.reason } : null },
     };
   }
 

@@ -120,8 +120,6 @@ describe('wishlist', () => {
       fileCount: 1,
       fileFormats: [],
       previewAvailable: false,
-      sampleAvailable: false,
-      sampleName: null,
     });
     expect(JSON.stringify(res)).not.toMatch(
       /KEY-123|private\/digital-products/,

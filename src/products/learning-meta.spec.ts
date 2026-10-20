@@ -40,7 +40,8 @@ describe('free sample in public views', () => {
     const out: any = sanitizeDigitalForPublicView({
       digital: { files: [{ url: 'private/a' }], sampleFile: { url: 'private/sample', name: 'sample.pdf' }, preview: { enabled: false } },
     });
-    expect(out.digital).toEqual(expect.objectContaining({ sampleAvailable: true, sampleName: 'sample.pdf', fileCount: 1 }));
+    expect(out.digital).toEqual(expect.objectContaining({ fileCount: 1 }));
+    expect(JSON.stringify(out.digital)).not.toMatch(/sample/i);
     expect(JSON.stringify(out)).not.toContain('private/sample');
   });
 });

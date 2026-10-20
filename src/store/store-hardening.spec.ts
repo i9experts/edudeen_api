@@ -344,8 +344,6 @@ describe('public product view helpers', () => {
       fileCount: 2,
       fileFormats: [],
       previewAvailable: true,
-      sampleAvailable: false,
-      sampleName: null,
     });
   });
 

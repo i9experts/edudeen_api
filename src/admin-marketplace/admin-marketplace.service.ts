@@ -12,6 +12,7 @@ import { StoreService } from '../store/store.service';
 import { MarketplaceListingQueryDto } from './dto/marketplace-listing-query.dto';
 import { LeadsQueryDto } from './dto/leads-query.dto';
 import { mergeTrustBadges } from '../products/trust-badges.util';
+import { buildEditDiff } from '../products/product-edit-review.util';
 
 interface AuditMeta {
   adminId: string;
@@ -85,6 +86,9 @@ export class AdminMarketplaceService {
       const reports = await this.r.reportModel.find({ targetType: 'listing', status: { $ne: 'resolved' } }, { targetId: 1 });
       flaggedProductIds = reports.map((r) => r.targetId).filter((id) => isValidObjectId(id));
       filter._id = { $in: flaggedProductIds };
+    } else if (query.status === 'pending_review') {
+      // New listings AND seller edits to live listings both wait in the review queue.
+      filter.$or = [{ status: 'pending_review' }, { 'pendingEdit.submittedAt': { $type: 'date' } }];
     } else if (query.status) {
       filter.status = query.status;
     }
@@ -141,6 +145,7 @@ export class AdminMarketplaceService {
       flags: (p as any).flags ?? [],
       contactMatches: (p as any).contactMatches ?? [],
       reviewNote: (p as any).reviewNote ?? null,
+      hasPendingEdit: !!(p as any).pendingEdit?.submittedAt,
       createdAt: (p as any).createdAt,
     }));
 
@@ -206,7 +211,10 @@ export class AdminMarketplaceService {
   // resolveSellerPublishStatus) until an admin approves or rejects it here.
 
   async getReviewCount() {
-    const pending = await this.r.productModel.countDocuments({ isDelete: false, status: 'pending_review' });
+    const pending = await this.r.productModel.countDocuments({
+      isDelete: false,
+      $or: [{ status: 'pending_review' }, { 'pendingEdit.submittedAt': { $type: 'date' } }],
+    });
     return { success: true, data: { pending } };
   }
 
@@ -221,6 +229,13 @@ export class AdminMarketplaceService {
       product.categoryId ? this.r.categoryModel.findById(product.categoryId).select('name').lean() : null,
       product.subCategoryId ? this.r.categoryModel.findById(product.subCategoryId).select('name').lean() : null,
     ]);
+    const ch = product.pendingEdit?.changes ?? {};
+    const [editCat, editSub]: any[] = await Promise.all([
+      ch.categoryId ? this.r.categoryModel.findById(ch.categoryId).select('name').lean() : null,
+      ch.subCategoryId ? this.r.categoryModel.findById(ch.subCategoryId).select('name').lean() : null,
+    ]);
+    const editCategory: string | undefined = editCat?.name;
+    const editSubCategory: string | undefined = editSub?.name;
     const files = (product.digital?.files ?? []).map((f: any) => {
       const mime = this.uploadService.resolveMimeType(f.name ?? '', f.mimeType ?? 'application/octet-stream');
       const resourceType = mime.startsWith('video/') ? 'video' : mime.startsWith('image/') ? 'image' : 'raw';
@@ -256,6 +271,8 @@ export class AdminMarketplaceService {
         subCategory: (subCategory as any)?.name ?? null,
         seller: seller ? { id: String((seller as any)._id), name: (seller as any).name, email: (seller as any).email } : null,
         store: store ? { id: String((store as any)._id), name: (store as any).name, slug: (store as any).slug, status: (store as any).status, badges: (store as any).badges ?? [] } : null,
+        // Seller edit waiting for approval: before/after rows (the fields above are still the LIVE version).
+        pendingEdit: product.pendingEdit?.changes ? { submittedAt: product.pendingEdit.submittedAt, diff: buildEditDiff(product, product.pendingEdit.changes, { category: editCategory, subCategory: editSubCategory }) } : null,
         variants: variants.map((v: any) => ({ id: String(v._id), price: v.price, compareAtPrice: v.compareAtPrice ?? null, currency: v.currency ?? 'PKR', options: v.options ?? [], stock: v.stock, isDefault: !!v.isDefault })),
         digital: product.digital ? {
           licenseType: product.digital.licenseType, downloadLimit: product.digital.downloadLimit,
@@ -280,6 +297,19 @@ export class AdminMarketplaceService {
   async approveListing(id: string, note: string | undefined, meta: AuditMeta) {
     const now = new Date();
     const current = await this.findProductOrThrow(id);
+    // A seller's edit to a live listing: publish the held changes, status stays as it is.
+    const pending = (current as any).pendingEdit as { changes?: Record<string, unknown>; submittedAt?: Date } | null;
+    if (pending?.changes && pending.submittedAt) {
+      const edited = await this.r.productModel.findOneAndUpdate(
+        { _id: id, isDelete: false, 'pendingEdit.submittedAt': pending.submittedAt },
+        { $set: { ...pending.changes, pendingEdit: null, lastEditRejection: null, reviewedAt: now, reviewNote: note?.trim() || null, flags: [], contactMatches: [], flagReason: null } },
+        { returnDocument: 'after' },
+      );
+      if (!edited) throw new ConflictException('Someone else just reviewed this listing — refresh the queue');
+      this.log('listing_edit_approved', `Edit of listing "${edited.name}" approved and published`, meta, id);
+      this.notifySeller(edited, NOTIFICATION_TYPES.LISTING_APPROVED, `Changes to "${edited.name}" are live`, 'Your edit was approved and is now visible on Edudeen.');
+      return { success: true, message: 'Changes approved — now live', data: { status: edited.status } };
+    }
     if (current.status !== 'pending_review' && current.status !== 'rejected') {
       throw new ConflictException('This listing is not waiting for review');
     }
@@ -301,6 +331,21 @@ export class AdminMarketplaceService {
 
   async rejectListing(id: string, reason: string, meta: AuditMeta) {
     const now = new Date();
+    // A seller's edit to a live listing: drop it, the listing keeps its previous (approved) content.
+    const held: any = await this.r.productModel.findOne({ _id: id, isDelete: false }).select('pendingEdit').lean();
+    if (held?.pendingEdit?.submittedAt) {
+      const kept = await this.r.productModel.findOneAndUpdate(
+        { _id: id, isDelete: false, 'pendingEdit.submittedAt': held.pendingEdit.submittedAt },
+        { $set: { pendingEdit: null, lastEditRejection: { reason: reason.trim(), at: now }, reviewedAt: now } },
+        { returnDocument: 'after' },
+      );
+      if (!kept) throw new ConflictException('Someone else just reviewed this listing — refresh the queue');
+      this.log('listing_edit_rejected', `Edit of listing "${kept.name}" declined: ${reason.trim()}`, meta, id);
+      this.notifySeller(kept, NOTIFICATION_TYPES.LISTING_REJECTED,
+        `Changes to "${kept.name}" were not approved`,
+        `${reason.trim()} Your listing stays live with its previous content. Edit it again to resubmit.`);
+      return { success: true, message: 'Changes declined — the live listing is unchanged', data: { status: kept.status } };
+    }
     const product = await this.r.productModel.findOneAndUpdate(
       { _id: id, isDelete: false, status: 'pending_review' },
       { $set: { status: 'rejected', reviewedAt: now, reviewNote: reason.trim(), isFeatured: false } },

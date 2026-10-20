@@ -19,7 +19,8 @@ export function sanitizeDigitalForPublicView<T extends { digital?: unknown }>(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { files, preview, buyerDeliveryMessage, sampleFile, ...safeDigital } =
     product.digital as DigitalShape;
-  const sample = sampleFile as { name?: string } | null | undefined;
+  // The free-sample download is no longer offered to buyers (sellers still upload one; it is not exposed here).
+  void sampleFile;
   return {
     ...product,
     digital: {
@@ -28,9 +29,6 @@ export function sanitizeDigitalForPublicView<T extends { digital?: unknown }>(
       // Short upper-case extensions (PDF, DOCX, MP4...) so the page can say what the buyer gets without the manifest.
       fileFormats: fileFormatsOf(files),
       previewAvailable: !!preview?.enabled,
-      // The sample itself is fetched through GET /api/products/:id/sample.
-      sampleAvailable: !!sample,
-      sampleName: sample?.name ?? null,
     },
   } as T;
 }
@@ -49,7 +47,9 @@ function fileFormatsOf(files: unknown): string[] {
 function hideAiReview<T>(product: T): T {
   if (!product || typeof product !== 'object') return product;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { aiReview, ...rest } = product as Record<string, unknown>;
+  // A seller's unapproved edit (private file ids included) and the rejection note are seller/admin-only too.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { aiReview, pendingEdit, lastEditRejection, ...rest } = product as Record<string, unknown>;
   // The trust badge is public; who set it (an admin id) is not.
   const trust = rest.trust as Record<string, unknown> | null | undefined;
   if (trust && typeof trust === 'object' && 'reviewedBy' in trust) {
