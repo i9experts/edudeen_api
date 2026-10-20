@@ -90,6 +90,36 @@ export function buildSearchRegex(term: string): RegExp {
   return new RegExp(variants.map(escapeRx).join('|'), 'i');
 }
 
+/** Query words (trimmed, de-duplicated, max 8). */
+export function searchWords(term: string): string[] {
+  const words = String(term ?? '').split(/\s+/).map((w) => w.trim()).filter(Boolean);
+  return Array.from(new Set(words.map((w) => w.toLowerCase()))).slice(0, 8);
+}
+
+/** Mongo filter: EVERY word must match name, tags or description (any order). A word also matches its synonym variants. */
+export function buildAllWordsFilter(term: string): Record<string, any> {
+  const words = searchWords(term);
+  if (!words.length) return {};
+  const clauses = words.map((w) => {
+    const rx = buildSearchRegex(w);
+    return { $or: [{ name: rx }, { tags: rx }, { description: rx }] };
+  });
+  return clauses.length === 1 ? clauses[0] : { $and: clauses };
+}
+
+/** Relevance tier (lower = better): 0 exact name, 1 name prefix, 2 name has all words, 3 name/tags have some, 4 description only. */
+export function relevanceTier(term: string, name: string, tags: string[] = []): number {
+  const q = normalizeSearchText(term);
+  const n = normalizeSearchText(name);
+  if (n === q) return 0;
+  if (n.startsWith(q)) return 1;
+  const words = searchWords(q);
+  if (words.length && words.every((w) => n.includes(w))) return 2;
+  const tagText = normalizeSearchText((tags ?? []).join(' '));
+  if (words.some((w) => n.includes(w) || tagText.includes(w))) return 3;
+  return 4;
+}
+
 // ── typo tolerance ─────────────────────────────────────────────────────────
 
 /** Levenshtein distance with early exit once it must exceed `max` (returns max + 1). */

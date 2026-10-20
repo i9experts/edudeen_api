@@ -48,7 +48,7 @@ import { premiumPercentFor } from 'src/premium/premium.util';
 
 import { clampInt } from 'src/common/query-safety.util';
 import { resolveStoreNames } from './store-name.util';
-import { FuzzyIndex, buildSearchRegex } from 'src/search/search-terms.util';
+import { FuzzyIndex, buildAllWordsFilter, relevanceTier } from 'src/search/search-terms.util';
 const EDUCATION_LEVEL_VALUES: string[] = Object.values(EducationLevel);
 
 /** Prices arrive on `body: any` endpoints, so they are checked here rather
@@ -647,8 +647,8 @@ export class ProductsService {
 
     const term = typeof search === 'string' ? search.trim().slice(0, 100) : '';
     if (term) {
-      const rx = buildSearchRegex(term); // term + Roman-Urdu/Urdu synonym variants
-      query.$or = [{ name: rx }, { tags: rx }, { description: rx }];
+      // Every word must match (any order) in name/tags/description; each word also matches its Roman-Urdu/Urdu synonyms.
+      query.$and = [...(query.$and ?? []), buildAllWordsFilter(term)];
     }
 
     // 0️⃣ Optional productType/educationLevel filters — used by verticals like the
@@ -839,13 +839,23 @@ export class ProductsService {
               // Default order: Edudeen-featured listings first, then newest.
               : { isFeatured: -1, createdAt: -1, _id: -1 };
 
-      total = await productModel.countDocuments(query);
-      products = await productModel
-        .find(query)
-        .sort(sortStage as any)
-        .skip(skip)
-        .limit(limit)
-        .lean();
+      if (term && !sortBy) {
+        // Search with no explicit sort = relevance (exact/prefix name, then name has all words, then the rest).
+        const ranked = await this.rankByRelevance(query, term);
+        total = ranked.length;
+        const pageIds = ranked.slice(skip, skip + limit);
+        const docs = await productModel.find({ _id: { $in: pageIds } }).lean();
+        const byId = new Map(docs.map((d: any) => [String(d._id), d]));
+        products = pageIds.map((id) => byId.get(id)).filter(Boolean);
+      } else {
+        total = await productModel.countDocuments(query);
+        products = await productModel
+          .find(query)
+          .sort(sortStage as any)
+          .skip(skip)
+          .limit(limit)
+          .lean();
+      }
     }
 
     const productIds = products.map((p) => p._id.toString());
@@ -998,7 +1008,17 @@ export class ProductsService {
     ), customerId);
   }
 
-  /** Keyword search over active products (name/description, case-insensitive).
+  /** Matching product ids ordered by relevance tier, then featured, then newest (capped at 500 matches). */
+  private async rankByRelevance(query: any, term: string): Promise<string[]> {
+    const rows: any[] = await this.databaseService.repositories.productModel
+      .find(query).select('name tags isFeatured createdAt').sort({ createdAt: -1, _id: -1 }).limit(500).lean();
+    return rows
+      .map((r, i) => ({ id: String(r._id), tier: relevanceTier(term, r.name, r.tags), feat: r.isFeatured ? 0 : 1, i }))
+      .sort((a, b) => a.tier - b.tier || a.feat - b.feat || a.i - b.i)
+      .map((r) => r.id);
+  }
+
+  /** Keyword search over active products (name/tags/description, all words, ranked by relevance).
    *  Same response shape as `getProductsByCategoryId` so the app parses both
    *  with one model. */
   async searchProducts(
@@ -1019,26 +1039,22 @@ export class ProductsService {
       };
     }
 
-    // User input goes into a regex — escape it so "c++" or "50% off" can't
-    // break the query or turn into a pathological pattern.
-    const regex = buildSearchRegex(term); // escapes input + adds Roman-Urdu/Urdu synonym variants
-
+    // Words are regex-escaped inside buildAllWordsFilter; ALL words must match (any order).
     const query: any = {
       status: 'active',
       isDelete: false, isTest: { $ne: true },
-      $or: [{ name: regex }, { description: regex }],
+      $and: [buildAllWordsFilter(term)],
     };
 
     await this.restrictToActiveStores(query);
 
     const skip = (page - 1) * limit;
-    const total = await productModel.countDocuments(query);
-    const products = await productModel
-      .find(query)
-      .sort({ createdAt: -1, _id: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
+    const ranked = await this.rankByRelevance(query, term);
+    const total = ranked.length;
+    const pageIds = ranked.slice(skip, skip + limit);
+    const docs = await productModel.find({ _id: { $in: pageIds } }).lean();
+    const byId = new Map(docs.map((d: any) => [String(d._id), d]));
+    const products = pageIds.map((id) => byId.get(id)).filter(Boolean) as any[];
 
     const productsWithVariants = await this.attachVariantsAndPricing(
       products,
