@@ -22,6 +22,7 @@ import {
   notCancelledCond,
   periodTotals as periodTotalsUtil,
   repeatBuyerPercent as repeatBuyerPercentUtil,
+  repeatBuyerStats as repeatBuyerStatsUtil,
   returningBuyerSet as returningBuyerSetUtil,
   sellerOrderMatchStage,
 } from './utils/order-aggregation.util';
@@ -134,6 +135,10 @@ export class AnalyticsService {
     return periodTotalsUtil(this.r.orderModel, from, to, scope);
   }
 
+  private async repeatBuyerStats(scope: Record<string, any>, from: Date, to: Date) {
+    return repeatBuyerStatsUtil(this.r.orderModel, from, to, scope);
+  }
+
   private async repeatBuyerPercent(scope: Record<string, any>, from: Date, to: Date): Promise<number> {
     return repeatBuyerPercentUtil(this.r.orderModel, from, to, scope);
   }
@@ -197,17 +202,18 @@ export class AnalyticsService {
     const compare = query.compareToPreviousPeriod === true || query.compareToPreviousPeriod === 'true';
 
     return this.cached(this.key('overview', this.scopeLabel(sellerId, storeId), { from, to, compare }), async () => {
-      const [current, previous, repeatBuyerPct, prevRepeatBuyerPct, currency] = await Promise.all([
+      const [current, previous, repeatStats, prevRepeatBuyerPct, currency] = await Promise.all([
         this.periodTotals(scope, from, to),
         this.periodTotals(scope, previousFrom, previousTo),
-        this.repeatBuyerPercent(scope, from, to),
+        this.repeatBuyerStats(scope, from, to),
         this.repeatBuyerPercent(scope, previousFrom, previousTo),
         this.resolveScopeCurrency(storeIds),
       ]);
 
-      const returningSet = await this.returningBuyerSet(scope, current.buyerIds, from);
-      const newCustomersCount = current.uniqueBuyerCount - returningSet.size;
-      const returningCustomersCount = returningSet.size;
+      // Same query as repeatBuyerPercent: returning = buyers with >= 2 orders, new = the rest.
+      const repeatBuyerPct = repeatStats.percent;
+      const returningCustomersCount = repeatStats.repeat;
+      const newCustomersCount = Math.max(0, repeatStats.total - repeatStats.repeat);
 
       const refundRatePercent = current.grossRevenue > 0 ? this.round((current.refundAmount / current.grossRevenue) * 100) : 0;
 

@@ -1451,7 +1451,8 @@ export class StoreService {
     const unwindFor = (ids: string[]) => [
       { $match: { userId: { $in: ids }, isDelete: false, 'sellerOrders.storeId': storeId } },
       { $unwind: '$sellerOrders' },
-      { $match: { 'sellerOrders.storeId': storeId } },
+      // Order value convention (same as Orders + Analytics): every non-cancelled order.
+      { $match: { 'sellerOrders.storeId': storeId, 'sellerOrders.status': { $ne: 'cancelled' } } },
     ];
     const unwindStages = unwindFor(customerIds);
 

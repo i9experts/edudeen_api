@@ -452,7 +452,11 @@ export class OrdersService {
       .find({ 'sellerOrders.storeId': { $in: storeIds }, isDelete: false })
       .lean();
 
+    // Definitions (shared with Customers/Analytics): ORDER VALUE = every non-cancelled order;
+    // PAID REVENUE = the part of it that is actually paid (and not refunded).
     let totalRevenue = 0;
+    let paidRevenue = 0;
+    let countedOrders = 0;
     let pendingCount = 0;
 
     for (const order of allOrders) {
@@ -460,15 +464,17 @@ export class OrdersService {
         storeIds.includes(s.storeId),
       );
       if (!so) continue;
-      if (['completed', 'delivered'].includes(so.status)) {
+      if (so.status !== 'cancelled') {
         totalRevenue += so.subtotal || 0;
+        countedOrders++;
+        if (order.isPaid && so.status !== 'refunded') paidRevenue += so.subtotal || 0;
       }
       if (['pending', 'processing'].includes(so.status)) {
         pendingCount++;
       }
     }
 
-    const avgOrder = allOrders.length > 0 ? totalRevenue / allOrders.length : 0;
+    const avgOrder = countedOrders > 0 ? totalRevenue / countedOrders : 0;
 
     // order rows format
     const rows = await Promise.all(
@@ -517,6 +523,8 @@ export class OrdersService {
         stats: {
           totalOrders,
           revenue: totalRevenue,
+          orderValue: totalRevenue,
+          paidRevenue,
           pending: pendingCount,
           avgOrder: parseFloat(avgOrder.toFixed(2)),
         },
@@ -558,6 +566,14 @@ export class OrdersService {
       .select('name email phone')
       .lean();
 
+    // Show the variant's CURRENT SKU (what the seller sees on the product); the checkout snapshot is the fallback.
+    const variantIds = (so.items ?? []).map((it: any) => it.variantId).filter((id: any) => id && isValidObjectId(id));
+    const liveSkus = new Map<string, string>();
+    if (variantIds.length) {
+      const vs: any[] = await this.databaseService.repositories.productVariantModel.find({ _id: { $in: variantIds } }).select('sku').lean();
+      for (const v of vs) if (v.sku) liveSkus.set(v._id.toString(), v.sku);
+    }
+
     return {
       success: true,
       data: {
@@ -588,7 +604,7 @@ export class OrdersService {
           variantId: it.variantId ?? null,
           name: it.name,
           image: it.image ?? null,
-          sku: it.sku ?? null,
+          sku: (it.variantId && liveSkus.get(String(it.variantId))) || it.sku || null,
           type: it.type,
           productType: it.productType ?? null,
           options: it.options ?? [],

@@ -478,7 +478,8 @@ export class LoyaltyService {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     const program = await loyaltyProgramModel.findOne({ storeId });
-    const programMembers = await loyaltyMemberModel.countDocuments({ storeId });
+    // Distinct people (a duplicate member row for the same buyer must not inflate the count).
+    const programMembers = (await loyaltyMemberModel.distinct('userId', { storeId })).length;
 
     const [pointsIssued30d, pointsRedeemedTotal, activityByType] = await Promise.all([
       loyaltyTransactionModel.aggregate([

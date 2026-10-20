@@ -8,6 +8,8 @@ export interface CodSignals {
   isCod: boolean;
   accountAgeDays: number | null;
   priorOrders: number;
+  /** Past orders actually delivered/completed or paid (falls back to priorOrders when omitted). */
+  priorSuccessful?: number;
   priorCancelled: number;
   priorReturned: number;
   orderTotal: number;
@@ -35,7 +37,8 @@ export function computeCodRisk(s: CodSignals): CodRisk {
     if (badRate >= 0.5) add('bad_history', 30, `${s.priorCancelled} cancelled and ${s.priorReturned} returned out of ${s.priorOrders} past orders.`);
     else if (badRate >= 0.25) add('some_bad_history', 15, 'A noticeable share of past orders were cancelled or returned.');
   }
-  if (s.priorOrders >= 3 && s.priorCancelled + s.priorReturned === 0) add('good_history', -12, 'Buyer has several clean past orders.');
+  const successful = s.priorSuccessful ?? s.priorOrders;
+  if (successful >= 3 && s.priorCancelled + s.priorReturned === 0) add('good_history', -12, `Buyer has ${successful} delivered or paid past orders and no cancellations or returns.`);
   if (s.avgOrderTotal && s.orderTotal > s.avgOrderTotal * 3 && s.orderTotal > 3000) add('unusually_large', 15, 'Order is much larger than this buyer\'s usual order.');
   if (s.orderTotal >= 15000) add('high_value', 12, 'High-value cash order.');
   if (!s.hasPhone && s.hasPhysicalItems) add('no_phone', 15, 'No phone number for the courier.');
@@ -57,7 +60,7 @@ export class CodRiskService {
     const order: any = await r.orderModel.findOne({ _id: orderId, 'sellerOrders.storeId': storeId }).lean();
     if (!order) throw new NotFoundException('Order not found');
     const user: any = await r.userModel.findById(order.userId).select('createdAt').lean().catch(() => null);
-    const past: any[] = await r.orderModel.find({ userId: order.userId, _id: { $ne: order._id } }).select('totalAmount orderStatus hasReturn createdAt').limit(100).lean();
+    const past: any[] = await r.orderModel.find({ userId: order.userId, _id: { $ne: order._id } }).select('totalAmount orderStatus paymentStatus isPaid hasReturn createdAt').limit(100).lean();
     const items = (order.sellerOrders ?? []).flatMap((so: any) => so.items ?? []);
     const addr = order.shippingAddress;
     const dayAgo = Date.now() - 86_400_000;

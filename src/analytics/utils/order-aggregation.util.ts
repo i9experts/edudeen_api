@@ -116,24 +116,32 @@ export async function periodTotals(orderModel: Model<any>, from: Date, to: Date,
     unconvertedCurrencies,
   };
 }
-export async function repeatBuyerPercent(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>): Promise<number> {
-  const rows = await orderModel.aggregate([
+/**
+ * ONE definition of "repeat/returning customer": among the buyers who ordered (non-cancelled) in
+ * [from, to], those with >= 2 non-cancelled orders in scope up to `to`. Overview's "Repeat buyers %"
+ * and "Returning customers" both come from here so they can never disagree.
+ */
+export async function repeatBuyerStats(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>): Promise<{ total: number; repeat: number; percent: number }> {
+  const periodRows = await orderModel.aggregate([
     ...sellerOrderMatchStage(from, to, scopeMatch),
     { $match: { 'sellerOrders.status': { $ne: 'cancelled' } } },
-    { $group: { _id: '$userId', orders: { $sum: 1 } } },
-    {
-      $group: {
-        _id: null,
-        totalCustomers: { $sum: 1 },
-        repeatCustomers: { $sum: { $cond: [{ $gte: ['$orders', 2] }, 1, 0] } },
-      },
-    },
+    { $group: { _id: '$userId' } },
   ]);
-  const row = rows[0];
-  if (!row || row.totalCustomers === 0) return 0;
-  return round((row.repeatCustomers / row.totalCustomers) * 100);
+  const buyerIds = periodRows.map((r: any) => r._id);
+  if (buyerIds.length === 0) return { total: 0, repeat: 0, percent: 0 };
+  const lifetime = await orderModel.aggregate([
+    { $match: { isDelete: false, userId: { $in: buyerIds }, createdAt: { $lte: to } } },
+    { $unwind: '$sellerOrders' },
+    { $match: { 'sellerOrders.status': { $ne: 'cancelled' }, ...scopeMatch } },
+    { $group: { _id: '$userId', orders: { $sum: 1 } } },
+  ]);
+  const repeat = lifetime.filter((r: any) => r.orders >= 2).length;
+  return { total: buyerIds.length, repeat, percent: round((repeat / buyerIds.length) * 100) };
 }
 
+export async function repeatBuyerPercent(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>): Promise<number> {
+  return (await repeatBuyerStats(orderModel, from, to, scopeMatch)).percent;
+}
 /** Buyers among `buyerIds` who already had a non-cancelled order (within `scopeMatch`'s scope) before `from`. */
 export async function returningBuyerSet(orderModel: Model<any>, buyerIds: string[], from: Date, scopeMatch?: Record<string, any>): Promise<Set<string>> {
   if (buyerIds.length === 0) return new Set();

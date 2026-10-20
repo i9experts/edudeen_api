@@ -325,7 +325,7 @@ export class FinanceService {
       this.scheduleModel.find({ storeId }).lean(),
       this.methodModel.find({ storeId }).lean(),
       this.payoutModel.find({ storeId, status: { $in: ['pending', 'processing'] } }).sort({ createdAt: -1 }).lean(),
-      this.commissionRulesService.resolveRate(storeId),
+      this.displayFeeRate(storeId),
       this.adminConfigService.getPayoutFrequency(),
     ]);
 
@@ -393,11 +393,20 @@ export class FinanceService {
       };
     }));
 
+    // One source of truth: the admin's Platform fees when set, else the legacy commission rule.
+    const adminFees: any = typeof this.adminConfigService?.getPlatformFees === 'function'
+      ? await this.adminConfigService.getPlatformFees().catch(() => null) : null;
+    const feeLabel = (r: any) => (r?.mode === 'percentage' ? `${Number(Number(r.value).toFixed(2))}%` : r?.mode === 'fixed' ? `$${Number(Number(r.value).toFixed(2))} per item` : null);
+    const dLabel = feeLabel(adminFees?.digital);
+    const pLabel = feeLabel(adminFees?.physical);
+    const platformFeeText = dLabel && pLabel
+      ? (dLabel === pLabel ? `${dLabel} per sale` : `${dLabel} digital, ${pLabel} physical`)
+      : dLabel ? `${dLabel} digital` : pLabel ? `${pLabel} physical` : null;
     const feeBreakdown = {
       marketplaceListingFee: 'Free',
-      transactionFee: `${(commissionRate.rate * 100).toFixed(2)}% per sale`,
-      transactionFeeSource: commissionRate.source,
-      paymentProcessing: `${PAYMENT_PROCESSING_RATE * 100}% + $${PAYMENT_PROCESSING_FIXED} (card payments only — not charged for COD or bank transfer)`,
+      transactionFee: platformFeeText ?? `${Number((commissionRate.rate * 100).toFixed(2))}% per sale`,
+      transactionFeeSource: platformFeeText ? 'platform_fees' : commissionRate.source,
+      paymentProcessing: `${Number((PAYMENT_PROCESSING_RATE * 100).toFixed(2))}% + $${PAYMENT_PROCESSING_FIXED} (card payments only — not charged for COD or bank transfer)`,
       digitalDelivery: 'Included',
       aiCredits: '750 / month',
     };
@@ -1123,7 +1132,7 @@ export class FinanceService {
       this.txModel.find(match).sort({ createdAt: -1 }).limit(200).lean(),
       this.balanceModel.findOne({ storeId, currency }).lean(),
       this.scheduleModel.findOne({ storeId, currency }).lean(),
-      this.commissionRulesService.resolveRate(storeId),
+      this.displayFeeRate(storeId),
       this.settlementPayoutQuery([storeId], currency, month, to, nextTo),
       this.adminConfigService.getPayoutFrequency(),
     ]);
@@ -1830,6 +1839,18 @@ export class FinanceService {
     if (perType) return perType;
     const { rate, source } = await this.commissionRulesService.resolveRate(storeId);
     return { rate, source, platformFee: this.round(saleAmount * rate) };
+  }
+
+  /** Single fee rate (0-1) shown in seller screens: the admin's Platform fees when digital and physical are
+   *  the same percentage, otherwise the legacy commission rule. */
+  private async displayFeeRate(storeId: any): Promise<{ rate: number; source: string }> {
+    const fees: any = typeof this.adminConfigService?.getPlatformFees === 'function'
+      ? await this.adminConfigService.getPlatformFees().catch(() => null) : null;
+    const d = fees?.digital; const p = fees?.physical;
+    if (d?.mode === 'percentage' && p?.mode === 'percentage' && Number(d.value) === Number(p.value)) {
+      return { rate: Number(d.value) / 100, source: 'platform_fees' };
+    }
+    return this.commissionRulesService.resolveRate(storeId);
   }
 
   /** Admin-configured platform fee per product type (`PlatformConfig.platformFees`), or null when it is not

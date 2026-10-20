@@ -41,7 +41,8 @@ async function bootstrap() {
   // told how many proxy hops to trust. That makes the per-IP rate limiter share one bucket across every user and
   // records the proxy IP in audit logs. Opt-in via TRUST_PROXY (a hop count such as `1`, or `true`/`false`) so a
   // deployment sets it deliberately: trusting too many hops lets a client spoof X-Forwarded-For.
-  const trustProxy = process.env.TRUST_PROXY;
+  // Production default = 1 hop (one platform proxy), so req.ip is the real client IP instead of the proxy's 100.64.x.x.
+  const trustProxy = process.env.TRUST_PROXY ?? (isProduction ? '1' : undefined);
   if (trustProxy !== undefined && trustProxy !== '') {
     const value: boolean | number = trustProxy === 'true' ? true : trustProxy === 'false' ? false : Number(trustProxy);
     if (typeof value === 'number' && (!Number.isInteger(value) || value < 0)) {

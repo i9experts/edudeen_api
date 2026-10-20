@@ -53,7 +53,12 @@ export class GiftCardsService {
 
   private async getOrCreateSettings(storeId: string) {
     let settings = await this.r.giftCardSettingsModel.findOne({ storeId });
-    if (!settings) settings = await this.r.giftCardSettingsModel.create({ storeId });
+    if (!settings) {
+      // PKR stores get rupee-sized presets; USD keeps the schema default.
+      const store: any = await this.r.storeModel.findById(storeId).select('baseCurrency').lean();
+      const pkr = (store?.baseCurrency ?? 'USD') === 'PKR';
+      settings = await this.r.giftCardSettingsModel.create(pkr ? { storeId, denominations: [500, 1000, 2500, 5000] } : { storeId });
+    }
     return settings;
   }
 

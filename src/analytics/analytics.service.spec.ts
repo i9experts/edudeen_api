@@ -121,13 +121,15 @@ describe('AnalyticsService', () => {
       orderModel.aggregate = buildAggregateMock([
         [{ orderCount: 5, cancelledCount: 0, refundedCount: 0, grossRevenue: 500, refundAmount: 0, buyerIds: ['a', 'b', 'c', 'd'] }],
         [{ orderCount: 0, cancelledCount: 0, refundedCount: 0, grossRevenue: 0, refundAmount: 0, buyerIds: [] }],
-        [{ totalCustomers: 4, repeatCustomers: 1 }], // 1 of 4 buyers ordered twice+
-        [],
-        [],
+        [{ _id: 'a' }, { _id: 'b' }, { _id: 'c' }, { _id: 'd' }], // buyers in the period
+        [], // previous period buyers
+        [{ _id: 'a', orders: 2 }, { _id: 'b', orders: 1 }, { _id: 'c', orders: 1 }, { _id: 'd', orders: 1 }], // lifetime orders
       ]);
 
       const result = await service.getOverview(SELLER_ID, STORE_ID, { range: '30d' });
-      expect(result.data.repeatBuyerPercent).toBe(25);
+      expect(result.data.repeatBuyerPercent).toBe(25); // 1 of 4 buyers has 2+ orders
+      expect(result.data.returningCustomersCount).toBe(1); // same query -> same number
+      expect(result.data.newCustomersCount).toBe(3);
     });
   });
 

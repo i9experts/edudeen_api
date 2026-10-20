@@ -136,7 +136,7 @@ export class ActivityLogService {
       activityLogModel.countDocuments({ storeId, createdAt: { $gte: ninetyDaysAgo } }),
       activityLogModel.countDocuments({ storeId, createdAt: { $gte: startOfToday } }),
       activityLogModel.distinct('actorId', { storeId, createdAt: { $gte: startOfToday }, actorId: { $ne: null } }),
-      activityLogModel.countDocuments({ storeId, isSecurityAlert: true, createdAt: { $gte: ninetyDaysAgo } }),
+      activityLogModel.countDocuments({ storeId, isSecurityAlert: true, action: { $ne: 'login_success' }, createdAt: { $gte: ninetyDaysAgo } }),
       activityLogModel
         .findOne({ storeId, category: 'security', action: 'login_success' })
         .sort({ createdAt: -1 })
@@ -172,7 +172,10 @@ export class ActivityLogService {
       const v = plainString(query[key]);
       if (v) filter[key] = v;
     }
-    if (query.isSecurityAlert !== undefined) filter.isSecurityAlert = query.isSecurityAlert === 'true' || query.isSecurityAlert === true;
+    if (query.isSecurityAlert !== undefined) {
+      filter.isSecurityAlert = query.isSecurityAlert === 'true' || query.isSecurityAlert === true;
+      if (filter.isSecurityAlert) filter.action = { $ne: 'login_success' };
+    }
     const term = searchTerm(query.search);
     if (term) {
       const rx = { $regex: escapeRegex(term), $options: 'i' };

@@ -81,10 +81,8 @@ export class InventoryService {
       variantMap[v.productId].push(v);
     }
 
-    // stats counters
-    let inStock = 0;
-    let lowStock = 0;
-    let outOfStock = 0;
+    // Store-wide, unfiltered stats (one query + one threshold; see computeStockStats)
+    const stats = await this.computeStockStats(storeId, sellerId);
 
     const productList = products.map((product: any) => {
       const variants = variantMap[product._id.toString()] || [];
@@ -102,19 +100,9 @@ export class InventoryService {
         );
         stockDisplay = totalStock;
 
-        if (totalStock === 0) {
-          stockStatus = 'out_of_stock';
-          outOfStock++;
-        } else if (totalStock <= LOW_STOCK_THRESHOLD) {
-          stockStatus = 'low_stock';
-          lowStock++;
-          inStock++;
-        } else {
-          stockStatus = 'active';
-          inStock++;
-        }
-      } else {
-        inStock++; // digital, or has an unlimited-stock variant — always in stock
+        if (totalStock === 0) stockStatus = 'out_of_stock';
+        else if (totalStock <= LOW_STOCK_THRESHOLD) stockStatus = 'low_stock';
+        else stockStatus = 'active';
       }
 
       // default variant ki price, fallback to min price
@@ -173,12 +161,7 @@ export class InventoryService {
     return {
       success: true,
       data: {
-        stats: {
-          totalProducts,
-          inStock,
-          lowStock,
-          outOfStock,
-        },
+        stats,
         pagination: {
           page,
           limit,
@@ -209,15 +192,34 @@ export class InventoryService {
     });
     if (!store) throw new ForbiddenException('Store not found or unauthorized');
 
+    const { items } = await this.scanStock(storeId, sellerId);
+
+    return {
+      success: true,
+      data: {
+        count: items.length,
+        threshold: LOW_STOCK_THRESHOLD,
+        items,
+      },
+    };
+  }
+
+  // Single source for the Inventory/Products stat cards AND the low-stock
+  // alert list: every non-deleted product of the store (all statuses). Each
+  // product lands in exactly one bucket, so
+  // inStock + lowStock + outOfStock + unlimited === totalProducts.
+  // Digital products and products with an unlimited-stock variant are
+  // "unlimited" (never low/out of stock).
+  private async computeStockStats(storeId: string, sellerId: string) {
+    const { stats } = await this.scanStock(storeId, sellerId);
+    return stats;
+  }
+
+  private async scanStock(storeId: string, sellerId: string) {
+    const { productModel, productVariantModel } = this.databaseService.repositories;
     const products = await productModel
-      .find({
-        storeId,
-        sellerId,
-        isDelete: false,
-        status: 'active',
-        type: { $ne: 'digital' },
-      })
-      .select('name')
+      .find({ storeId, sellerId, isDelete: false })
+      .select('name type')
       .lean();
 
     const productIds = products.map((p: any) => p._id.toString());
@@ -235,29 +237,24 @@ export class InventoryService {
         unlimitedProducts.add(v.productId);
         continue;
       }
-      stockByProduct.set(
-        v.productId,
-        (stockByProduct.get(v.productId) ?? 0) + (v.stock || 0),
-      );
+      stockByProduct.set(v.productId, (stockByProduct.get(v.productId) ?? 0) + (v.stock || 0));
     }
 
-    const items = products
-      .filter((p: any) => !unlimitedProducts.has(p._id.toString()))
-      .map((p: any) => ({
-        productId: p._id,
-        name: p.name,
-        stock: stockByProduct.get(p._id.toString()) ?? 0,
-      }))
-      .filter((p) => p.stock > 0 && p.stock <= LOW_STOCK_THRESHOLD)
-      .sort((a, b) => a.stock - b.stock);
-
-    return {
-      success: true,
-      data: {
-        count: items.length,
-        threshold: LOW_STOCK_THRESHOLD,
-        items,
-      },
-    };
-  }
-}
+    const stats = { totalProducts: products.length, inStock: 0, lowStock: 0, outOfStock: 0, unlimited: 0 };
+    const items: { productId: any; name: string; stock: number }[] = [];
+    for (const p of products as any[]) {
+      const id = p._id.toString();
+      if (p.type === 'digital' || unlimitedProducts.has(id)) {
+        stats.unlimited++;
+        continue;
+      }
+      const stock = stockByProduct.get(id) ?? 0;
+      if (stock <= 0) stats.outOfStock++;
+      else if (stock <= LOW_STOCK_THRESHOLD) {
+        stats.lowStock++;
+        items.push({ productId: p._id, name: p.name, stock });
+      } else stats.inStock++;
+    }
+    items.sort((x, y) => x.stock - y.stock);
+    return { stats, items };
+  }}
