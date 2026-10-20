@@ -333,7 +333,7 @@ export class ManualPaymentsService {
         type: NOTIFICATION_TYPES.MANUAL_PAYMENT_APPROVED,
         title: 'Payment confirmed',
         body: 'Your bank transfer has been verified — your order is now confirmed.',
-        data: { proofId, orderIds: proof.orderIds },
+        data: { proofId, orderIds: proof.orderIds, link: proof.orderIds?.length === 1 ? `/account/orders/${proof.orderIds[0]}` : '/account/orders' },
       })
       .catch(() => {});
 
@@ -371,7 +371,7 @@ export class ManualPaymentsService {
         type: NOTIFICATION_TYPES.MANUAL_PAYMENT_REJECTED,
         title: 'Payment could not be verified',
         body: `We couldn't verify your transfer: ${reason}. You can re-upload your proof or cancel the order.`,
-        data: { proofId, orderIds: proof.orderIds, reason },
+        data: { proofId, orderIds: proof.orderIds, reason, link: proof.orderIds?.length === 1 ? `/account/orders/${proof.orderIds[0]}` : '/account/orders' },
       })
       .catch(() => {});
 

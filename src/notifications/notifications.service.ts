@@ -210,6 +210,16 @@ export class NotificationsService {
   async updatePreferences(userId: string, role: string, dto: Record<string, any>) {
     const { pushEnabled, emailEnabled, whatsappEnabled, smsEnabled, retentionChannelsEnabled, language, ...prefFlags } = dto;
     const update: Record<string, any> = {};
+    // WhatsApp/SMS reminders need a WhatsApp/SMS channel: judge the state AFTER this request's changes are applied.
+    if (retentionChannelsEnabled !== undefined || whatsappEnabled !== undefined || smsEnabled !== undefined) {
+      const current: any = await this.databaseService.repositories.notificationPreferenceModel.findOne({ userId }).select('whatsappEnabled smsEnabled').lean();
+      const channelOn = (whatsappEnabled ?? current?.whatsappEnabled ?? false) === true || (smsEnabled ?? current?.smsEnabled ?? false) === true;
+      if (retentionChannelsEnabled === true && !channelOn) {
+        throw new BadRequestException('Turn on WhatsApp or SMS first to get reminders and price alerts there.');
+      }
+      // The last channel was switched off: reminders cannot stay on.
+      if (!channelOn && retentionChannelsEnabled === undefined) update.retentionChannelsEnabled = false;
+    }
     if (retentionChannelsEnabled !== undefined) update.retentionChannelsEnabled = retentionChannelsEnabled;
     if (pushEnabled !== undefined) update.pushEnabled = pushEnabled;
     if (emailEnabled !== undefined) update.emailEnabled = emailEnabled;

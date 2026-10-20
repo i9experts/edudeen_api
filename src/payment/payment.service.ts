@@ -2115,7 +2115,7 @@ export class PaymentService {
           type: NOTIFICATION_TYPES.ORDER_PLACED,
           title: 'Order confirmed',
           body: `Your order #${createdOrder.orderNumber} has been placed.`,
-          data: { orderId: createdOrder._id.toString() },
+          data: { orderId: createdOrder._id.toString(), link: `/account/orders/${createdOrder._id.toString()}` },
           email: orderPlacedEmail(createdOrder),
           channelEvent: {
             event: createdOrder.paymentType === 'cash_on_delivery' ? 'cod_confirmation' : 'order_placed',
