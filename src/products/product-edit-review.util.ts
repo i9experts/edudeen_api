@@ -12,7 +12,8 @@ const same = (a: unknown, b: unknown) => {
 
 /** True for an admin-approved listing that is live right now (its edits wait for approval). */
 export function holdsEditsForReview(product: { status?: string | null; approvedAt?: Date | null }): boolean {
-  return listingApprovalRequired() && (!!product.approvedAt || LIVE.includes(String(product.status))) && LIVE.includes(String(product.status));
+  // Owner decision (20 Oct): edits to a live listing go live directly, no admin review.
+  return false;
 }
 
 /**
@@ -25,7 +26,7 @@ export function splitEditForReview(
 ): { immediate: Record<string, unknown>; held: Record<string, unknown>; hold: boolean } {
   const nextStatus = (update.status as string | undefined) ?? product.status ?? '';
   const approved = !!product.approvedAt || LIVE.includes(String(product.status));
-  const hold = listingApprovalRequired() && approved && LIVE.includes(nextStatus);
+  const hold = false && listingApprovalRequired() && approved && LIVE.includes(nextStatus); // disabled: edits are not reviewed
   if (!hold) return { immediate: update, held: {}, hold: false };
   const immediate: Record<string, unknown> = {};
   const held: Record<string, unknown> = {};

@@ -3,11 +3,12 @@ import { splitEditForReview, overlayPendingEdit, buildEditDiff } from './product
 describe('product edit review', () => {
   const live = { status: 'active', approvedAt: new Date(), name: 'Old title here', description: 'Same description text', images: ['a.jpg'] };
 
-  it('holds changed content of a live listing, applies offers/status immediately, ignores unchanged fields', () => {
-    const r = splitEditForReview(live as any, { name: 'New title here', description: live.description, images: ['a.jpg'], status: 'active', campaignIds: ['c1'] });
-    expect(r.hold).toBe(true);
-    expect(r.held).toEqual({ name: 'New title here' });
-    expect(r.immediate).toEqual({ status: 'active', campaignIds: ['c1'] });
+  it('no longer holds edits of a live listing: everything is applied immediately', () => {
+    const update = { name: 'New title here', description: live.description, images: ['a.jpg'], status: 'active', campaignIds: ['c1'] };
+    const r = splitEditForReview(live as any, update);
+    expect(r.hold).toBe(false);
+    expect(r.held).toEqual({});
+    expect(r.immediate).toEqual(update);
   });
 
   it('does not hold edits of a draft or an unapproved listing', () => {

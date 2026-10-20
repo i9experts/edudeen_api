@@ -388,12 +388,14 @@ export class ProductsService {
           sourceFileIndex: null,
           previewSourcePublicId: null,
           previewSourceResourceType: null,
+          previewSourceUrl: null,
         },
       };
     }
 
     const sourceFileIndex = digital.preview.sourceFileIndex ?? 0;
-    const file = digital.files?.[sourceFileIndex];
+    // The seller's free sample is what buyers preview; without one, the chosen paid file is used.
+    const file = digital.sampleFile?.url ? digital.sampleFile : digital.files?.[sourceFileIndex];
     if (!file)
       throw new BadRequestException(
         'preview.sourceFileIndex does not match any uploaded file',
@@ -404,6 +406,7 @@ export class ProductsService {
     const unchanged =
       existingPreview?.enabled &&
       existingPreview?.sourceFileIndex === sourceFileIndex &&
+      existingPreview?.previewSourceUrl === file.url &&
       existingPreview?.previewSourcePublicId;
 
     let previewSourcePublicId: string | null = unchanged
@@ -450,6 +453,7 @@ export class ProductsService {
         sourceFileIndex,
         previewSourcePublicId,
         previewSourceResourceType,
+        previewSourceUrl: file.url,
       },
     };
   }
@@ -521,7 +525,10 @@ export class ProductsService {
     }
 
     const sourceFileIndex = product.digital.preview.sourceFileIndex ?? 0;
-    const file = product.digital.files?.[sourceFileIndex];
+    const builtFrom = product.digital.preview.previewSourceUrl as string | null | undefined;
+    const file = builtFrom
+      ? [product.digital.sampleFile, ...(product.digital.files ?? [])].find((f: any) => f?.url === builtFrom)
+      : product.digital.files?.[sourceFileIndex];
     if (!file) throw new BadRequestException('Preview source file not found');
 
     const mimeType =
@@ -2286,6 +2293,7 @@ export class ProductsService {
         }
       }
     }
+    if (!split.hold && productPlain.pendingEdit) writeUpdate = { ...writeUpdate, pendingEdit: null }; // drop any old held edit
     let updatedProduct: any =
       Object.keys(writeUpdate).length > 0
         ? await productModel.findByIdAndUpdate(productId, writeUpdate, {

@@ -80,6 +80,10 @@ export class DigitalPreview {
 
   @Prop({ type: String, enum: ['image', 'video'], default: null })
   previewSourceResourceType: 'image' | 'video' | null;
+
+  // url of the file the preview was built from (the seller's free sample, else files[sourceFileIndex])
+  @Prop({ type: String, default: null })
+  previewSourceUrl: string | null;
 }
 export const DigitalPreviewSchema = SchemaFactory.createForClass(DigitalPreview);
 
