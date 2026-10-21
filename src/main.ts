@@ -148,12 +148,16 @@ async function bootstrap() {
     next();
   });
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api', app, document, {
-    swaggerOptions: {
-      persistAuthorization: true,
-    },
-  });
+  // The interactive docs list every route (including admin ones), so they are off in production unless ENABLE_SWAGGER=true.
+  const swaggerEnabled = process.env.NODE_ENV !== 'production' || process.env.ENABLE_SWAGGER === 'true';
+  if (swaggerEnabled) {
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api', app, document, {
+      swaggerOptions: {
+        persistAuthorization: true,
+      },
+    });
+  }
 
   // Railway injects PORT env var — use it, fall back to 3002 for local dev
   const port = process.env.PORT || 3002;
