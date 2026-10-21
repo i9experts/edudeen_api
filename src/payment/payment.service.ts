@@ -1226,6 +1226,33 @@ export class PaymentService {
     return claimed;
   }
 
+  /** Called right after a COD / bank-transfer / free placement wins the claim: any card
+   *  PaymentIntent the buyer opened earlier for this checkout is cancelled so it can no
+   *  longer be paid. Best effort and never throws. If Stripe refuses (the intent already
+   *  succeeded or is processing) the transaction stays pending, so `finalizePaymentIntent`
+   *  sees the checkout was placed another way and refunds the charge. */
+  private async cancelPendingCardIntents(checkoutId: string) {
+    const stripe = this.stripe;
+    if (!stripe) return;
+    try {
+      const { paymentTransactionModel } = this.databaseService.repositories;
+      const pending = await paymentTransactionModel.find({
+        checkoutId, status: 'pending', paymentType: 'stripe', isDelete: false,
+      });
+      for (const tx of pending) {
+        if (!tx.stripePaymentIntentId) continue;
+        try {
+          await stripe.paymentIntents.cancel(tx.stripePaymentIntentId);
+          await paymentTransactionModel.findByIdAndUpdate(tx._id, { status: 'failed' });
+        } catch (err: any) {
+          console.warn(`cancelPendingCardIntents: could not cancel ${tx.stripePaymentIntentId}: ${err?.message}`);
+        }
+      }
+    } catch (err: any) {
+      console.warn(`cancelPendingCardIntents failed for checkout ${checkoutId}: ${err?.message}`);
+    }
+  }
+
   private async releaseCheckoutPlacementClaim(checkoutId: string) {
     await this.databaseService.repositories.checkoutModel.updateOne(
       { _id: checkoutId, status: { $ne: 'completed' } },
@@ -1332,6 +1359,7 @@ export class PaymentService {
       await this.releaseCheckoutPlacementClaim(checkoutId);
       throw err;
     }
+    await this.cancelPendingCardIntents(checkoutId);
 
     await paymentTransactionModel.create({
       userId,
@@ -1440,6 +1468,7 @@ export class PaymentService {
       await this.releaseCheckoutPlacementClaim(checkoutId);
       throw err;
     }
+    await this.cancelPendingCardIntents(checkoutId);
 
     // Independent writes: run them together.
     await Promise.all([
@@ -1573,6 +1602,7 @@ export class PaymentService {
       await this.releaseCheckoutPlacementClaim(checkoutId);
       throw err;
     }
+    await this.cancelPendingCardIntents(checkoutId);
 
     await paymentTransactionModel.create({
       userId,
