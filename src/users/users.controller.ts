@@ -17,6 +17,8 @@ import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { DeleteAccountDto } from './dto/delete-account.dto';
+import { Throttle } from '@nestjs/throttler';
 
 @ApiTags('Users')
 @ApiBearerAuth()
@@ -43,8 +45,9 @@ export class UsersController {
   @Delete('profile')
   @ApiOperation({ summary: 'Delete user account (soft delete)' })
   @ApiResponse({ status: 200, description: 'Account deactivated successfully' })
-  deleteAccount(@Req() req: any) {
-    return this.usersService.deleteAccount(req.user.userId, req.user.role);
+  @Throttle({ default: { limit: 5, ttl: 60_000 } }) // password is checked here, so it must not be brute-forceable
+  deleteAccount(@Req() req: any, @Body() dto: DeleteAccountDto) {
+    return this.usersService.deleteAccount(req.user.userId, req.user.role, dto);
   }
 
   @Put('logout-others')

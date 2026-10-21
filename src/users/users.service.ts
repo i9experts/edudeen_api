@@ -3,12 +3,16 @@ import {
   NotFoundException,
   BadRequestException,
   UnauthorizedException,
+  ConflictException,
+  Optional,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { DatabaseService } from 'src/database/databaseservice';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { DeleteAccountDto } from './dto/delete-account.dto';
 import { AuthService } from 'src/auth/auth.service';
+import { PremiumEntitlementsService } from 'src/premium/premium-entitlements.service';
 import { phoneChangeInvalidatesVerification } from 'src/phone-verification/phone-otp.util';
 
 @Injectable()
@@ -16,6 +20,7 @@ export class UsersService {
   constructor(
     private readonly db: DatabaseService,
     private readonly authService: AuthService,
+    @Optional() private readonly premium?: PremiumEntitlementsService,
   ) {}
 
   private get userModel() {
@@ -122,17 +127,43 @@ export class UsersService {
   // Buyers and sellers are separate collections (see changePassword's comment
   // above) — this must branch on role too, or a seller's delete request 404s
   // against the buyer collection while their seller account stays fully live.
-  async deleteAccount(userId: string, role: string) {
+  async deleteAccount(userId: string, role: string, dto: DeleteAccountDto) {
+    if (role !== 'user' && role !== 'seller') {
+      throw new UnauthorizedException('Invalid user type');
+    }
+
+    const model: any = role === 'seller' ? this.db.repositories.sellerModel : this.userModel;
+    const account = await model.findById(userId);
+    if (!account) throw new NotFoundException(role === 'seller' ? 'Seller not found' : 'User not found');
+
+    // 1) A stolen session must not be enough to destroy an account: typed confirmation + the password.
+    //    (Social-only accounts have no password, so for them the typed word is the confirmation.)
+    if (String(dto?.confirm ?? '').trim().toUpperCase() !== 'DELETE') {
+      throw new BadRequestException('Type DELETE to confirm that you want to delete your account.');
+    }
+    if (account.password) {
+      if (!dto.password) throw new BadRequestException('Enter your password to delete your account.');
+      if (!(await bcrypt.compare(dto.password, account.password))) {
+        throw new UnauthorizedException('Password is incorrect');
+      }
+    }
+
+    // 2) Nothing may be left half-finished: open orders, active Premium, money owed or held.
+    const blockers = await this.deletionBlockers(userId, role);
+    if (blockers.length > 0) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'ACCOUNT_DELETE_BLOCKED',
+        message: `You can't delete your account yet: ${blockers.join(' ')}`,
+        blockers,
+      });
+    }
+
     if (role === 'seller') {
       return this.deleteSellerAccount(userId);
     }
 
-    if (role !== 'user') {
-      throw new UnauthorizedException('Invalid user type');
-    }
-
-    const user = await this.userModel.findById(userId);
-    if (!user) throw new NotFoundException('User not found');
+    const user = account;
 
     user.isDelete = true;
     user.status = 'deleted';
@@ -143,6 +174,32 @@ export class UsersService {
       success: true,
       message: 'Account deactivated successfully',
     };
+  }
+
+  /** Human-readable reasons this account cannot be deleted right now (empty = fine to delete). */
+  private async deletionBlockers(accountId: string, role: 'user' | 'seller'): Promise<string[]> {
+    const { orderModel, payoutModel, sellerBalanceModel } = this.db.repositories;
+    const OPEN = ['pending', 'processing', 'partially_shipped'];
+    const out: string[] = [];
+    const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+    if (role === 'user') {
+      const open = await orderModel.countDocuments({ userId: accountId, orderStatus: { $in: OPEN } });
+      if (open > 0) out.push(`${plural(open, 'order')} still in progress - wait until ${open === 1 ? 'it is' : 'they are'} delivered or cancelled.`);
+      const ent = this.premium ? await this.premium.getEntitlements(accountId).catch(() => null) : null;
+      if (ent?.isPremium) out.push('Your Edudeen Premium membership is still active - let it end before deleting your account.');
+      return out;
+    }
+
+    const open = await orderModel.countDocuments({ 'sellerOrders.sellerId': accountId, orderStatus: { $in: OPEN } });
+    if (open > 0) out.push(`${plural(open, 'customer order')} still in progress - fulfil or cancel ${open === 1 ? 'it' : 'them'} first.`);
+    const payouts = await payoutModel.countDocuments({ sellerId: accountId, status: { $in: ['pending', 'processing'] } });
+    if (payouts > 0) out.push(`${plural(payouts, 'payout')} still being processed.`);
+    const balances = await sellerBalanceModel.find({ sellerId: accountId }).select('availableBalance pendingBalance').lean();
+    if (balances.some((b: any) => (b.availableBalance ?? 0) !== 0 || (b.pendingBalance ?? 0) !== 0)) {
+      out.push('Your store wallet still holds money (or owes a refund balance) - withdraw it or contact support to settle it first.');
+    }
+    return out;
   }
 
   // Deactivates the seller account AND suspends every store they own, so
