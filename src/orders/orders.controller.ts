@@ -16,6 +16,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { OrdersService } from './orders.service';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 
 /** RFC 6266 / 5987 filename: an ASCII fallback plus a UTF-8 encoded name,
  *  so quotes, CR/LF or non-Latin (e.g. Urdu/Arabic) file names can neither
@@ -50,7 +51,7 @@ export class OrdersController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('user')
   @Get('by-checkout/:checkoutId')
-  async getOrdersByCheckout(@Req() req: any, @Param('checkoutId') checkoutId: string) {
+  async getOrdersByCheckout(@Req() req: any, @Param('checkoutId', ParseObjectIdPipe) checkoutId: string) {
     const { userId } = req.user;
     return this.ordersService.getOrdersByCheckout(userId, checkoutId);
   }
@@ -130,7 +131,7 @@ export class OrdersController {
   @Post('cancel/:orderId')
   async cancelOrder(
     @Req() req: any,
-    @Param('orderId') orderId: string,
+    @Param('orderId', ParseObjectIdPipe) orderId: string,
     @Body() body: any,
   ) {
     const { userId } = req.user;
@@ -150,7 +151,7 @@ export class OrdersController {
   @Post('return-request/:orderId')
   async returnRequest(
     @Req() req: any,
-    @Param('orderId') orderId: string,
+    @Param('orderId', ParseObjectIdPipe) orderId: string,
     @Body() body: any,
   ) {
     const { userId } = req.user;

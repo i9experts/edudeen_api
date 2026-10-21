@@ -124,7 +124,7 @@ export class NotificationsService {
     const limit = Math.min(100, Math.max(1, clampInt(query.limit, 20, 1, 100)));
     const filter: Record<string, any> = { recipientId: userId };
     if (query.unreadOnly === 'true') filter.isRead = false;
-    if (query.type) filter.type = query.type;
+    if (query.type) filter.type = String(query.type);
 
     const model = this.databaseService.repositories.notificationModel;
     const [items, total, unreadCount] = await Promise.all([

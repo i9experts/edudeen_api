@@ -298,6 +298,7 @@ export class OrdersService {
   }
 
   async getOrderById(userId: string, orderId: string) {
+    if (typeof orderId !== 'string' || !isValidObjectId(orderId)) throw new NotFoundException('Order not found');
     const { orderModel, sellerModel } = this.databaseService.repositories;
 
     const order = await orderModel
@@ -1746,6 +1747,7 @@ export class OrdersService {
     if (!productId) throw new BadRequestException('productId is required');
     const { orderModel, productModel } = this.databaseService.repositories;
 
+    if (typeof orderId !== 'string' || !isValidObjectId(orderId) || typeof productId !== 'string') throw new BadRequestException('Invalid order or product');
     const order = await orderModel.findOne({ _id: orderId, isDelete: false });
     if (!order) throw new NotFoundException('Order not found');
     if (order.userId !== userId) throw new ForbiddenException('Unauthorized');

@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { assertProofFile } from 'src/common/proof-file.util';
 import { BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
@@ -373,6 +374,7 @@ export class PremiumService {
     if (!p) throw new NotFoundException('Payment not found');
     if (p.status !== 'awaiting_proof' && p.status !== 'rejected') throw new BadRequestException(`Cannot upload proof - this payment is "${p.status}"`);
     if (!file) throw new BadRequestException('A payment proof image (screenshot or receipt) is required');
+    assertProofFile(file);
     const upload = await this.uploadService.uploadPrivateFile(file, PROOF_FOLDER);
     if (p.status === 'rejected') p.reuploadCount = (p.reuploadCount ?? 0) + 1;
     p.proofPublicId = upload.publicId; p.proofResourceType = upload.resourceType;

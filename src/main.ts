@@ -53,6 +53,17 @@ async function bootstrap() {
 
   app.use(cookieParser());
 
+  // Baseline security headers (no helmet dependency). The API serves JSON plus the bot prerender HTML, so these are safe
+  // everywhere: no sniffing, no referrer leak (framing left open: course/preview PDFs may be embedded from the web app), HSTS only in production (https).
+  app.use((req: any, res: any, next: any) => {
+    res.removeHeader('X-Powered-By');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin'); // images/files are loaded by the web app on another origin
+    if (isProduction) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+    next();
+  });
+
   // Global DTO validation. `transform: true` matches the local pipes already used across the app, so query DTOs
   // relying on @Type(() => Number) behave identically. `whitelist: true` strips any property a DTO does not declare:
   // most controllers have no local whitelist pipe, so `{ ...dto }` / `$set: dto` / `Object.assign(doc, dto)` in the

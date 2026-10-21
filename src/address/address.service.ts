@@ -56,8 +56,10 @@ export class AddressService {
         throw new NotFoundException('No buyer account found for this sign-in. Please switch to your buyer account to continue.');
       }
 
+      pickAddressUpdate(body); // validates types + lengths (throws 400)
       // A user's first address is always their default.
       const existingCount = await this.databaseService.repositories.addressModel.countDocuments({ userId, isDelete: false });
+      if (existingCount >= 20) throw new BadRequestException('You can save up to 20 addresses. Delete one first.');
       const makeDefault = !!body.isDefault || existingCount === 0;
       if (makeDefault) {
         await this.databaseService.repositories.addressModel.updateMany(
@@ -153,7 +155,7 @@ export class AddressService {
   async getAddressById(userId: string, addressId: string) {
   try {
 
-    const address = await this.databaseService.repositories.addressModel.findOne({ _id: addressId, userId });
+    const address = await this.databaseService.repositories.addressModel.findOne({ _id: addressId, userId, isDelete: false });
 
     return {
       message: 'Address fetched successfully',

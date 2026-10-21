@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNumber, Min, Max, IsOptional, IsArray, IsIn } from 'class-validator';
+import { IsString, IsNumber, Min, Max, IsOptional, IsArray, IsIn, MaxLength, ArrayMaxSize } from 'class-validator';
 
 export class EditReviewDto {
 
@@ -14,12 +14,15 @@ export class EditReviewDto {
   @ApiProperty({ required: false, description: 'Replaces the review\'s main comment text' })
   @IsOptional()
   @IsString()
+  @MaxLength(2000)
   comment?: string;
 
   @ApiProperty({ required: false, type: [String] })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @MaxLength(1000, { each: true })
+  @ArrayMaxSize(4)
   media?: string[];
 
   @ApiProperty({ required: false, enum: ['home', 'classroom', 'school'] })

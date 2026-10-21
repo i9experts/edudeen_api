@@ -1687,7 +1687,7 @@ export class ProductsService {
     // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
     const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
 
-    const product = await productModel.create({
+    const product: any = await (productModel as any).create({
       sellerId,
       storeId: store._id.toString(),
       name: title,
@@ -1881,7 +1881,7 @@ export class ProductsService {
     // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
     const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
 
-    const product = await productModel.create({
+    const product: any = await (productModel as any).create({
       sellerId,
       storeId: store._id.toString(),
       name: title,

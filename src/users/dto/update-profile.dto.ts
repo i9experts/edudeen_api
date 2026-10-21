@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsString, IsOptional, MaxLength, IsIn } from 'class-validator';
+import { IsEmail, IsString, IsOptional, MaxLength, IsIn, Matches } from 'class-validator';
 import { SUPPORTED_CURRENCIES } from 'src/exchange-rate/schemas/exchange-rate.schema';
 
 export class UpdateProfileDto {
@@ -17,16 +17,20 @@ export class UpdateProfileDto {
   @ApiProperty({ required: false, example: '+1234567890' })
   @IsOptional()
   @IsString()
+  @MaxLength(40)
   phone?: string;
 
   @ApiProperty({ required: false, example: 'karachi, pakistan' })
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   address?: string;
 
   @ApiProperty({ required: false, example: 'https://example.com/profile.jpg' })
   @IsOptional()
   @IsString()
+  @MaxLength(2048)
+  @Matches(/^https:\/\//i, { message: 'profileImage must be an https URL' })
   profileImage?: string;
 
   // Explicit buyer currency choice — once set, this is the source of truth

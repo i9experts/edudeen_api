@@ -25,7 +25,7 @@ export class UsersService {
   async getProfile(userId: string) {
     const user = await this.userModel
       .findById(userId)
-      .select('-password -otp -otpExpiresAt');
+      .select('-password -otp -otpExpiresAt -otpAttempts -tokenVersion');
     if (!user) throw new NotFoundException('User not found');
     return user;
   }
@@ -44,17 +44,16 @@ export class UsersService {
     user.address = dto.address ?? user.address;
     user.currencyPreference = dto.currencyPreference ?? user.currencyPreference;
 
-    if (dto.email && dto.email !== user.email) {
-      const emailExists = await this.userModel.findOne({ email: dto.email });
-      if (emailExists) throw new BadRequestException('Email already in use');
-      user.email = dto.email;
-      user.isVerified = false;
+    // The login email cannot be swapped by a signed-in session alone: it would hand the account to whoever holds a
+    // stolen token (and leave the real owner unverified with no OTP). Needs a verified change-email flow.
+    if (dto.email && dto.email.toLowerCase() !== String(user.email).toLowerCase()) {
+      throw new BadRequestException('Email cannot be changed from here. Contact support to change your login email.');
     }
 
     await user.save();
     const updatedUser = await this.userModel
       .findById(userId)
-      .select('-password -otp -otpExpiresAt');
+      .select('-password -otp -otpExpiresAt -otpAttempts -tokenVersion');
 
     return {
       success: true,

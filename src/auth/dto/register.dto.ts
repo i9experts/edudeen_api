@@ -3,6 +3,7 @@ import { IsEmail, IsString, IsOptional, MinLength, IsNotEmpty, IsIn, MaxLength }
 export class RegisterDto {
   @IsString()
   @IsNotEmpty()
+  @MaxLength(120)
   name: string;
 
   // Public registration can only ever create a buyer or seller account —
@@ -20,10 +21,12 @@ export class RegisterDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(40)
   phone?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   address?: string;
 
   @IsString()
@@ -34,5 +37,6 @@ export class RegisterDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(2048)
   profileImage?: string;
 }

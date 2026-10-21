@@ -354,6 +354,8 @@ export class AuthService {
 
       const existingUser = await userModel.findOne({ email });
       if (!existingUser) {
+        // Burn a bcrypt compare so an unknown email takes as long as a wrong password (no timing oracle).
+        await bcrypt.compare(String(password), '$2b$10$CwTycUXWue0Thq9StjUM0uJ8.DoVDeUoKIqPV8oHEIWiBM4hJHTEa').catch(() => false);
         throw new UnauthorizedException('Invalid email or password');
       }
 
@@ -371,10 +373,10 @@ export class AuthService {
         );
       }
 
-      const isPasswordMatch = await bcrypt.compare(
-        password,
-        existingUser.password,
-      );
+      // Social-only accounts have no password hash: bcrypt.compare would throw (500) - treat as a wrong password.
+      const isPasswordMatch = existingUser.password
+        ? await bcrypt.compare(password, existingUser.password)
+        : false;
       if (!isPasswordMatch) {
         if (role === 'seller') {
           this.logSellerSecurityEvent(
@@ -598,6 +600,12 @@ export class AuthService {
         // Only a provider-verified email proves ownership of the address.
         if (!account.isVerified && verifiedEmail && String(account.email).toLowerCase() === verifiedEmail) {
           account.isVerified = true;
+          // Pre-hijack guard: an attacker may have registered this (unverified) email with their own password.
+          // Now that the real owner proved the address, drop that password and revoke any sessions.
+          account.password = undefined;
+          account.otp = null;
+          account.otpExpiresAt = null;
+          account.tokenVersion = (account.tokenVersion ?? 0) + 1;
           changed = true;
         }
         if (changed) await account.save();

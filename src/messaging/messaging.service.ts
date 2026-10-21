@@ -155,7 +155,7 @@ export class MessagingService {
     }
 
     if (query.q) {
-      filter['lastMessage.text'] = { $regex: query.q, $options: 'i' };
+      filter['lastMessage.text'] = { $regex: String(query.q).slice(0, 100).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
     }
 
     // Priority (priority_support subscribers) sort above regular conversations, seller inbox only.
@@ -246,7 +246,7 @@ export class MessagingService {
     }
 
     // Search in last message text
-    filter['lastMessage.text'] = { $regex: q.trim(), $options: 'i' };
+    filter['lastMessage.text'] = { $regex: q.trim().slice(0, 100).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
 
     const results = await this.convModel.find(filter).sort({ updatedAt: -1 }).limit(30).lean();
     return results;
@@ -541,7 +541,7 @@ export class MessagingService {
         type: 'text',
         isDeleted: false,
         deletedByUsers: { $ne: userId },
-        text: { $regex: q.trim(), $options: 'i' },
+        text: { $regex: q.trim().slice(0, 100).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' },
       })
       .sort({ createdAt: -1 })
       .limit(50)

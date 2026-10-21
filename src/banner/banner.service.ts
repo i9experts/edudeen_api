@@ -117,7 +117,7 @@ export class BannersService {
   // ── GET COUNT (admin) ──────────────────────────────────────────────────────
 
   async getCount(placement: PromotionPlacement = DEFAULT_PLACEMENT) {
-    const count = await this.bannerModel.countDocuments({ ...visibleFilter(), $and: [placementMatch(placement)] });
+    const count = await (this.bannerModel as any).countDocuments({ ...visibleFilter(), $and: [placementMatch(placement)] });
     const max = await this.adminConfigService.getPlacementLimit(placement);
 
     return {

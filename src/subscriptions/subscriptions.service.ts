@@ -87,7 +87,7 @@ export class SubscriptionsService {
     const y = now.getFullYear();
     const m = String(now.getMonth() + 1).padStart(2, '0');
     const key = `invoice-${y}${m}`;
-    const counter = await this.counterModel.findOneAndUpdate(
+    const counter: any = await (this.counterModel as any).findOneAndUpdate(
       { _id: key },
       { $inc: { seq: 1 } },
       { upsert: true, returnDocument: 'after' },

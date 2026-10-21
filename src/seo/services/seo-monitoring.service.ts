@@ -129,7 +129,7 @@ export class SeoMonitoringService implements OnModuleInit, OnModuleDestroy {
     for (const provider of ['gsc', 'bing'] as const) {
       try {
         const { coverage } = await this.integrations.sync({ scope, storeId }, provider, from, to);
-        await this.db.repositories.seoIndexSnapshotModel.create({
+        await (this.db.repositories.seoIndexSnapshotModel as any).create({
           scope, storeId, provider,
           indexedCount: coverage.indexedCount,
           excludedCount: coverage.excludedCount,
@@ -175,7 +175,7 @@ export class SeoMonitoringService implements OnModuleInit, OnModuleDestroy {
         );
 
         if (integration.provider !== 'ga4') {
-          await this.db.repositories.seoIndexSnapshotModel.create({
+          await (this.db.repositories.seoIndexSnapshotModel as any).create({
             scope: integration.scope, storeId: integration.storeId, provider: integration.provider,
             indexedCount: coverage.indexedCount, excludedCount: coverage.excludedCount, errors: coverage.errors,
             snapshotDate: to,

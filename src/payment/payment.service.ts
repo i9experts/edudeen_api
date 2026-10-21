@@ -714,7 +714,36 @@ export class PaymentService {
       _id: transaction.checkoutId,
       isDelete: false,
     });
-    if (!checkout || checkout.status === 'completed') {
+    // The buyer switched to COD / bank transfer / a free order for this same checkout after the card
+    // intent was created, and that path already placed the orders: this charge has no order behind it.
+    // Refund it instead of silently keeping the money (the checkout itself stays as it is).
+    if (checkout && checkout.status === 'completed' && (transaction.orderIds ?? []).length === 0 && checkout.paymentType && checkout.paymentType !== 'stripe') {
+      let refunded = false;
+      try {
+        if (this.stripe) {
+          await this.stripe.refunds.create(
+            { payment_intent: paymentIntentId },
+            { idempotencyKey: `duplicate-pay-refund-${paymentIntentId}` },
+          );
+          refunded = true;
+        }
+      } catch { /* logged below for manual refund */ }
+      if (refunded) {
+        await paymentTransactionModel.findByIdAndUpdate(transaction._id, { status: 'failed', amountRefunded: transaction.amount });
+      }
+      await this.activityLogService.log({
+        storeId: 'platform',
+        category: 'finance',
+        action: refunded ? 'duplicate_card_payment_refunded' : 'duplicate_card_payment_needs_refund',
+        description: `Checkout ${checkout._id} was already placed as ${checkout.paymentType}, then a card payment (${paymentIntentId}) succeeded. ${refunded ? 'Charge refunded in full.' : 'Automatic refund FAILED - refund manually.'}`,
+        actorId: 'system',
+        actorRole: 'system',
+        isSecurityAlert: !refunded,
+        targetId: checkout._id.toString(),
+        targetType: 'checkout',
+      });
+      return null;
+    }    if (!checkout || checkout.status === 'completed') {
       return { orderIds: transaction.orderIds };
     }
 
@@ -2050,7 +2079,7 @@ export class PaymentService {
         // concurrent orders can't all read "1 use left" and all consume it.
         // The order is already paid for by this point, so an overrun is
         // honoured for this buyer and flagged rather than failing the order.
-        const res = await this.databaseService.repositories.couponModel.updateOne(
+        const res = await (this.databaseService.repositories.couponModel as any).updateOne(
           {
             ...couponFilter,
             $or: [{ usageLimit: null }, { $expr: { $lt: ['$usageCount', '$usageLimit'] } }],
@@ -2058,7 +2087,7 @@ export class PaymentService {
           { $inc: { usageCount: 1 } },
         );
         if (res.modifiedCount === 0) {
-          await this.databaseService.repositories.couponModel.updateOne(couponFilter, { $inc: { usageCount: 1 } });
+          await (this.databaseService.repositories.couponModel as any).updateOne(couponFilter, { $inc: { usageCount: 1 } });
           await this.activityLogService.log({
             storeId: checkout.couponStoreId ?? 'platform',
             category: 'marketing',

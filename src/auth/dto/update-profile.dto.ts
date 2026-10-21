@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { IsString, IsOptional, IsIn, IsNotEmpty, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsIn, IsNotEmpty, MaxLength, Matches } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { SUPPORTED_CURRENCIES } from 'src/exchange-rate/schemas/exchange-rate.schema';
 
@@ -27,11 +27,14 @@ export class AuthUpdateProfileDto {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @MaxLength(2048)
+  @Matches(/^https:\/\//i, { message: 'profileImage must be an https URL' })
   profileImage?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @MaxLength(1024)
   fcmToken?: string;
 
   // This is the DTO actually wired to PATCH /api/auth/edit-profile — the

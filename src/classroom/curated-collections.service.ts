@@ -103,13 +103,13 @@ export class CuratedCollectionsService {
   }
 
   async homeShelves(viewerId?: string | null) {
-    const rows = await this.model.find({ ...this.liveFilter(), showOnHome: true }).sort({ order: 1, createdAt: -1 }).limit(6).lean();
+    const rows = await (this.model as any).find({ ...this.liveFilter(), showOnHome: true }).sort({ order: 1, createdAt: -1 }).limit(6).lean();
     const shelves = await Promise.all(rows.map(async c => ({ ...this.shape(c), products: await this.resolveProducts(c, 12, viewerId) })));
     return { success: true, data: shelves.filter(s => s.products.length > 0) };
   }
 
   async bySlug(slug: string, viewerId?: string | null) {
-    const c = await this.model.findOne({ ...this.liveFilter(), slug: String(slug ?? '') }).lean();
+    const c = await (this.model as any).findOne({ ...this.liveFilter(), slug: String(slug ?? '') }).lean();
     if (!c) throw new NotFoundException('This collection is not available');
     return { success: true, data: { ...this.shape(c), products: await this.resolveProducts(c, MAX_PICKED, viewerId) } };
   }

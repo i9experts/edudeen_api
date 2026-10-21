@@ -119,7 +119,7 @@ export class GiftCardsService {
     const limit = Math.min(100, Math.max(1, clampInt(query.limit, 20, 1, 100)));
     const filter: any = { storeId, isDelete: false };
     if (query.status) filter.status = query.status;
-    if (query.code) filter.code = new RegExp(String(query.code).trim(), 'i');
+    if (query.code) filter.code = new RegExp(String(query.code).trim().slice(0, 40).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 
     const [items, total] = await Promise.all([
       this.r.giftCardModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),

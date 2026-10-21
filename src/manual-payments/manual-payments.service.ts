@@ -14,6 +14,7 @@ import { SubmitManualPaymentDto } from './dto/submit-manual-payment.dto';
 import { ReuploadManualPaymentDto } from './dto/reupload-manual-payment.dto';
 
 import { clampInt } from 'src/common/query-safety.util';
+import { assertProofFile } from 'src/common/proof-file.util';
 import { ReceiptCheckService, buildReceiptExpectation } from './receipt-check.service';
 import { GoneException } from '@nestjs/common';
 import type { DirectPaymentDetails } from 'src/common/direct-payment.util';
@@ -119,6 +120,7 @@ export class ManualPaymentsService {
 
     // Upload FIRST: if it fails, nothing has been placed. (Placing the orders
     // first left unpaid orders with no proof and no way for the buyer to retry.)
+    assertProofFile(file);
     const upload = await this.uploadService.uploadPrivateFile(file, PROOF_FOLDER);
     const { orders, amountUSD, amountPKR, fxRate } = await this.paymentService.manualBankTransferPayment(userId, dto.checkoutId);
 
@@ -173,6 +175,7 @@ export class ManualPaymentsService {
     }
     if (!file) throw new BadRequestException('A payment proof image (screenshot or receipt) is required');
 
+    assertProofFile(file);
     const upload = await this.uploadService.uploadPrivateFile(file, PROOF_FOLDER);
 
     proof.proofPublicId = upload.publicId;
