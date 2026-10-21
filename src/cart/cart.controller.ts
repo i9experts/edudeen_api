@@ -31,6 +31,23 @@ export class CartController {
     return this.cartService.getMyCarts(userId);
   }
 
+  // Buy Now: prices one product-page selection without touching the cart (same shape as my-carts, one store).
+  @UseGuards(JwtAuthGuard)
+  @Get('buy-now')
+  async getBuyNowCart(
+    @Req() req: any,
+    @Query('productId') productId: string,
+    @Query('variantId') variantId: string,
+    @Query('quantity') quantity?: string,
+  ) {
+    return this.cartService.getBuyNowCart(
+      req.user.userId,
+      typeof productId === 'string' ? productId : '',
+      typeof variantId === 'string' ? variantId : '',
+      typeof quantity === 'string' ? quantity : undefined,
+    );
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('unified')
   async getUnifiedCart(@Req() req: any, @Query('currency') currency?: string) {

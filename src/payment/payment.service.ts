@@ -1181,6 +1181,7 @@ export class PaymentService {
     checkout: any,
     cartModel: any,
   ) {
+    if (checkout.isBuyNow) return; // Buy Now never came from the cart, so nothing in the cart was bought
     const linesByStore = new Map<string, { productId: string; productVariantId: string }[]>();
     for (const i of checkout.items as any[]) {
       if (!i.storeId) continue;

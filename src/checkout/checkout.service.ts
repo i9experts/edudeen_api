@@ -132,6 +132,18 @@ export class CheckoutService {
     return (user as any)?.currencyPreference ?? 'PKR';
   }
 
+  /** Validates the Buy Now selection from the request body (null when absent, 400 when malformed). */
+  private parseBuyNow(raw: any): { productId: string; variantId: string; quantity: number } | null {
+    if (raw === undefined || raw === null) return null;
+    const productId = typeof raw.productId === 'string' ? raw.productId : '';
+    const variantId = typeof raw.variantId === 'string' ? raw.variantId : '';
+    const quantity = Number(raw.quantity ?? 1);
+    if (!/^[a-f0-9]{24}$/i.test(productId) || !/^[a-f0-9]{24}$/i.test(variantId) || !Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+      throw new BadRequestException('Invalid Buy Now selection');
+    }
+    return { productId, variantId, quantity };
+  }
+
   async createCheckout(userId: string, body: any = {}) {
     const {
       cartModel,
@@ -149,9 +161,15 @@ export class CheckoutService {
     // before. Without one (the main marketplace) it spans ALL of the buyer's
     // non-empty carts, so a buyer pays once for items from any number of stores.
     const { storeId } = body;
-    const unifiedCheckout = !storeId;
+    // Buy Now: exactly one line the buyer chose on the product page. It never touches the cart
+    // (the cart may be empty, and nothing is added to or removed from it); stock, price, campaign
+    // and Premium rules are applied to the line below like any other.
+    const buyNowLine = this.parseBuyNow(body.buyNow);
+    const unifiedCheckout = !storeId && !buyNowLine;
     let cartItems: any[];
-    if (!unifiedCheckout) {
+    if (buyNowLine) {
+      cartItems = [{ productId: buyNowLine.productId, productVariantId: buyNowLine.variantId, quantity: buyNowLine.quantity }];
+    } else if (!unifiedCheckout) {
       const cart = await cartModel.findOne({
         userId,
         storeId,
@@ -177,7 +195,7 @@ export class CheckoutService {
     // chose, whatever else sits in the cart). Stock/price are still validated per
     // line below; the cart document itself is not modified here.
     const selectedItems: any[] =
-      body.items && Array.isArray(body.items) && body.items.length > 0
+      !buyNowLine && body.items && Array.isArray(body.items) && body.items.length > 0
         ? cartItems
             .map((cartItem: any) => {
               const sel = body.items.find(
@@ -727,6 +745,7 @@ export class CheckoutService {
       premiumDiscountTotalUSD: premiumSavingsUSD,
       premiumPlatformDiscountTotalUSD: premiumPlatformSavingsUSD,
       totalAmount,
+      isBuyNow: !!buyNowLine,
       status: 'pending',
       attributionSource,
       attributedBannerId: body.attributedBannerId ?? null,

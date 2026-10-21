@@ -331,6 +331,11 @@ export class Checkout {
   @Prop({ type: Date, default: null })
   orderPlacementStartedAt: Date | null;
 
+  // Buy Now checkout: built from one product-page selection, not from the cart. Placing it must
+  // leave the buyer's cart alone (a same-product line in the cart is a separate purchase).
+  @Prop({ type: Boolean, default: false })
+  isBuyNow: boolean;
+
   // Optional gift note + gift wrapping for the physical items (free). Copied to the order at placement.
   @Prop({ type: String, default: null })
   giftMessage: string | null;

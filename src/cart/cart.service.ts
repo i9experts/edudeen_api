@@ -3,7 +3,7 @@ import { campaignsInCurrency, CampaignLinePrice, CartCampaignDiscount, pickBestC
 import { campaignsForProduct } from '../marketing/campaign-eligibility.util';
 import { isValidObjectId } from 'mongoose';
 import { sanitizeDigitalForPublicView } from 'src/products/product-public-view.util';
-import { Injectable, BadRequestException, ForbiddenException, Optional } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, NotFoundException, Optional } from '@nestjs/common';
 
 import { DatabaseService } from 'src/database/databaseservice';
 import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
@@ -188,14 +188,16 @@ export class CartService {
       );
     }
   }
-  async getCart(userId: string, storeId: string) {
+  async getCart(userId: string, storeId: string, ephemeralCart?: { items: any[] }) {
     try {
-      // User ka cart find karo (is store ke liye)
-      const cart = await this.databaseService.repositories.cartModel.findOne({
+      // User ka cart find karo (is store ke liye). `ephemeralCart` = an in-memory cart (Buy Now):
+      // priced with the exact same rules, but never read from or written to the cart collection.
+      const stored = ephemeralCart ? null : await this.databaseService.repositories.cartModel.findOne({
         userId,
         storeId,
         isDelete: false,
       });
+      const cart = stored ?? (ephemeralCart ? (ephemeralCart as unknown as NonNullable<typeof stored>) : null);
 
       // Agar cart nahi mila
       if (!cart) {
@@ -453,6 +455,37 @@ export class CartService {
       store: { storeId, name: store.name, slug: store.slug, logo: store.logo ?? null, isActive: store.status === 'active' },
     }));
     return { message: 'Carts fetched successfully', data };
+  }
+
+  /** Buy Now: the one line the buyer picked on a product page, shaped exactly like a one-store
+   *  `getMyCarts` result so checkout can render and price it with the same code as a cart.
+   *  Nothing is stored — the real cart is never touched. */
+  async getBuyNowCart(userId: string, productId: string, variantId: string, rawQuantity?: string) {
+    const quantity = Number(rawQuantity ?? 1);
+    if (!isValidObjectId(productId) || !isValidObjectId(variantId)) throw new BadRequestException('Invalid Buy Now selection');
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > MAX_CART_LINE_QUANTITY) {
+      throw new BadRequestException(`Quantity must be a whole number between 1 and ${MAX_CART_LINE_QUANTITY}`);
+    }
+    const { productModel, productVariantModel, storeModel } = this.databaseService.repositories;
+    const product: any = await productModel.findOne({ _id: productId, status: 'active', isDelete: false }).lean();
+    const store: any = product
+      ? await storeModel.findOne({ _id: product.storeId, status: 'active', isDelete: false }).select('name slug logo status baseCurrency').lean()
+      : null;
+    if (!product || !store) throw new NotFoundException('This product is not available');
+    const variant: any = await productVariantModel.findOne({ _id: variantId, productId, status: 'active', isDelete: false }).lean();
+    if (!variant) throw new NotFoundException('This product option is not available');
+
+    const storeId = String(product.storeId);
+    const { data: cart } = await this.getCart(userId, storeId, {
+      items: [{
+        productId, productVariantId: variantId, name: product.name, quantity, price: variant.price,
+        currency: variant.currency ?? null,
+        images: variant.images?.length ? variant.images : product.images ?? [],
+        options: variant.options ?? [],
+      }],
+    });
+    const info = { storeId, name: store.name, slug: store.slug, logo: store.logo ?? null, isActive: true };
+    return { message: 'Buy Now line fetched successfully', data: [{ ...cart, store: info }] };
   }
 
   /** The buyer's display currency: an explicit, allow-listed request, else
