@@ -80,7 +80,7 @@ export class CartService {
         productId: dto.productId,
         productVariantId: dto.productVariantId,
         name: product.name,
-        quantity,
+        quantity: product.type === 'digital' ? 1 : quantity,
         price: variant.price,
         currency: variant.currency ?? null,
         images: itemImages,
@@ -109,6 +109,8 @@ export class CartService {
       );
 
       if (existingIndex > -1) {
+        // A digital item is bought once; adding it again leaves the line at 1.
+        if (product.type === 'digital') return { message: 'Digital items are limited to one per order', data: cart };
         const merged = cart.items[existingIndex].quantity + quantity;
         if (merged > MAX_CART_LINE_QUANTITY) {
           throw new BadRequestException(`Quantity cannot exceed ${MAX_CART_LINE_QUANTITY}`);
@@ -160,6 +162,10 @@ export class CartService {
 
       // 1️⃣ update quantity
       if (action === 'increase') {
+        const prod = await this.databaseService.repositories.productModel.findById(productId).select('type').lean();
+        if ((prod as any)?.type === 'digital') {
+          throw new BadRequestException('Digital items are limited to one per order');
+        }
         if (cart.items[itemIndex].quantity >= MAX_CART_LINE_QUANTITY) {
           throw new BadRequestException(`Quantity cannot exceed ${MAX_CART_LINE_QUANTITY}`);
         }

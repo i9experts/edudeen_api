@@ -102,7 +102,7 @@ export function buildAllWordsFilter(term: string): Record<string, any> {
   if (!words.length) return {};
   const clauses = words.map((w) => {
     const rx = buildSearchRegex(w);
-    return { $or: [{ name: rx }, { tags: rx }, { description: rx }] };
+    return { $or: [{ name: rx }, { nameUr: rx }, { tags: rx }, { description: rx }] };
   });
   return clauses.length === 1 ? clauses[0] : { $and: clauses };
 }

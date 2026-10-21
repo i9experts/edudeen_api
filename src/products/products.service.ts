@@ -725,7 +725,7 @@ export class ProductsService {
           _id: parentCategoryId,
           status: 'active',
           isDelete: false,
-        });
+        }).select('parentId').lean();
 
       if (category?.parentId) {
         // A sub-category page also lists everything filed under its deeper sub-categories.
@@ -858,63 +858,56 @@ export class ProductsService {
         const byId = new Map(docs.map((d: any) => [String(d._id), d]));
         products = pageIds.map((id) => byId.get(id)).filter(Boolean);
       } else {
-        total = await productModel.countDocuments(query);
-        products = await productModel
-          .find(query)
-          .sort(sortStage as any)
-          .skip(skip)
-          .limit(limit)
-          .lean();
+        [total, products] = await Promise.all([
+          productModel.countDocuments(query),
+          productModel
+            .find(query)
+            .sort(sortStage as any)
+            .skip(skip)
+            .limit(limit)
+            .lean(),
+        ]);
       }
     }
 
     const productIds = products.map((p) => p._id.toString());
 
-    // 2️⃣ Variants fetch
-    const variants = await productVariantModel
-      .find({
-        productId: { $in: productIds },
-        status: 'active',
-        isDelete: false,
-      })
-      .lean();
+    // 2️⃣ Variants, subscriber pricing, seller + store names: four independent
+    // batched lookups for the whole page, run in parallel (one round trip of latency, not four).
+    const storeIds = [
+      ...new Set(products.map((p) => p.storeId).filter(Boolean)),
+    ];
+    const sellerIds = [
+      ...new Set(products.map((p) => p.sellerId).filter(Boolean)),
+    ];
+    const [variants, benefitsMap, sellers, storeNameMap] = await Promise.all([
+      productVariantModel
+        .find({
+          productId: { $in: productIds },
+          status: 'active',
+          isDelete: false,
+        })
+        .lean(),
+      this.subscriptionBenefits.getActiveBenefitsBatch(customerId, storeIds),
+      sellerModel
+        .find({ _id: { $in: sellerIds } })
+        .select('name isVerified')
+        .lean(),
+      resolveStoreNames(
+        this.databaseService.repositories.storeModel,
+        storeIds as string[],
+      ),
+    ]);
 
     const variantMap: Record<string, any[]> = {};
-
     for (const v of variants) {
       if (!variantMap[v.productId]) {
         variantMap[v.productId] = [];
       }
       variantMap[v.productId].push(v);
     }
-
-    // Batch-resolve subscriber pricing across every distinct store present in
-    // this page of results — one query instead of N.
-    const storeIds = [
-      ...new Set(products.map((p) => p.storeId).filter(Boolean)),
-    ];
-    const benefitsMap = await this.subscriptionBenefits.getActiveBenefitsBatch(
-      customerId,
-      storeIds,
-    );
-
-    // Batch-resolve seller name + verification badge across every distinct
-    // seller present in this page — same one-query-instead-of-N pattern as
-    // the subscriber-benefits batch above.
-    const sellerIds = [
-      ...new Set(products.map((p) => p.sellerId).filter(Boolean)),
-    ];
-    const sellers = await sellerModel
-      .find({ _id: { $in: sellerIds } })
-      .select('name isVerified')
-      .lean();
     const sellerMap = new Map(
       sellers.map((s) => [s._id.toString(), s]),
-    );
-    // Store names for the cards — one query for the whole page.
-    const storeNameMap = await resolveStoreNames(
-      this.databaseService.repositories.storeModel,
-      storeIds as string[],
     );
 
     const productsWithVariants = await this.withPremium(await this.attachCampaignBadges(
@@ -1394,22 +1387,26 @@ export class ProductsService {
       };
     }
 
-    // 2️⃣ Get seller name
-    const seller = await sellerModel
-      .findOne({
-        _id: product.sellerId,
-      })
-      .select('name isVerified')
-      .lean();
-
-    // 3️⃣ Get store slug
-    const store = await storeModel
-      .findOne({
-        _id: product.storeId,
-        isDelete: false,
-      })
-      .select('slug name logo followersCount status')
-      .lean();
+    // 2️⃣-4️⃣ Seller, store, variants (keyed off the resolved document's real _id, not the route
+    // param, which may be a slug) and subscriber benefits are independent: fetch them in parallel.
+    const [seller, store, rawVariants, benefitsEntry] = await Promise.all([
+      sellerModel
+        .findOne({ _id: product.sellerId })
+        .select('name isVerified')
+        .lean(),
+      storeModel
+        .findOne({ _id: product.storeId, isDelete: false })
+        .select('slug name logo followersCount status')
+        .lean(),
+      productVariantModel
+        .find({
+          productId: product._id.toString(),
+          status: 'active',
+          isDelete: false,
+        })
+        .lean(),
+      this.subscriptionBenefits.getActiveBenefits(customerId, product.storeId),
+    ]);
 
     // A suspended/rejected store's product must not be directly viewable
     // even by id — getProductsByCategoryId/searchProducts/getPublicStoreProducts
@@ -1423,20 +1420,6 @@ export class ProductsService {
       };
     }
 
-    // 4️⃣ Get variants — must key off the resolved document's real _id, not
-    // the route param (which may be a slug string, not the product's id).
-    const rawVariants = await productVariantModel
-      .find({
-        productId: product._id.toString(),
-        status: 'active',
-        isDelete: false,
-      })
-      .lean();
-
-    const benefitsEntry = await this.subscriptionBenefits.getActiveBenefits(
-      customerId,
-      product.storeId,
-    );
     const pricedVariants = this.applySubscriberPricing(
       rawVariants,
       product,

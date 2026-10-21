@@ -49,7 +49,16 @@ function hideAiReview<T>(product: T): T {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   // A seller's unapproved edit (private file ids included) and the rejection note are seller/admin-only too.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { aiReview, pendingEdit, lastEditRejection, ...rest } = product as Record<string, unknown>;
+  const {
+    aiReview, pendingEdit, lastEditRejection,
+    flags, flagReason, contactMatches, reviewNote, reviewedAt, removedByAdmin,
+    isDelete, isTest, ratingSum, normalizedCustomLevel, aiReviewSummary,
+    ...rest
+  } = product as Record<string, unknown>;
+  // Internal moderation/bookkeeping fields are never part of a public product (`previousSlugs` is kept: the product
+  // page uses it to redirect an old URL, `trust` is the public badge below).
+  void flags; void flagReason; void contactMatches; void reviewNote; void reviewedAt; void removedByAdmin;
+  void isDelete; void isTest; void ratingSum; void normalizedCustomLevel; void aiReviewSummary;
   // The trust badge is public; who set it (an admin id) is not.
   const trust = rest.trust as Record<string, unknown> | null | undefined;
   if (trust && typeof trust === 'object' && 'reviewedBy' in trust) {

@@ -17,15 +17,46 @@ function sameLine(a: unknown, b: unknown): boolean {
  * The only address fields a user may write. updateAddress used to `$set` the whole request body, so a user could
  * rewrite `userId` (hand an address to someone else), flip `isDelete` (resurrect a deleted one) or set `status`.
  */
-export function pickAddressUpdate(body: unknown): Record<string, unknown> {
+export const PK_PROVINCES = ['Sindh', 'Punjab', 'Khyber Pakhtunkhwa', 'Balochistan', 'Islamabad Capital Territory', 'Gilgit-Baltistan', 'Azad Kashmir'] as const;
+
+/** 03XXXXXXXXX / +923XXXXXXXXX / 923XXXXXXXXX (spaces and dashes ignored) -> +923XXXXXXXXX, else null. */
+export function normalizePkPhone(raw: string): string | null {
+  const s = raw.replace(/[\s-]/g, '');
+  const m = /^(?:\+92|92|0)(3\d{9})$/.exec(s);
+  return m ? `+92${m[1]}` : null;
+}
+
+/** Per-field format check for one address field; returns an error message or null. */
+function addressFieldError(key: string, v: string): string | null {
+  const t = v.trim();
+  switch (key) {
+    case 'phoneNumber': return normalizePkPhone(t) ? null : 'Enter a valid Pakistani mobile number (03XXXXXXXXX or +923XXXXXXXXX)';
+    case 'zipCode': return /^\d{5}$/.test(t) ? null : 'Postal code must be exactly 5 digits';
+    case 'city': return /^[\p{L}][\p{L} ]*$/u.test(t) && t.length >= 2 ? null : 'City must be letters and spaces, at least 2 characters';
+    case 'addressLine1': return t.length >= 5 ? null : 'Address must be at least 5 characters';
+    case 'state': return (PK_PROVINCES as readonly string[]).includes(t) ? null : 'Select a valid province';
+    default: return null;
+  }
+}
+
+export function pickAddressUpdate(body: unknown, requireAll = false): Record<string, unknown> {
   const src = (body ?? {}) as Record<string, unknown>;
   const out: Record<string, unknown> = {};
+  const errors: Record<string, string> = {};
   for (const key of ADDRESS_TEXT_FIELDS) {
-    if (src[key] === undefined) continue;
+    if (src[key] === undefined) {
+      if (requireAll && ['phoneNumber', 'zipCode', 'city', 'addressLine1', 'state'].includes(key)) errors[key] = 'This field is required';
+      continue;
+    }
     const v = src[key];
     if (v === null && (key === 'addressLine2' || key === 'country')) { out[key] = null; continue; }
     if (typeof v !== 'string' || v.length > 200) throw new BadRequestException(`${key} must be a string of at most 200 characters`);
-    out[key] = v;
+    const err = addressFieldError(key, v);
+    if (err) { errors[key] = err; continue; }
+    out[key] = key === 'phoneNumber' ? normalizePkPhone(v.trim()) : ['zipCode', 'city', 'addressLine1', 'state'].includes(key) ? v.trim() : v;
+  }
+  if (Object.keys(errors).length) {
+    throw new BadRequestException({ message: Object.values(errors)[0], errors });
   }
   for (const key of ['latitude', 'longitude'] as const) {
     if (src[key] === undefined) continue;
@@ -56,7 +87,7 @@ export class AddressService {
         throw new NotFoundException('No buyer account found for this sign-in. Please switch to your buyer account to continue.');
       }
 
-      pickAddressUpdate(body); // validates types + lengths (throws 400)
+      const clean = pickAddressUpdate(body, true) as Record<string, any>; // validates types, lengths and formats (throws 400 with per-field `errors`)
       // A user's first address is always their default.
       const existingCount = await this.databaseService.repositories.addressModel.countDocuments({ userId, isDelete: false });
       if (existingCount >= 20) throw new BadRequestException('You can save up to 20 addresses. Delete one first.');
@@ -74,12 +105,12 @@ export class AddressService {
   userId,
   label: body.label, // Home, Work, Other
   recipientName: body.recipientName,
-  phoneNumber: body.phoneNumber,
-  addressLine1: body.addressLine1,
-  addressLine2: sameLine(body.addressLine1, body.addressLine2) ? null : (body.addressLine2 || null),
-  state: body.state,
-  city: body.city,
-  zipCode: body.zipCode,
+  phoneNumber: clean.phoneNumber,
+  addressLine1: clean.addressLine1,
+  addressLine2: sameLine(clean.addressLine1, body.addressLine2) ? null : (body.addressLine2 || null),
+  state: clean.state,
+  city: clean.city,
+  zipCode: clean.zipCode,
   country: body.country || null,
   latitude: body.latitude ?? null,
   longitude: body.longitude ?? null,
