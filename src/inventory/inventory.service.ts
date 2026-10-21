@@ -22,13 +22,11 @@ export class InventoryService {
     const { productModel, productVariantModel, storeModel } =
       this.databaseService.repositories;
 
-    // seller ka store he ya nahi
-    const store = await storeModel.findOne({
-      _id: storeId,
-      sellerId,
-      isDelete: false,
-    });
-    if (!store) throw new ForbiddenException('Store not found or unauthorized');
+    // seller ka store he ya nahi - checked in parallel with the data reads below (every read is scoped by
+    // storeId + sellerId, so nothing leaks before the check throws); this saves one DB round trip.
+    const storeCheck = storeModel.exists({ _id: storeId, sellerId, isDelete: false });
+    // Store-wide, unfiltered stats (own two queries, independent of the page below)
+    const statsPromise = this.computeStockStats(storeId, sellerId);
 
     // filters
     const filter: any = { storeId, sellerId, isDelete: false };
@@ -58,21 +56,28 @@ export class InventoryService {
     const limit = clampInt(query.limit, 10, 1, 100);
     const skip = (page - 1) * limit;
 
-    const totalProducts = await productModel.countDocuments(filter);
+    const pageProducts = async () => {
+      const found = await productModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean();
+      // har product ke variants fetch karo
+      const ids = found.map((p: any) => p._id.toString());
+      const variants = ids.length
+        ? await productVariantModel.find({ productId: { $in: ids }, isDelete: false }).lean()
+        : [];
+      return { found, variants };
+    };
+    const [store, totalProducts, { found: products, variants: allVariants }, stats] = await Promise.all([
+      storeCheck,
+      productModel.countDocuments(filter),
+      pageProducts(),
+      statsPromise,
+    ]);
+    if (!store) throw new ForbiddenException('Store not found or unauthorized');
     const totalPages = Math.ceil(totalProducts / limit);
-
-    const products = await productModel
-      .find(filter)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
-
-    // har product ke variants fetch karo
-    const productIds = products.map((p: any) => p._id.toString());
-    const allVariants = await productVariantModel
-      .find({ productId: { $in: productIds }, isDelete: false })
-      .lean();
 
     // productId → variants map
     const variantMap: Record<string, any[]> = {};
@@ -80,9 +85,6 @@ export class InventoryService {
       if (!variantMap[v.productId]) variantMap[v.productId] = [];
       variantMap[v.productId].push(v);
     }
-
-    // Store-wide, unfiltered stats (one query + one threshold; see computeStockStats)
-    const stats = await this.computeStockStats(storeId, sellerId);
 
     const productList = products.map((product: any) => {
       const variants = variantMap[product._id.toString()] || [];
