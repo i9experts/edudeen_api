@@ -85,6 +85,27 @@ describe('AuthService — security', () => {
       expect(res.data.user.id).toBe('acc-1');
     });
 
+    it('drops the password, OTP and sessions of an UNVERIFIED account the real owner just proved (pre-hijack guard)', async () => {
+      const pre = makeAccount({ email: 'owner@school.edu', isVerified: false, password: 'attacker-hash', otp: 'hash', otpExpiresAt: new Date(), tokenVersion: 2 });
+      setup((q) => (q.email instanceof RegExp && q.email.test(pre.email) ? pre : null));
+      mockGoogle({ sub: 'owner-sub', email: 'owner@school.edu', email_verified: true });
+      await service.socialLogin({ authProvider: 'google', socialId: 'owner-sub', token: 'tok' } as any);
+      expect(pre.isVerified).toBe(true);
+      expect(pre.password).toBeUndefined();
+      expect(pre.otp).toBeNull();
+      expect(pre.otpExpiresAt).toBeNull();
+      expect(pre.tokenVersion).toBeGreaterThan(2);
+    });
+
+    it('keeps the password and sessions of an already VERIFIED account when it signs in with Google', async () => {
+      const owner = makeAccount({ email: 'owner@school.edu', isVerified: true, password: 'real-hash', tokenVersion: 4 });
+      setup((q) => (q.email instanceof RegExp && q.email.test(owner.email) ? owner : null));
+      mockGoogle({ sub: 'owner-sub', email: 'owner@school.edu', email_verified: true });
+      await service.socialLogin({ authProvider: 'google', socialId: 'owner-sub', token: 'tok' } as any);
+      expect(owner.password).toBe('real-hash');
+      expect(owner.tokenVersion).toBe(4);
+    });
+
     it('rejects a token whose subject does not match socialId', async () => {
       setup(() => null);
       mockGoogle({ sub: 'someone-else', email: 'a@b.com', email_verified: true });
