@@ -704,10 +704,40 @@ export class FinanceService {
     };
   }
 
+  /** Per-type validation of the merged method values. Normalises accountNumber (IBAN → upper, no spaces) in place. */
+  private validatePayoutMethodFields(v: {
+    type: string; currency: string; bankName?: string | null; accountHolder?: string | null;
+    accountNumber?: string | null; externalAccountId?: string | null;
+  }) {
+    const errors: string[] = [];
+    const clean = (s?: string | null) => (s ?? '').trim();
+    if (v.type === 'bank_transfer') {
+      if (!clean(v.bankName)) errors.push('Bank name is required');
+      if (!clean(v.accountHolder)) errors.push('Account holder name is required');
+      if (v.currency === 'PKR') {
+        const iban = clean(v.accountNumber).replace(/\s+/g, '').toUpperCase();
+        if (!/^PK\d{2}[A-Z]{4}\d{16}$/.test(iban)) errors.push('A valid Pakistani IBAN is required (e.g. PK36SCBL0000001123456702)');
+        v.accountNumber = iban;
+      } else if (!clean(v.accountNumber)) {
+        errors.push('Account number is required');
+      }
+    } else if (v.type === 'jazzcash' || v.type === 'easypaisa') {
+      if (!clean(v.accountNumber)) errors.push('Mobile account number is required');
+    } else if (v.type === 'paypal') {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(v.externalAccountId))) errors.push('A valid PayPal email is required');
+    } else if (v.type === 'stripe') {
+      if (!/^acct_[A-Za-z0-9]+$/.test(clean(v.externalAccountId))) errors.push('A valid Stripe connected account id (acct_...) is required');
+    }
+    if (errors.length) throw new BadRequestException(errors.length === 1 ? errors[0] : errors);
+  }
+
   async addPayoutMethod(sellerId: string, storeId: string, dto: AddPayoutMethodDto) {
     await this.verifyStoreOwnership(sellerId, storeId);
 
     const currency = dto.currency ?? (this.PKR_METHOD_TYPES.includes(dto.type) ? 'PKR' : 'USD');
+    const fields = { type: dto.type, currency, bankName: dto.bankName, accountHolder: dto.accountHolder, accountNumber: dto.accountNumber, externalAccountId: dto.externalAccountId };
+    this.validatePayoutMethodFields(fields);
+    dto.accountNumber = fields.accountNumber || undefined;
     // "Default" is scoped per currency — a store can hold a USD wallet and a
     // PKR wallet at once, each needing its own default payout method, so
     // adding a store's first-ever PKR method (say) must not touch whichever
@@ -810,6 +840,26 @@ export class FinanceService {
     const method = await this.methodModel.findOne({ _id: methodId, storeId });
     if (!method) throw new NotFoundException('Payout method not found');
 
+    // Validate the merged result so partial updates can't blank required fields.
+    const merged = {
+      type: method.type, currency: dto.currency ?? method.currency,
+      bankName: dto.bankName !== undefined ? dto.bankName : method.bankName,
+      accountHolder: dto.accountHolder !== undefined ? dto.accountHolder : method.accountHolder,
+      // Full number is encrypted; when not re-sent, only validate the rest.
+      accountNumber: dto.accountNumber ?? undefined as string | undefined,
+      externalAccountId: dto.externalAccountId !== undefined ? dto.externalAccountId : method.externalAccountId,
+    };
+    if (!dto.accountNumber && method.accountNumberEnc) merged.accountNumber = 'stored';
+    const needsAcct = method.type === 'bank_transfer' || method.type === 'jazzcash' || method.type === 'easypaisa';
+    if (dto.accountNumber || !needsAcct || !method.accountNumberEnc) {
+      this.validatePayoutMethodFields(merged);
+      if (dto.accountNumber) dto.accountNumber = merged.accountNumber || undefined;
+    } else {
+      // account number untouched: validate the other fields with a placeholder that satisfies the IBAN/number check
+      const probe = { ...merged, accountNumber: merged.currency === 'PKR' && method.type === 'bank_transfer' ? 'PK00ABCD0000000000000000' : 'stored' };
+      this.validatePayoutMethodFields(probe);
+    }
+
     // Any change to the actual destination invalidates a prior admin
     // verification — otherwise a seller could get a method verified once,
     // then quietly swap in a different account/routing number afterwards.
@@ -853,8 +903,15 @@ export class FinanceService {
     await this.verifyStoreOwnership(sellerId, storeId);
     const method = await this.methodModel.findOne({ _id: methodId, storeId });
     if (!method) throw new NotFoundException('Payout method not found');
-    if (method.isDefault) throw new BadRequestException('Cannot delete the default payout method — set another as default first');
+    if (method.isDefault) {
+      const pending = await this.payoutModel.exists({ storeId, payoutMethodId: methodId, status: { $in: ['pending', 'processing'] } });
+      if (pending) throw new BadRequestException('This is your default payout method and a payout to it is still pending — wait for it to complete first');
+    }
     await method.deleteOne();
+    if (method.isDefault) {
+      const next = await this.methodModel.findOne({ storeId, currency: method.currency }).sort({ createdAt: -1 });
+      if (next) { next.isDefault = true; await next.save(); }
+    }
     return { deleted: true };
   }
 

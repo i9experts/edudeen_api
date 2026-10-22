@@ -865,6 +865,14 @@ export class OrdersService {
       throw new ForbiddenException('Bank transfers are confirmed by the Edudeen team after reviewing the payment proof');
     }
 
+    // Cash can only have been collected once the parcel is on its way / handed over.
+    if (actor.role !== 'admin') {
+      const live = order.sellerOrders.filter((so: any) => so.status !== 'cancelled' && so.status !== 'refunded');
+      if (live.length === 0 || !live.every((so: any) => so.status === 'shipped' || so.status === 'delivered')) {
+        throw new BadRequestException('Cash can only be marked as collected after the order is shipped or delivered');
+      }
+    }
+
     const now = new Date();
     const updateData: any = {
       isPaid: true,

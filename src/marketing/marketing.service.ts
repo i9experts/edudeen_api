@@ -33,6 +33,24 @@ export class MarketingService {
     if (type === 'percentage' && value > 100) throw new BadRequestException('Percentage discount cannot exceed 100');
   }
 
+  /** Shared coupon checks (create + merged update). `expiresAt` null/undefined = no expiry. */
+  private assertCouponRules(code: string, type: string, value: number, minOrder: number | null | undefined, expiresAt: Date | null | undefined, checkExpiry: boolean) {
+    if (!/^[A-Z0-9_-]{3,20}$/.test(code)) throw new BadRequestException('Code must be 3-20 characters: letters, numbers, - or _');
+    this.assertDiscountValue(type, value);
+    if (type === 'fixed' && minOrder && value > minOrder) throw new BadRequestException('Fixed discount cannot be more than the minimum order amount');
+    if (checkExpiry && expiresAt) {
+      if (Number.isNaN(expiresAt.getTime())) throw new BadRequestException('Invalid expiry date');
+      if (expiresAt.getTime() < Date.now()) throw new BadRequestException('Expiry date cannot be in the past');
+    }
+  }
+
+  /** Computed, never stored: Expired > Paused > Active. */
+  private couponStatus(c: any): 'expired' | 'paused' | 'active' {
+    if (c.expiresAt && new Date(c.expiresAt).getTime() < Date.now()) return 'expired';
+    if (c.isActive === false) return 'paused';
+    return 'active';
+  }
+
   async createCoupon(sellerId: string, storeId: string, dto: CreateCouponDto, ip?: string, userAgent?: string) {
     const store = await this.verifyStoreOwnership(storeId, sellerId);
 
@@ -40,7 +58,7 @@ export class MarketingService {
     const existing = await this.r.couponModel.findOne({ storeId, code, isDelete: false });
     if (existing) throw new ConflictException(`Coupon code "${code}" already exists for this store`);
 
-    this.assertDiscountValue(dto.discountType, dto.discountValue);
+    this.assertCouponRules(code, dto.discountType, dto.discountValue, dto.minOrderAmount, dto.expiresAt ? new Date(dto.expiresAt) : null, true);
 
     const coupon = await this.r.couponModel.create({
       storeId,
@@ -72,7 +90,7 @@ export class MarketingService {
       userAgent,
     });
 
-    return { success: true, message: 'Coupon created', data: coupon };
+    return { success: true, message: 'Coupon created', data: { ...coupon.toObject(), status: this.couponStatus(coupon) } };
   }
 
   async getCoupons(sellerId: string, storeId: string, query: any) {
@@ -88,7 +106,7 @@ export class MarketingService {
     const total = await this.r.couponModel.countDocuments(filter);
     const coupons = await this.r.couponModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean();
 
-    return { success: true, data: { pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }, coupons } };
+    return { success: true, data: { pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }, coupons: coupons.map((c: any) => ({ ...c, status: this.couponStatus(c) })) } };
   }
 
   async updateCoupon(sellerId: string, storeId: string, couponId: string, dto: UpdateCouponDto, ip?: string, userAgent?: string) {
@@ -99,7 +117,9 @@ export class MarketingService {
 
     const mergedType = dto.discountType ?? coupon.discountType;
     const mergedValue = dto.discountValue ?? coupon.discountValue;
-    if (dto.discountType !== undefined || dto.discountValue !== undefined) this.assertDiscountValue(mergedType, mergedValue);
+    const mergedCode = dto.code !== undefined ? dto.code.trim().toUpperCase() : coupon.code;
+    const mergedMin = dto.minOrderAmount !== undefined ? dto.minOrderAmount : coupon.minOrderAmount;
+    this.assertCouponRules(mergedCode, mergedType, mergedValue, mergedMin, dto.expiresAt !== undefined ? new Date(dto.expiresAt) : coupon.expiresAt, dto.expiresAt !== undefined);
 
     const update: any = {};
     if (dto.code !== undefined) {
@@ -135,7 +155,7 @@ export class MarketingService {
       userAgent,
     });
 
-    return { success: true, message: 'Coupon updated', data: updated };
+    return { success: true, message: 'Coupon updated', data: updated ? { ...updated.toObject(), status: this.couponStatus(updated) } : updated };
   }
 
   async deleteCoupon(sellerId: string, storeId: string, couponId: string, ip?: string, userAgent?: string) {

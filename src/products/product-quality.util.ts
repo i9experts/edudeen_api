@@ -13,7 +13,8 @@ export const MIN_TITLE_LENGTH = 10;
 
 /** Trim, collapse spaces, capitalise the first letter ("class 5 maths workbook" -> "Class 5 maths workbook"). */
 export function normalizeTitle(raw: unknown): string {
-  const s = String(raw ?? '').replace(/\s+/g, ' ').trim();
+  // Titles are plain text: drop any HTML tags (and their stray angle brackets) before anything is stored.
+  const s = String(raw ?? '').replace(/<[^>]*>/g, ' ').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim();
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
