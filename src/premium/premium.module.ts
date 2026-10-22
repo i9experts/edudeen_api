@@ -1,6 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { Global, Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { AdminReauthModule } from '../admin-reauth/admin-reauth.module';
 import { AuthModule } from '../auth/auth.module';
 import { RedisModule } from '../redis/redis.module';
 import { UploadModule } from '../upload/upload.module';
@@ -22,7 +23,7 @@ import {
 @Global()
 @Module({
   imports: [
-    AuthModule, RedisModule, UploadModule, AdminConfigModule, ExchangeRateModule,
+    AdminReauthModule, AuthModule, RedisModule, UploadModule, AdminConfigModule, ExchangeRateModule,
     MongooseModule.forFeature([
       { name: PremiumPlan.name, schema: PremiumPlanSchema },
       { name: PremiumMembership.name, schema: PremiumMembershipSchema },

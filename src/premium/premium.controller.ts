@@ -6,6 +6,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { Throttle } from '@nestjs/throttler';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { AdminReauthGuard, RequireReauth } from '../admin-reauth/admin-reauth.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -73,7 +74,7 @@ export class PremiumController {
 
 @ApiTags('Edudeen Premium (admin)')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
 @Roles('admin')
 @Controller('api/admin/premium')
 export class AdminPremiumController {
@@ -94,14 +95,14 @@ export class AdminPremiumController {
   deletePlan(@Req() req: any, @Param('id') id: string) { return this.premium.adminDeletePlan(req.user.userId, id); }
 
   @Get('members') members(@Query() query: any) { return this.premium.adminListMembers(query); }
-  @UsePipes(PIPE) @Post('members/grant')
+  @RequireReauth() @UsePipes(PIPE) @Post('members/grant')
   grant(@Req() req: any, @Body() dto: GrantPremiumDto) { return this.premium.adminGrant(req.user.userId, dto); }
   @UsePipes(PIPE) @Post('members/:userId/revoke')
   revoke(@Req() req: any, @Param('userId') userId: string, @Body() dto: RevokePremiumDto) { return this.premium.adminRevoke(req.user.userId, userId, dto.reason); }
 
   @Get('payments') payments(@Query() query: any) { return this.premium.adminListPayments(query); }
   @Get('payments/:id/proof-url') proofUrl(@Param('id') id: string) { return this.premium.adminProofUrl(id); }
-  @Patch('payments/:id/approve') approve(@Req() req: any, @Param('id') id: string) { return this.premium.adminApprove(req.user.userId, id); }
+  @RequireReauth() @Patch('payments/:id/approve') approve(@Req() req: any, @Param('id') id: string) { return this.premium.adminApprove(req.user.userId, id); }
   @UsePipes(PIPE) @Patch('payments/:id/reject')
   reject(@Req() req: any, @Param('id') id: string, @Body() dto: RejectPremiumPaymentDto) { return this.premium.adminReject(req.user.userId, id, dto.reason); }
 }

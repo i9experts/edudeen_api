@@ -865,6 +865,12 @@ export class OrdersService {
       throw new ForbiddenException('Bank transfers are confirmed by the Edudeen team after reviewing the payment proof');
     }
 
+    // Even an admin cannot book a bank-transfer sale without an approved payment proof for this order (money must be seen).
+    if (actor.role === 'admin' && /bank/i.test(String(order.paymentType ?? ''))) {
+      const approved = await this.databaseService.repositories.manualPaymentProofModel.exists({ orderIds: orderId, status: 'approved' });
+      if (!approved) throw new BadRequestException('A bank-transfer order can only be marked paid after its payment proof is approved (Admin -> Payment proofs)');
+    }
+
     // Cash can only have been collected once the parcel is on its way / handed over.
     if (actor.role !== 'admin') {
       const live = order.sellerOrders.filter((so: any) => so.status !== 'cancelled' && so.status !== 'refunded');

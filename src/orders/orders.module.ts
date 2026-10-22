@@ -12,6 +12,7 @@ import { Module } from '@nestjs/common';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 import { AuthModule } from 'src/auth/auth.module';
+import { AdminReauthModule } from 'src/admin-reauth/admin-reauth.module';
 import { UploadModule } from 'src/upload/upload.module';
 import { ExchangeRateModule } from 'src/exchange-rate/exchange-rate.module';
 import { RedisModule } from 'src/redis/redis.module';
@@ -22,6 +23,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 
 @Module({
   imports: [
+    AdminReauthModule,
     AuthModule,
     UploadModule,
     RedisModule,

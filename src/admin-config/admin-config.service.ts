@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { auditDiff } from './config-audit.util';
 import { JwtService } from '@nestjs/jwt';
 import { blockingScope, maintenanceState, normalizeMaintenance, type MaintenanceSettings } from './maintenance.util';
 import { UpdateMaintenanceDto } from './dto/update-maintenance.dto';
@@ -172,7 +173,7 @@ export class AdminConfigService {
     return config.fxConfig;
   }
 
-  private async logChange(action: string, description: string, meta: AuditMeta) {
+  private async logChange(action: string, description: string, meta: AuditMeta, metadata?: Record<string, unknown>) {
     this.activityLogService.log({
       storeId: 'platform',
       category: 'settings',
@@ -182,7 +183,14 @@ export class AdminConfigService {
       actorRole: 'admin',
       ip: meta.ip,
       userAgent: meta.userAgent,
+      ...(metadata ? { metadata } : {}),
     });
+  }
+
+  /** Current stored section (bypasses the cache) so the audit shows the real 'before'. */
+  private async currentSection(path: string): Promise<Record<string, any> | null> {
+    const doc: any = await this.model.findOne().lean();
+    return (doc?.[path] as Record<string, any>) ?? null;
   }
 
   async updateFeatureFlags(dto: UpdateFeatureFlagsDto, meta: AuditMeta) {
@@ -247,13 +255,14 @@ export class AdminConfigService {
   }
 
   async updatePayoutConfig(dto: UpdatePayoutConfigDto, meta: AuditMeta) {
+    const diff = auditDiff(await this.currentSection('payoutConfig'), dto as any);
     const set: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) set[`payoutConfig.${key}`] = value;
     }
     const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
     this.invalidateCache();
-    await this.logChange('payout_config_updated', `Payout config updated: ${JSON.stringify(dto)}`, meta);
+    await this.logChange('payout_config_updated', `Payout config updated: ${diff.changed.join(', ') || 'no change'}`, meta, { before: diff.before, after: diff.after });
     return { success: true, message: 'Payout config updated', data: config };
   }
 
@@ -268,6 +277,7 @@ export class AdminConfigService {
         throw new BadRequestException(`usdToPkrRate must be between ${min ?? '-'} and ${max ?? '-'} (the FX sanity band). Update the FX config first if the market has really moved.`);
       }
     }
+    const diff = auditDiff(await this.currentSection('manualPaymentConfig'), dto as any);
     const set: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) set[`manualPaymentConfig.${key}`] = value;
@@ -275,7 +285,7 @@ export class AdminConfigService {
     const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
     this.invalidateCache();
     // Bank account numbers/IBAN intentionally omitted from the audit description — full values are in `dto`/DB, not duplicated into the activity log.
-    await this.logChange('manual_payment_config_updated', `Manual payment config updated (enabled=${config.manualPaymentConfig?.enabled}, rate=${config.manualPaymentConfig?.usdToPkrRate})`, meta);
+    await this.logChange('manual_payment_config_updated', `Platform payment account changed: ${diff.changed.join(', ') || 'no change'}`, meta, { before: diff.before, after: diff.after });
     return { success: true, message: 'Manual payment config updated', data: config };
   }
 
@@ -293,11 +303,15 @@ export class AdminConfigService {
       set[`platformFees.${type}`] = { mode: rule.mode, value: rule.value };
     }
     if (!Object.keys(set).length) throw new BadRequestException('Send a fee rule for digital and/or physical');
+    const feesBefore = await this.currentSection('platformFees');
     // A null/non-object platformFees cannot take dotted $set paths — normalise it first.
     await this.model.updateOne({ platformFees: null }, { $set: { platformFees: {} } });
     const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
     this.invalidateCache();
-    await this.logChange('platform_fees_updated', `Platform fees updated: ${JSON.stringify(dto)}`, meta);
+    await this.logChange('platform_fees_updated', `Platform fees updated: ${Object.keys(dto).filter((k) => (dto as any)[k]).join(', ')}`, meta, {
+      before: { digital: feesBefore?.digital ?? null, physical: feesBefore?.physical ?? null },
+      after: { digital: (config as any).platformFees?.digital ?? null, physical: (config as any).platformFees?.physical ?? null },
+    });
     return { success: true, message: 'Platform fees updated', data: config };
   }
 
@@ -311,13 +325,14 @@ export class AdminConfigService {
         throw new BadRequestException('sanityBandMinPKR must be lower than sanityBandMaxPKR');
       }
     }
+    const diff = auditDiff(await this.currentSection('fxConfig'), dto as any);
     const set: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) set[`fxConfig.${key}`] = value;
     }
     const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
     this.invalidateCache();
-    await this.logChange('fx_config_updated', `FX config updated: ${JSON.stringify(dto)}`, meta);
+    await this.logChange('fx_config_updated', `FX config updated: ${diff.changed.join(', ') || 'no change'}`, meta, { before: diff.before, after: diff.after });
     return { success: true, message: 'FX config updated', data: config };
   }
 

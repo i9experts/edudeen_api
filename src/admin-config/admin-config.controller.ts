@@ -3,7 +3,7 @@ import { Body, Controller, Get, Put, Patch, Req, UseGuards, UsePipes, Validation
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { AdminReauthGuard } from '../admin-reauth/admin-reauth.guard';
+import { AdminReauthGuard, RequireReauth } from '../admin-reauth/admin-reauth.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { AdminConfigService } from './admin-config.service';
 import { UpdateFeatureFlagsDto } from './dto/update-feature-flags.dto';
@@ -68,6 +68,8 @@ export class AdminConfigController {
     });
   }
 
+  @UseGuards(AdminReauthGuard)
+  @RequireReauth()
   @Put('payout')
   updatePayoutConfig(@Req() req: any, @Body() dto: UpdatePayoutConfigDto) {
     return this.adminConfigService.updatePayoutConfig(dto, {
@@ -86,6 +88,8 @@ export class AdminConfigController {
     });
   }
 
+  @UseGuards(AdminReauthGuard)
+  @RequireReauth()
   @Put('manual-payment')
   updateManualPaymentConfig(@Req() req: any, @Body() dto: UpdateManualPaymentConfigDto) {
     return this.adminConfigService.updateManualPaymentConfig(dto, {
@@ -100,6 +104,8 @@ export class AdminConfigController {
     return this.adminConfigService.getPlatformFeesView();
   }
 
+  @UseGuards(AdminReauthGuard)
+  @RequireReauth()
   @Put('platform-fees')
   updatePlatformFees(@Req() req: any, @Body() dto: UpdatePlatformFeesDto) {
     return this.adminConfigService.updatePlatformFees(dto, {
@@ -109,6 +115,8 @@ export class AdminConfigController {
     });
   }
 
+  @UseGuards(AdminReauthGuard)
+  @RequireReauth()
   @Put('fx')
   updateFxConfig(@Req() req: any, @Body() dto: UpdateFxConfigDto) {
     return this.adminConfigService.updateFxConfig(dto, {

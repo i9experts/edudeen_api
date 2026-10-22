@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Post, Query, Req, UseGuards, UseInterceptors } from '@nestjs/common';
+import { AdminReauthGuard, RequireReauth } from '../admin-reauth/admin-reauth.guard';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -23,7 +24,7 @@ export class ExchangeRateController {
 
 @ApiTags('Admin FX')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
 @Roles('admin')
 @Controller('api/admin/fx')
 export class AdminFxController {
@@ -45,6 +46,7 @@ export class AdminFxController {
     return { success: true, data };
   }
 
+  @RequireReauth()
   @Post('override')
   @UseInterceptors(IdempotencyInterceptor)
   async override(@Req() req: any, @Body() dto: AdminOverrideFxRateDto) {

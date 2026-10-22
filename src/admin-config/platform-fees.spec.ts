@@ -4,6 +4,7 @@ import { AdminConfigService } from './admin-config.service';
 
 function make(config: any) {
   const model: any = {
+    findOne: jest.fn(() => ({ lean: async () => config })),
     findOneAndUpdate: jest.fn().mockResolvedValue(config),
     updateOne: jest.fn().mockResolvedValue({}),
   };

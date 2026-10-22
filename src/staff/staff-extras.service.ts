@@ -7,7 +7,7 @@ import { createHash } from 'crypto';
 import { Admin, AdminDocument } from '../admin/admin.schema';
 import { Payout, PayoutDocument, ManualPaymentProof, ManualPaymentProofDocument } from '../database/schema';
 import { StaffNote, StaffNoteDocument, StaffApproval, StaffApprovalDocument, StaffSettings, StaffSettingsDocument, NOTE_ENTITY_TYPES } from './staff.schemas';
-import { APPROVAL_ROUTES, APPROVAL_TTL_MS, approvalRouteFor, isBelowThreshold } from './approvals';
+import { APPROVAL_ROUTES, APPROVAL_TTL_MS, REQUIRED_APPROVAL_KEYS, approvalRouteFor, isBelowThreshold } from './approvals';
 import { newTotpSecret, otpauthUrl, verifyTotp } from './totp.util';
 import { openSecret, seal } from './staff.service';
 
@@ -56,13 +56,13 @@ export class StaffExtrasService {
   // ── Safety settings (owner) ─────────────────────────────────────────────────
   async getSettings() {
     const s = (await this.settingsModel.findOne().lean()) ?? { approvalsEnabled: true, approvalKinds: APPROVAL_ROUTES.map((r) => r.key) };
-    return { approvalsEnabled: s.approvalsEnabled !== false, approvalKinds: s.approvalKinds ?? [], approvalThresholdUSD: (s as any).approvalThresholdUSD ?? 0, approvalThresholdPKR: (s as any).approvalThresholdPKR ?? 0, available: APPROVAL_ROUTES.map((r) => ({ key: r.key, label: r.label })) };
+    return { approvalsEnabled: s.approvalsEnabled !== false, approvalKinds: [...new Set([...(s.approvalKinds ?? []), ...REQUIRED_APPROVAL_KEYS])], approvalThresholdUSD: (s as any).approvalThresholdUSD ?? 0, approvalThresholdPKR: (s as any).approvalThresholdPKR ?? 0, available: APPROVAL_ROUTES.map((r) => ({ key: r.key, label: r.label })) };
   }
   async saveSettings(dto: { approvalsEnabled?: boolean; approvalKinds?: string[]; approvalThresholdUSD?: number; approvalThresholdPKR?: number }) {
     const known = new Set(APPROVAL_ROUTES.map((r) => r.key));
     const set: any = {};
     if (typeof dto.approvalsEnabled === 'boolean') set.approvalsEnabled = dto.approvalsEnabled;
-    if (Array.isArray(dto.approvalKinds)) set.approvalKinds = [...new Set(dto.approvalKinds.filter((k) => known.has(k)))];
+    if (Array.isArray(dto.approvalKinds)) set.approvalKinds = [...new Set([...dto.approvalKinds.filter((k) => known.has(k)), ...REQUIRED_APPROVAL_KEYS])];
     for (const k of ['approvalThresholdUSD', 'approvalThresholdPKR'] as const) {
       const v = (dto as any)[k];
       if (v !== undefined) { if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1e9) throw new BadRequestException('Limits must be a number of 0 or more'); set[k] = Math.round(v * 100) / 100; }

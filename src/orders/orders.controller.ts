@@ -11,6 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Response } from 'express';
+import { AdminReauthGuard, RequireReauth } from '../admin-reauth/admin-reauth.guard';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -69,7 +70,8 @@ export class OrdersController {
     return this.ordersService.getDownloadUrls(userId, orderId, productId);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
+  @RequireReauth()
   @Roles('seller', 'admin')
   @Put('mark-paid/:orderId')
   async markPaid(@Req() req: any, @Param('orderId') orderId: string) {

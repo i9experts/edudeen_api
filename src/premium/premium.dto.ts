@@ -47,8 +47,8 @@ export class GrantPremiumDto {
   @IsOptional() @IsMongoId() userId?: string;
   @IsOptional() @IsString() @MaxLength(254) email?: string;
   @IsMongoId() planId: string;
-  /** Duration in days (1-3650). */
-  @IsInt() @Min(1) @Max(3650) days: number;
+  /** Duration in days (1-366). */
+  @IsInt() @Min(1) @Max(366) days: number;
 }
 
 export class RevokePremiumDto {

@@ -2,6 +2,7 @@
 import { Controller, Get, Post, Patch, Param, Body, Query, Req, Res, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { AdminReauthGuard, RequireReauth } from '../admin-reauth/admin-reauth.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -20,7 +21,7 @@ interface AdminReq { user: { userId: string }; ip?: string; headers: Record<stri
 
 @ApiTags('Admin Finance')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
 @Roles('admin')
 @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
 @Controller('api/admin/finance')
@@ -78,6 +79,7 @@ export class AdminFinanceController {
     return this.adminFinanceService.getSellerTransactions(storeId, query);
   }
 
+  @RequireReauth()
   @Post('sellers/:storeId/payouts/manual')
   createManualPayout(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: ManualPayoutDto) {
     return this.adminFinanceService.createManualPayout(storeId, req.user.userId, dto.amount, dto.payoutMethodId, dto.notes, req.ip, req.headers['user-agent']);
@@ -90,6 +92,7 @@ export class AdminFinanceController {
     return this.adminFinanceService.listCreditJobs({ status, page: page ? Number(page) : undefined, limit: limit ? Number(limit) : undefined });
   }
 
+  @RequireReauth()
   @Post('credit-jobs/:id/retry')
   retryCreditJob(@Req() req: any, @Param('id') id: string) {
     return this.adminFinanceService.retryCreditJob(id, req.user.userId, req.ip, req.headers['user-agent']);
@@ -130,6 +133,7 @@ export class AdminFinanceController {
     return this.adminFinanceService.retryPayout(payoutId, req.user.userId, req.ip, req.headers['user-agent']);
   }
 
+  @RequireReauth()
   @Post('process-clearing')
   triggerClearingBalances(@Req() req: AdminReq) {
     return this.adminFinanceService.triggerClearingBalances({ adminId: req.user.userId, ip: req.ip, userAgent: req.headers['user-agent'] });
@@ -147,6 +151,7 @@ export class AdminFinanceController {
     return this.adminFinanceService.getMonthlySettlement({ month, currency });
   }
 
+  @RequireReauth()
   @Post('monthly-settlement/run')
   runMonthlySettlement(@Req() req: any, @Body() dto: RunMonthlySettlementDto) {
     return this.adminFinanceService.runMonthlySettlement(req.user.userId, dto, req.ip, req.headers['user-agent']);
@@ -159,6 +164,7 @@ export class AdminFinanceController {
     return this.adminFinanceService.getPendingVerificationMethods();
   }
 
+  @RequireReauth()
   @Patch('sellers/:storeId/payout-methods/:methodId/verify')
   verifyPayoutMethod(
     @Req() req: any,
