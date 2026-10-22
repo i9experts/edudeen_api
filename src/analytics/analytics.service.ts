@@ -23,8 +23,6 @@ import {
   periodTotals as periodTotalsUtil,
   repeatBuyerPercent as repeatBuyerPercentUtil,
   repeatBuyerStats as repeatBuyerStatsUtil,
-  periodBuyerIds as periodBuyerIdsUtil,
-  returningBuyerSet as returningBuyerSetUtil,
   sellerOrderMatchStage,
 } from './utils/order-aggregation.util';
 import { toCsv } from './utils/csv.util';
@@ -144,10 +142,6 @@ export class AnalyticsService {
     return repeatBuyerPercentUtil(this.r.orderModel, from, to, scope);
   }
 
-  /** Buyers among `buyerIds` who already had a non-cancelled order within this scope before `from`. */
-  private async returningBuyerSet(scope: Record<string, any>, buyerIds: string[], from: Date): Promise<Set<string>> {
-    return returningBuyerSetUtil(this.r.orderModel, buyerIds, from, scope);
-  }
 
   // ═══════════════════════════════════════════════════════════════════════
   // TODAY SUMMARY — store dashboard's "Today's Revenue" live card. Compares
@@ -211,13 +205,10 @@ export class AnalyticsService {
         this.resolveScopeCurrency(storeIds),
       ]);
 
-      // Same query as repeatBuyerPercent: returning = buyers with >= 2 orders, new = the rest.
+      // One customer definition (see repeatBuyerStats): new + returning = unique buyers in the period.
       const repeatBuyerPct = repeatStats.percent;
       const returningCustomersCount = repeatStats.repeat;
-      // New = period buyers whose first-ever order with this scope falls in [from, to].
-      const periodBuyers = await periodBuyerIdsUtil(this.r.orderModel, from, to, scope);
-      const priorBuyers = await returningBuyerSetUtil(this.r.orderModel, periodBuyers, from, scope);
-      const newCustomersCount = periodBuyers.filter((id) => !priorBuyers.has(id)).length;
+      const newCustomersCount = repeatStats.total - repeatStats.repeat;
 
       const refundRatePercent = current.grossRevenue > 0 ? this.round((current.refundAmount / current.grossRevenue) * 100) : 0;
 

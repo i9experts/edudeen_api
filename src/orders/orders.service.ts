@@ -567,7 +567,7 @@ export class OrdersService {
       .select('name email phone')
       .lean();
 
-    // Show the variant's CURRENT SKU (what the seller sees on the product); the checkout snapshot is the fallback.
+    // Show the SKU snapshotted on the order at checkout (same value the buyer's invoice shows); the variant's live SKU is only a fallback for old orders without one.
     const variantIds = (so.items ?? []).map((it: any) => it.variantId).filter((id: any) => id && isValidObjectId(id));
     const liveSkus = new Map<string, string>();
     if (variantIds.length) {
@@ -605,7 +605,7 @@ export class OrdersService {
           variantId: it.variantId ?? null,
           name: it.name,
           image: it.image ?? null,
-          sku: (it.variantId && liveSkus.get(String(it.variantId))) || it.sku || null,
+          sku: it.sku || (it.variantId && liveSkus.get(String(it.variantId))) || null,
           type: it.type,
           productType: it.productType ?? null,
           options: it.options ?? [],

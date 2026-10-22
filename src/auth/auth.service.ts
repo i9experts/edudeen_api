@@ -354,6 +354,15 @@ export class AuthService {
 
       const existingUser = await userModel.findOne({ email });
       if (!existingUser) {
+        // Seller sign-in on a buyer-only account: tell the person what to do, but ONLY once they proved they
+        // own that buyer account (correct password) — unknown emails / wrong passwords stay generic.
+        if (role === 'seller') {
+          const buyer: any = await this.databaseService.repositories.userModel.findOne({ email });
+          const ok = buyer?.password ? await bcrypt.compare(String(password), buyer.password).catch(() => false) : false;
+          if (ok && buyer.isVerified && !buyer.isDelete && buyer.status !== 'deleted') {
+            throw new UnauthorizedException("This account doesn't have a seller store - sign in as Buyer or create a store");
+          }
+        }
         // Burn a bcrypt compare so an unknown email takes as long as a wrong password (no timing oracle).
         await bcrypt.compare(String(password), '$2b$10$CwTycUXWue0Thq9StjUM0uJ8.DoVDeUoKIqPV8oHEIWiBM4hJHTEa').catch(() => false);
         throw new UnauthorizedException('Invalid email or password');
