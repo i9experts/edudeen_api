@@ -25,9 +25,12 @@ export const openSecret = (enc: string): string => {
   throw new Error('undecryptable');
 };
 
-/** Pure: why this staff account may not sign in right now (null = fine). Owners are never blocked here. */
+/** Pure: why this admin account may not sign in right now (null = fine). The wrong-code lock applies to owners too;
+ *  suspension / invite / expiry only concern staff. */
 export function staffBlockReason(a: { isStaff?: boolean; staffStatus?: string; accessExpiresAt?: Date | null; totpLockedUntil?: Date | null }, now = new Date()): string | null {
-  if (!a.isStaff) return null;
+  if (!a.isStaff) {
+    return a.totpLockedUntil && a.totpLockedUntil.getTime() > now.getTime() ? 'Too many wrong codes. Try again in a few minutes.' : null;
+  }
   if (a.staffStatus === 'suspended') return 'This staff account is suspended. Contact the owner.';
   if (a.staffStatus === 'invited') return 'Finish setting up your account from the invitation email first.';
   if (a.accessExpiresAt && a.accessExpiresAt.getTime() <= now.getTime()) return 'Your access period has ended. Contact the owner.';
@@ -240,6 +243,12 @@ export class StaffService {
     await a.save();
     inv.usedAt = new Date(); await inv.save();
     return { recoveryCodes: recovery };
+  }
+
+  /** Token refresh: a staff account that was suspended / expired / is outside its IP or hours must not mint a new session. */
+  assertSessionAllowed(a: any, ip?: string) {
+    const blocked = staffBlockReason(a) ?? (a.isStaff ? accessWindowViolation(a, ip) : null);
+    if (blocked) throw new UnauthorizedException(blocked);
   }
 
   /** Called by the login flow for staff after the password matched. Throws if the sign-in must not continue. */

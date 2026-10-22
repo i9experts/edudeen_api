@@ -16,11 +16,10 @@ import { RegisterDto } from './dto/register.dto';
 import { SocialLoginDto } from './dto/social-login.dto';
 import { LoginDto } from './dto/login.dto';
 import { AuthUpdateProfileDto } from './dto/update-profile.dto';
-import { CreateAdminDto } from './dto/create-admin.dto';
 import { OtpService } from 'src/otp/otp.service';
 import { DatabaseService } from 'src/database/databaseservice';
 import { OAuth2Client } from 'google-auth-library';
-import { createHmac, randomInt, timingSafeEqual } from 'crypto';
+import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'crypto';
 import * as appleSignin from 'apple-signin-auth';
 // import axios from 'axios';
 import { RedisService } from '../redis/redis.service';
@@ -139,11 +138,39 @@ export class AuthService {
   }
 
   private static readonly ACCESS_TTL_SECONDS = 24 * 60 * 60;
+  /** Admin/staff sessions are short: a stolen admin token is useful for hours, not a day. */
+  static readonly ADMIN_ACCESS_TTL_SECONDS = 2 * 60 * 60;
+  private static readonly REFRESH_TTL_SECONDS = 7 * 24 * 60 * 60;
+  /** Admin login: wrong passwords/codes per email before a lock, and how long it lasts. */
+  static readonly ADMIN_LOGIN_MAX_FAILURES = 5;
+  static readonly ADMIN_LOGIN_LOCK_SECONDS = 15 * 60;
+  private static readonly ADMIN_LOCKED_MESSAGE = 'Too many failed sign-in attempts. Try again in 15 minutes.';
+
+  /** Admin/staff sign-in lock, keyed by email (an unknown email counts too, so the lock reveals nothing). */
+  private static adminFailKey(email: string) {
+    return `admin-login-fail:${String(email ?? '').trim().toLowerCase()}`;
+  }
+
+  private async assertAdminNotLocked(email: string) {
+    if (!this.redisService.isConnected) return; // per-IP throttle still applies
+    const n = Number(await this.redisService.get(AuthService.adminFailKey(email))) || 0;
+    if (n >= AuthService.ADMIN_LOGIN_MAX_FAILURES) {
+      throw new HttpException(AuthService.ADMIN_LOCKED_MESSAGE, 429);
+    }
+  }
+
+  private async noteAdminFailure(email: string) {
+    if (!this.redisService.isConnected) return;
+    await this.redisService.incrWithTtl(AuthService.adminFailKey(email), AuthService.ADMIN_LOGIN_LOCK_SECONDS);
+  }
 
   /** Single place that mints a session. `typ` separates access from refresh
    *  tokens (and from order download tokens, which share JWT_SECRET) so
-   *  JwtStrategy can refuse anything that is not an access token. */
+   *  JwtStrategy can refuse anything that is not an access token.
+   *  Admin refresh tokens carry a `jti` that is kept in Redis and burnt on use (rotation). */
   async issueSession(account: any) {
+    const isAdmin = account.role === 'admin';
+    const accessTtl = isAdmin ? AuthService.ADMIN_ACCESS_TTL_SECONDS : AuthService.ACCESS_TTL_SECONDS;
     const base = {
       sub: account._id,
       email: account.email,
@@ -152,24 +179,27 @@ export class AuthService {
     };
     const accessToken = this.jwtService.sign(
       { ...base, typ: 'access' },
-      { expiresIn: AuthService.ACCESS_TTL_SECONDS },
+      { expiresIn: accessTtl },
     );
     await this.redisService.set(
       accessToken,
       account._id.toString(),
-      AuthService.ACCESS_TTL_SECONDS,
+      accessTtl,
     );
+    const jti = isAdmin ? randomUUID() : undefined;
     const refreshToken = this.jwtService.sign(
-      { ...base, typ: 'refresh' },
-      { expiresIn: '7d' },
+      { ...base, typ: 'refresh', ...(jti ? { jti } : {}) },
+      { expiresIn: AuthService.REFRESH_TTL_SECONDS },
     );
+    if (jti) await this.redisService.set(`admin-rt:${jti}`, account._id.toString(), AuthService.REFRESH_TTL_SECONDS);
     return { accessToken, refreshToken };
   }
 
   /** Exchanges a refresh token for a new session. Rejects anything that is
    *  not a refresh token, and any token issued before a suspend/reset
-   *  (tokenVersion mismatch). */
-  async refresh(refreshToken: string) {
+   *  (tokenVersion mismatch). Admin refresh tokens are single-use: the old one is burnt, and presenting one that
+   *  was already used (or revoked) ends every session of that admin (tokenVersion bump). */
+  async refresh(refreshToken: string, ip?: string) {
     let payload: any;
     try {
       payload = this.jwtService.verify(refreshToken);
@@ -190,6 +220,21 @@ export class AuthService {
     }
     if ((account.tokenVersion ?? 0) !== (payload.tokenVersion ?? 0)) {
       throw new UnauthorizedException('Session revoked, please login again');
+    }
+    if (payload.role === 'admin') {
+      // Suspension / expiry / IP / working hours are re-checked on every refresh, not only at login.
+      this.moduleRef?.get(StaffService, { strict: false })?.assertSessionAllowed(account, ip);
+      // Fail closed: without Redis a refresh token cannot be proven unused.
+      const consumed = payload.jti ? await this.redisService.consume(`admin-rt:${payload.jti}`) : false;
+      if (!consumed) {
+        if (payload.jti && this.redisService.isConnected) {
+          // Already used or revoked: treat as theft, end all sessions of this admin.
+          account.tokenVersion = (account.tokenVersion ?? 0) + 1;
+          await account.save();
+          this.logger.warn(`Admin refresh token reuse for ${account._id}: all sessions revoked`);
+        }
+        throw new UnauthorizedException('Session expired, please login again');
+      }
     }
     const tokens = await this.issueSession(account);
     return { success: true, message: 'Token refreshed', data: { token: tokens } };
@@ -235,7 +280,7 @@ export class AuthService {
       // RegisterDto.role is already restricted to 'user'|'seller' at the
       // validation layer, and there is deliberately no 'admin' branch here.
       // Admin accounts are created only via the protected
-      // POST /api/auth/admin/create-admin endpoint (see createAdmin() below).
+      // POST /api/auth/admin/create-admin endpoint (owner-only staff invites; the old create-admin endpoint was removed).
       let userModel;
 
       if (role === 'user') {
@@ -352,8 +397,12 @@ export class AuthService {
         throw new UnauthorizedException('Invalid user type');
       }
 
+      const isAdminLogin = role === 'admin';
+      if (isAdminLogin) await this.assertAdminNotLocked(email);
+
       const existingUser = await userModel.findOne({ email });
       if (!existingUser) {
+        if (isAdminLogin) await this.noteAdminFailure(email);
         // Seller sign-in on a buyer-only account: tell the person what to do, but ONLY once they proved they
         // own that buyer account (correct password) — unknown emails / wrong passwords stay generic.
         if (role === 'seller') {
@@ -387,6 +436,7 @@ export class AuthService {
         ? await bcrypt.compare(password, existingUser.password)
         : false;
       if (!isPasswordMatch) {
+        if (isAdminLogin) await this.noteAdminFailure(email);
         if (role === 'seller') {
           this.logSellerSecurityEvent(
             existingUser._id.toString(),
@@ -417,8 +467,15 @@ export class AuthService {
 
       // Staff (admin-panel team) must also pass: active + not expired + authenticator code.
       if (role === 'admin' && ((existingUser as any).isStaff || (existingUser as any).totpEnabled)) {
-        await this.moduleRef?.get(StaffService, { strict: false })?.gateLogin(existingUser as any, loginDto.totp, ip);
+        try {
+          await this.moduleRef?.get(StaffService, { strict: false })?.gateLogin(existingUser as any, loginDto.totp, ip);
+        } catch (e: any) {
+          const code = e?.getResponse?.()?.code;
+          if (code === 'TOTP_INVALID' || code === 'TOTP_REPLAY') await this.noteAdminFailure(email);
+          throw e;
+        }
       }
+      if (isAdminLogin) await this.redisService.del(AuthService.adminFailKey(email));
 
       if (role === 'seller') {
         this.logSellerSecurityEvent(
@@ -503,14 +560,14 @@ export class AuthService {
       // token some other app obtained for that person could be replayed here.
       const fbAppId = process.env.FACEBOOK_APP_ID;
       const fbSecret = process.env.FACEBOOK_APP_SECRET;
-      if (fbAppId && fbSecret) {
-        const dbg = await fetch(
-          `https://graph.facebook.com/debug_token?input_token=${encodeURIComponent(token)}&access_token=${encodeURIComponent(`${fbAppId}|${fbSecret}`)}`,
-        );
-        const info: any = (await dbg.json())?.data;
-        if (!info?.is_valid || String(info.app_id) !== String(fbAppId) || String(info.user_id) !== String(socialId)) {
-          throw new UnauthorizedException('Invalid Facebook token');
-        }
+      // Fail closed (like Google/Apple): without our app id + secret the token's audience cannot be checked.
+      if (!fbAppId || !fbSecret) throw new UnauthorizedException('Facebook sign-in is not configured');
+      const dbg = await fetch(
+        `https://graph.facebook.com/debug_token?input_token=${encodeURIComponent(token)}&access_token=${encodeURIComponent(`${fbAppId}|${fbSecret}`)}`,
+      );
+      const info: any = (await dbg.json())?.data;
+      if (!info?.is_valid || String(info.app_id) !== String(fbAppId) || String(info.user_id) !== String(socialId)) {
+        throw new UnauthorizedException('Invalid Facebook token');
       }
       const resp = await fetch(
         `https://graph.facebook.com/me?fields=id,email&access_token=${encodeURIComponent(token)}`,
@@ -769,22 +826,22 @@ export class AuthService {
     }
   }
 
-  // Deliberately still supports role:'admin' here (and in resetPassword
-  // below) — unlike signup/verifyOtp, this never creates an account. It
-  // only emails an OTP to the address already on file for an EXISTING
-  // record, so an attacker gains nothing by requesting it for someone
-  // else's admin email; removing it would just lock real admins out of
-  // self-service password recovery for no security benefit.
+  /** Admin/owner/staff accounts have NO e-mail-only password reset: whoever controls the mailbox would own the
+   *  panel. Owner: `npm run admin:reset-password` on the server. Staff: the owner re-invites them (Collaboration). */
+  private static readonly ADMIN_RESET_BLOCKED_MESSAGE =
+    'Password reset by e-mail is not available for admin accounts. Staff: ask the owner to re-send your invitation. Owner: use the server command admin:reset-password.';
+
   async forgotPassword(email: string, role: string) {
     try {
       let userModel;
 
-      if (role === 'user') {
+      if (role === 'admin') {
+        // Same answer for every email (nothing is sent, nothing is revealed).
+        throw new BadRequestException(AuthService.ADMIN_RESET_BLOCKED_MESSAGE);
+      } else if (role === 'user') {
         userModel = this.databaseService.repositories.userModel;
       } else if (role === 'seller') {
         userModel = this.databaseService.repositories.sellerModel;
-      } else if (role === 'admin') {
-        userModel = this.databaseService.repositories.adminModel;
       } else {
         throw new UnauthorizedException('Invalid user type');
       }
@@ -834,12 +891,12 @@ export class AuthService {
     try {
       let userModel;
 
-      if (role === 'user') {
+      if (role === 'admin') {
+        throw new BadRequestException(AuthService.ADMIN_RESET_BLOCKED_MESSAGE);
+      } else if (role === 'user') {
         userModel = this.databaseService.repositories.userModel;
       } else if (role === 'seller') {
         userModel = this.databaseService.repositories.sellerModel;
-      } else if (role === 'admin') {
-        userModel = this.databaseService.repositories.adminModel;
       } else {
         throw new UnauthorizedException('Invalid user type');
       }
@@ -959,66 +1016,6 @@ export class AuthService {
       };
     } catch (error) {
       throw this.mapError(error, 'Failed to fetch profile');
-    }
-  }
-
-  /** The only way an admin account can be created now that public
-   *  registration is restricted to 'user'|'seller'. Only reachable via
-   *  POST /api/auth/admin/create-admin, which is guarded by
-   *  JwtAuthGuard + Roles('admin') — so only an already-logged-in admin
-   *  can call it. Created pre-verified (no OTP round-trip needed, since
-   *  the caller is already a trusted, authenticated admin). */
-  async createAdmin(dto: CreateAdminDto, actor: { adminId: string; ip?: string; userAgent?: string }) {
-    try {
-      const adminModel = this.databaseService.repositories.adminModel;
-
-      const existing = await adminModel.findOne({ email: dto.email });
-      if (existing) {
-        throw new UnauthorizedException('An admin with this email already exists');
-      }
-
-      const hashedPassword = await bcrypt.hash(dto.password, 10);
-
-      const admin = new adminModel({
-        name: dto.name,
-        email: dto.email,
-        password: hashedPassword,
-        phone: dto.phone,
-        address: dto.address,
-        role: 'admin',
-        isVerified: true,
-        status: 'active',
-      });
-      await admin.save();
-
-      try {
-        await this.activityLogService.log({
-          category: 'security',
-          action: 'admin_account_created',
-          description: `Admin account "${dto.name}" (${dto.email}) created`,
-          actorId: actor.adminId,
-          actorRole: 'admin',
-          targetId: String(admin._id),
-          targetType: 'admin',
-          ip: actor.ip,
-          userAgent: actor.userAgent,
-          isSecurityAlert: true,
-        });
-      } catch {
-        // logging must never break account creation
-      }
-
-      return {
-        message: 'Admin account created successfully',
-        success: true,
-        data: {
-          id: admin._id,
-          name: admin.name,
-          email: admin.email,
-        },
-      };
-    } catch (error) {
-      throw this.mapError(error, 'Failed to create admin account');
     }
   }
 }

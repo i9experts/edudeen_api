@@ -8,7 +8,6 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { SocialLoginDto } from './dto/social-login.dto';
 import { AuthUpdateProfileDto } from './dto/update-profile.dto';
-import { CreateAdminDto } from './dto/create-admin.dto';
 import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles } from '../auth/decorators/roles.decorator'
@@ -51,8 +50,8 @@ export class AuthController {
   // Exchanges a refresh token (typ: 'refresh') for a fresh access/refresh pair.
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post('refresh')
-  async refresh(@Body() dto: RefreshTokenDto) {
-    return this.authService.refresh(dto.refreshToken);
+  async refresh(@Req() req: any, @Body() dto: RefreshTokenDto) {
+    return this.authService.refresh(dto.refreshToken, req.ip);
   }
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
@@ -112,20 +111,4 @@ export class AuthController {
     const { userId, role } = req.user;
     return this.authService.editProfile(userId, role, updateProfileDto);
   }
-
-  // The only way a new admin account can be created — public registration
-  // no longer allows role:'admin' (see RegisterDto). Only an already
-  // logged-in admin can call this, so admin access can only ever be
-  // extended by an existing admin, never granted to oneself.
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
-  @Post('admin/create-admin')
-  async createAdmin(@Req() req: any, @Body() dto: CreateAdminDto) {
-    return this.authService.createAdmin(dto, {
-      adminId: req.user.userId,
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-    });
-  }
-
 }

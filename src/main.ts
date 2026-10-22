@@ -3,6 +3,7 @@ import { AdminConfigService } from './admin-config/admin-config.service';
 import { StaffService } from './staff/staff.service';
 import { StaffExtrasService } from './staff/staff-extras.service';
 import { createStaffAccessMiddleware } from './staff/staff-access.middleware';
+import { normalizeRequestPath } from './common/request-path.util';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import cookieParser from 'cookie-parser';
@@ -118,17 +119,29 @@ async function bootstrap() {
     return false;
   };
 
-  app.enableCors({
-    origin: (origin, cb) => {
-      if (!origin) return cb(null, true);
-      if (isAllowedOrigin(origin)) return cb(null, true);
-      console.log('Blocked Origin:', origin);
-      return cb(new Error('Not allowed by CORS'), false);
-    },
-    credentials: true,
-    methods: ['GET','HEAD','PUT','PATCH','POST','DELETE','OPTIONS'],
-    allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Accept','Origin','Idempotency-Key','X-Request-Id','X-Inline-Edit','X-Admin-Reauth'],
-    exposedHeaders: ['Content-Length','X-Request-Id'],
+  // Admin routes (/api/admin/*, /api/banners/admin/*) are only ever called from the main site, never from a seller
+  // store subdomain, so there only the fixed origins (+ ADMIN_ORIGINS, comma-separated, e.g. a dedicated admin domain)
+  // are trusted with credentials. Everything else keeps the wildcard-subdomain rule above.
+  const adminOrigins = new Set([
+    ...whitelist,
+    ...(process.env.ADMIN_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+  ]);
+  const isAdminPath = (p: string | undefined): boolean => {
+    const n = normalizeRequestPath(p ?? '');
+    return n === null || /^\/api\/admin(\/|$)/.test(n) || /^\/api\/banners\/admin(\/|$)/.test(n);
+  };
+
+  app.enableCors((req: any, cb: (err: Error | null, options?: any) => void) => {
+    const origin: string | undefined = req.headers?.origin;
+    const allowed = !origin || (isAdminPath(req.path ?? req.url?.split('?')[0]) ? adminOrigins.has(origin) : isAllowedOrigin(origin));
+    if (origin && !allowed) console.log('Blocked Origin:', origin);
+    cb(null, {
+      origin: allowed ? (origin ?? true) : false,
+      credentials: true,
+      methods: ['GET','HEAD','PUT','PATCH','POST','DELETE','OPTIONS'],
+      allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Accept','Origin','Idempotency-Key','X-Request-Id','X-Inline-Edit','X-Admin-Reauth'],
+      exposedHeaders: ['Content-Length','X-Request-Id'],
+    });
   });
 
   // Registered AFTER enableCors so the 503 carries CORS headers (otherwise the browser hides the maintenance JSON from the web app).

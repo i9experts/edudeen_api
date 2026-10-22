@@ -48,7 +48,11 @@ describe('totp', () => {
 
 describe('staff sign-in blocking', () => {
   const now = new Date('2026-10-16T12:00:00Z');
-  it('owners are never blocked here', () => { expect(staffBlockReason({ isStaff: false, staffStatus: 'suspended' }, now)).toBeNull(); });
+  it('owners are not blocked by staff status', () => { expect(staffBlockReason({ isStaff: false, staffStatus: 'suspended' }, now)).toBeNull(); });
+  it('the wrong-code lock applies to owners too, and ends', () => {
+    expect(staffBlockReason({ isStaff: false, totpLockedUntil: new Date('2026-10-16T12:10:00Z') }, now)).toMatch(/Too many/);
+    expect(staffBlockReason({ isStaff: false, totpLockedUntil: new Date('2026-10-16T11:00:00Z') }, now)).toBeNull();
+  });
   it('blocks suspended, not-yet-invited, expired and locked-out staff', () => {
     expect(staffBlockReason({ isStaff: true, staffStatus: 'suspended' }, now)).toMatch(/suspended/);
     expect(staffBlockReason({ isStaff: true, staffStatus: 'invited' }, now)).toMatch(/setting up/);

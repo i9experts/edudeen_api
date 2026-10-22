@@ -65,6 +65,12 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.del(key);
   }
 
+  /** Atomically deletes a key; true only for the caller that actually removed it (single-use tokens). */
+  async consume(key: string): Promise<boolean> {
+    if (!this._isConnected) return false;
+    return (await this.client.del(key)) > 0;
+  }
+
   async incrWithTtl(key: string, ttl: number): Promise<number> {
     if (!this._isConnected) return 0;
     const count = await this.client.incr(key);
