@@ -73,6 +73,10 @@ export class Campaign {
   @Prop({ type: Date, default: null })
   endNotifiedAt: Date | null;
 
+  // Set once sellers were told this campaign is live (claimed atomically so it is announced exactly once).
+  @Prop({ type: Date, default: null })
+  liveNotifiedAt: Date | null;
+
   // Controls rotation order in the buyer-facing DealsBanner when multiple
   // campaigns are active at once (0 = shown first) — same convention as
   // Banner.order. Admin-set, independent of endDate/createdAt.

@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { DatabaseService } from 'src/database/databaseservice';
 import { UploadService } from 'src/upload/upload.service';
 import { PaymentService } from 'src/payment/payment.service';
@@ -39,9 +40,13 @@ type ProofLike = Partial<ManualPaymentProof> & { toObject?: () => Partial<Manual
 
 const PROOF_FOLDER = 'private/payment-proofs';
 const PROOF_URL_TTL_SECONDS = 10 * 60;
+/** A rejected proof that is not fixed within this many days has its unpaid orders cancelled and the stock returned. */
+export const REJECTED_PROOF_HOLD_DAYS = 7;
 
 @Injectable()
 export class ManualPaymentsService {
+  private readonly logger = new Logger(ManualPaymentsService.name);
+
   constructor(
     private readonly db: DatabaseService,
     private readonly uploadService: UploadService,
@@ -174,23 +179,38 @@ export class ManualPaymentsService {
       throw new BadRequestException(`Cannot re-upload — this proof is currently "${proof.status}"`);
     }
     if (!file) throw new BadRequestException('A payment proof image (screenshot or receipt) is required');
+    if (proof.ordersReleasedAt) {
+      throw new BadRequestException('These orders were cancelled because the payment was not confirmed in time. Please place a new order.');
+    }
+    // The buyer may have cancelled the orders meanwhile: nothing left to pay for.
+    const openOrders = await this.orderModel.countDocuments({ _id: { $in: proof.orderIds }, isDelete: false, orderStatus: { $ne: 'cancelled' } });
+    if (openOrders === 0) throw new BadRequestException('The orders for this payment were cancelled. Please place a new order.');
 
     assertProofFile(file);
     const upload = await this.uploadService.uploadPrivateFile(file, PROOF_FOLDER);
 
-    proof.proofPublicId = upload.publicId;
-    proof.proofResourceType = upload.resourceType;
-    proof.proofImageUrl = null; // supersedes any legacy public URL
-    proof.transactionReference = dto.transactionReference ?? proof.transactionReference;
-    proof.senderName = dto.senderName ?? proof.senderName;
-    proof.status = 'pending';
-    proof.rejectionReason = null;
-    proof.reviewedByAdminId = null;
-    proof.reviewedAt = null;
-    proof.reuploadCount = (proof.reuploadCount ?? 0) + 1;
-    await proof.save();
+    // Atomic: two quick re-uploads (or a re-upload racing the stale sweep) cannot both win.
+    const updated = await this.proofModel.findOneAndUpdate(
+      { _id: proofId, userId, status: 'rejected', ordersReleasedAt: null },
+      {
+        $set: {
+          proofPublicId: upload.publicId,
+          proofResourceType: upload.resourceType,
+          proofImageUrl: null, // supersedes any legacy public URL
+          transactionReference: dto.transactionReference ?? proof.transactionReference,
+          senderName: dto.senderName ?? proof.senderName,
+          status: 'pending',
+          rejectionReason: null,
+          reviewedByAdminId: null,
+          reviewedAt: null,
+        },
+        $inc: { reuploadCount: 1 },
+      },
+      { returnDocument: 'after' },
+    );
+    if (!updated) throw new BadRequestException('This payment proof is no longer open for re-upload. Please refresh.');
 
-    return this.presentProof(proof);
+    return this.presentProof(updated);
   }
 
   async getProofStatus(userId: string, proofId: string) {
@@ -275,6 +295,7 @@ export class ManualPaymentsService {
 
     const isLive = (x: any) => !['cancelled', 'refunded'].includes(x?.status);
     let creditStatus: 'credited' | 'pending' = 'credited';
+    try {
     for (const order of payable) {
       const updateData: Record<string, any> = {
         isPaid: true,
@@ -316,6 +337,13 @@ export class ManualPaymentsService {
         if (credit?.creditStatus === 'pending') creditStatus = 'pending';
       }
     }
+    } catch (err: any) {
+      // Every step above is guarded/idempotent (paid-order update, per order+store credit), so
+      // putting the proof back in the queue lets the admin simply retry without double-crediting.
+      await releaseClaim().catch(() => {});
+      this.logger.error(`Manual payment approval ${proofId} failed midway: ${err?.message}`);
+      throw new BadRequestException('Could not finish approving this payment. It is back in the queue - please retry.');
+    }
 
     this.activityLogService.log({
       storeId: proof.storeId ?? 'platform',
@@ -341,6 +369,85 @@ export class ManualPaymentsService {
       .catch(() => {});
 
     return { ...(await this.presentProof(proof)), creditStatus };
+  }
+
+  /**
+   * Stock for a bank-transfer order is taken when it is placed. A proof that was
+   * rejected and never fixed would hold that stock forever, so after
+   * REJECTED_PROOF_HOLD_DAYS the still-unpaid orders are cancelled and restocked.
+   * Every write is guarded, so a second instance or a retry changes nothing twice.
+   */
+  @Cron('25 * * * *')
+  async releaseStaleRejectedProofs(now = new Date()): Promise<{ proofs: number; orders: number }> {
+    const cutoff = new Date(now.getTime() - REJECTED_PROOF_HOLD_DAYS * 24 * 60 * 60 * 1000);
+    let proofsDone = 0;
+    let ordersDone = 0;
+    try {
+      const stale: any[] = await this.proofModel
+        .find({ status: 'rejected', reviewedAt: { $lte: cutoff }, ordersReleasedAt: null })
+        .sort({ reviewedAt: 1 }).limit(100).lean();
+      for (const proof of stale) {
+        // Claim the proof first so a buyer re-upload (which needs ordersReleasedAt null) and this sweep exclude each other.
+        const claimed = await this.proofModel.findOneAndUpdate(
+          { _id: proof._id, status: 'rejected', ordersReleasedAt: null },
+          { $set: { ordersReleasedAt: now } },
+        );
+        if (!claimed) continue;
+        proofsDone++;
+        for (const orderId of proof.orderIds ?? []) {
+          try {
+            if (await this.cancelUnpaidOrder(orderId, 'Payment proof was not confirmed in time', now)) ordersDone++;
+          } catch (err: any) {
+            this.logger.error(`Could not release order ${orderId} of proof ${proof._id}: ${err?.message}`);
+          }
+        }
+        this.activityLogService.log({
+          storeId: proof.storeId ?? 'platform', category: 'finance', action: 'manual_payment_orders_released',
+          description: `Rejected bank-transfer proof not fixed in ${REJECTED_PROOF_HOLD_DAYS} days - unpaid order(s) cancelled and stock returned`,
+          actorRole: 'system', targetId: String(proof._id), targetType: 'manual_payment_proof',
+        });
+        this.notificationsService.notify({
+          recipientId: proof.userId, recipientRole: 'user', type: NOTIFICATION_TYPES.MANUAL_PAYMENT_REJECTED,
+          title: 'Order cancelled', body: 'We could not confirm your bank transfer in time, so the unpaid order was cancelled. You can place a new order any time.',
+          data: { proofId: String(proof._id), orderIds: proof.orderIds, link: '/account/orders' },
+        }).catch(() => {});
+      }
+    } catch (err: any) {
+      this.logger.error(`Stale rejected proof sweep failed: ${err?.message}`);
+    }
+    return { proofs: proofsDone, orders: ordersDone };
+  }
+
+  /** Cancels one still-unpaid order and puts physical stock back. Returns false when it was not eligible (paid / already cancelled). */
+  private async cancelUnpaidOrder(orderId: string, reason: string, now: Date): Promise<boolean> {
+    const order: any = await this.orderModel.findOne({ _id: orderId, isDelete: false, isPaid: { $ne: true }, orderStatus: { $ne: 'cancelled' } });
+    if (!order) return false;
+    const set: Record<string, any> = { orderStatus: 'cancelled' };
+    const toRestock: { variantId: string; quantity: number }[] = [];
+    order.sellerOrders.forEach((so: any, si: number) => {
+      if (so.status !== 'cancelled') { set[`sellerOrders.${si}.status`] = 'cancelled'; set[`sellerOrders.${si}.cancelledAt`] = now; set[`sellerOrders.${si}.cancelReason`] = reason; }
+      so.items.forEach((item: any, ii: number) => {
+        if (item.status === 'cancelled') return;
+        set[`sellerOrders.${si}.items.${ii}.status`] = 'cancelled';
+        set[`sellerOrders.${si}.items.${ii}.cancelledAt`] = now;
+        set[`sellerOrders.${si}.items.${ii}.cancelReason`] = reason;
+        if (item.type === 'physical' && item.variantId) toRestock.push({ variantId: item.variantId, quantity: item.quantity });
+      });
+    });
+    // The claim: only the caller that flips the still-unpaid order restocks it.
+    const won = await this.orderModel.findOneAndUpdate(
+      { _id: orderId, isPaid: { $ne: true }, orderStatus: { $ne: 'cancelled' } },
+      { $set: set },
+    );
+    if (!won) return false;
+    for (const r of toRestock) {
+      await this.db.repositories.productVariantModel.updateOne({ _id: r.variantId, unlimitedStock: { $ne: true } }, { $inc: { stock: r.quantity } });
+    }
+    for (const so of order.sellerOrders) {
+      const live = so.items.filter((i: any) => i.status !== 'cancelled');
+      if (live.length) await this.paymentService.restoreGiftCardForItems(order, so, live, `unpaid-release-${orderId}`);
+    }
+    return true;
   }
 
   async adminReject(proofId: string, adminId: string, reason: string, ip?: string, userAgent?: string, scope?: { storeId: string }) {
@@ -373,7 +480,7 @@ export class ManualPaymentsService {
         recipientRole: 'user',
         type: NOTIFICATION_TYPES.MANUAL_PAYMENT_REJECTED,
         title: 'Payment could not be verified',
-        body: `We couldn't verify your transfer: ${reason}. You can re-upload your proof or cancel the order.`,
+        body: `We couldn't verify your transfer: ${reason}. You can re-upload your proof or cancel the order. If it is not fixed within ${REJECTED_PROOF_HOLD_DAYS} days the unpaid order is cancelled automatically.`,
         data: { proofId, orderIds: proof.orderIds, reason, link: proof.orderIds?.length === 1 ? `/account/orders/${proof.orderIds[0]}` : '/account/orders' },
       })
       .catch(() => {});

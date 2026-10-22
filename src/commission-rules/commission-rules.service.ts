@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { EntitlementsService } from '../platform-plans/entitlements.service';
@@ -70,19 +70,41 @@ export class CommissionRulesService {
 
   // ── Global default ──────────────────────────────────────────────────────
 
+  /**
+   * Retire the active rule and create the new one without ever leaving two active:
+   * the retire is one atomic claim, and the partial unique index (one active rule per
+   * scope+store) rejects a concurrent second creator, which then retries on top.
+   * If the create fails for another reason the previous rule is put back.
+   */
+  private async replaceActiveRule(match: { scope: string; storeId: string | null }, data: Record<string, unknown>) {
+    let firstPrevious: any = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const previous: any = await (this.ruleModel as any).findOneAndUpdate(
+        { ...match, isActive: true },
+        { $set: { isActive: false, supersededAt: new Date() } },
+        { returnDocument: 'before' },
+      );
+      if (previous && !firstPrevious) firstPrevious = previous;
+      try {
+        const rule = await this.ruleModel.create(data);
+        return { rule, previous: firstPrevious };
+      } catch (err: any) {
+        if (err?.code === 11000) continue; // someone else created an active rule in between: retire it and go again
+        if (previous) {
+          await (this.ruleModel as any).updateOne({ _id: previous._id, isActive: false }, { $set: { isActive: true, supersededAt: null } }).catch(() => {});
+        }
+        throw err;
+      }
+    }
+    throw new ConflictException('Another admin changed this commission rate at the same moment. Reload and try again.');
+  }
+
   async getGlobalDefault() {
     return this.ruleModel.findOne({ scope: 'global', isActive: true }).lean();
   }
 
   async setGlobalDefault(rate: number, notes: string | undefined, adminId: string) {
-    const previous = await this.ruleModel.findOne({ scope: 'global', isActive: true });
-    if (previous) {
-      previous.isActive = false;
-      previous.supersededAt = new Date();
-      await previous.save();
-    }
-
-    const rule = await this.ruleModel.create({
+    const { rule, previous } = await this.replaceActiveRule({ scope: 'global', storeId: null }, {
       scope: 'global', storeId: null, rate,
       notes: notes ?? null, createdByAdminId: adminId, isActive: true,
     });
@@ -109,14 +131,7 @@ export class CommissionRulesService {
   async setSellerOverride(storeId: string, rate: number, notes: string | undefined, adminId: string) {
     await verifyStoreExists(this.storeModel, storeId);
 
-    const previous = await this.ruleModel.findOne({ scope: 'seller', storeId, isActive: true });
-    if (previous) {
-      previous.isActive = false;
-      previous.supersededAt = new Date();
-      await previous.save();
-    }
-
-    const rule = await this.ruleModel.create({
+    const { rule, previous } = await this.replaceActiveRule({ scope: 'seller', storeId }, {
       scope: 'seller', storeId, rate,
       notes: notes ?? null, createdByAdminId: adminId, isActive: true,
     });

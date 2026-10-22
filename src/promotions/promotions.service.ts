@@ -157,6 +157,17 @@ export class PromotionsService {
     return { success: true, data: requests };
   }
 
+  /** Refund owed for cancelling now: full before the run starts, pro-rated by remaining time while live, nothing after the end. */
+  proratedRefundUSD(request: { priceUSD: number; startAt: Date; endAt: Date }, now = new Date()): number {
+    const start = new Date(request.startAt).getTime();
+    const end = new Date(request.endAt).getTime();
+    const n = now.getTime();
+    if (n <= start) return request.priceUSD;
+    if (n >= end || end <= start) return 0;
+    const cents = Math.floor(request.priceUSD * 100 * ((end - n) / (end - start)));
+    return cents / 100;
+  }
+
   async cancel(sellerId: string, id: string) {
     const request = await this.model.findOne({ _id: id, sellerId });
     if (!request) throw new NotFoundException('Promotion request not found');
@@ -164,17 +175,39 @@ export class PromotionsService {
       throw new BadRequestException(`Cannot cancel a request in status "${request.status}"`);
     }
 
+    // Money first: if the seller paid, the refund must succeed before we mark it cancelled.
+    let refundedUSD = 0;
     if (request.paymentStatus === 'paid') {
-      await this.refund(request);
-    }
-    if (request.resultingBannerId) {
-      await this.bannerModel.findByIdAndUpdate(request.resultingBannerId, { $set: { status: 'expired', isActive: false } });
+      const owed = this.proratedRefundUSD(request);
+      if (owed > 0) {
+        const result = await this.refund(request, owed);
+        if (!result.ok) {
+          await this.alertRefundProblem(request, `Seller cancel: refund of $${owed} failed (${result.error})`);
+          throw new BadRequestException('We could not refund your payment right now, so the promotion was not cancelled. Please try again shortly or contact support.');
+        }
+        refundedUSD = result.amountUSD;
+      }
     }
 
-    request.status = 'cancelled';
-    await request.save();
-    this.log(request.storeId, 'promotion_request_cancelled', 'Seller cancelled the promotion request', sellerId, 'seller', id);
-    return { success: true, message: 'Promotion request cancelled', data: request };
+    const set: Record<string, unknown> = { status: 'cancelled' };
+    if (refundedUSD > 0) { set.paymentStatus = 'refunded'; set.refundedUSD = refundedUSD; }
+    // Atomic: only one cancel wins, and a request that went to another state meanwhile is left alone.
+    const cancelled = await this.model.findOneAndUpdate(
+      { _id: id, sellerId, status: { $in: ['pending', 'approved', 'active'] } },
+      { $set: set },
+      { new: true },
+    );
+    if (!cancelled) {
+      if (refundedUSD > 0) await this.alertRefundProblem(request, `Seller cancel raced with another change after a $${refundedUSD} refund; check this promotion's state`);
+      throw new BadRequestException('This request changed while cancelling. Please refresh and try again.');
+    }
+    const bannerId = cancelled.resultingBannerId || request.resultingBannerId;
+    if (bannerId) {
+      await this.bannerModel.findByIdAndUpdate(bannerId, { $set: { status: 'expired', isActive: false } });
+    }
+
+    this.log(request.storeId, 'promotion_request_cancelled', refundedUSD > 0 ? `Seller cancelled the promotion request (refunded $${refundedUSD})` : 'Seller cancelled the promotion request', sellerId, 'seller', id);
+    return { success: true, message: 'Promotion request cancelled', data: cancelled };
   }
 
   async timeline(sellerId: string, id: string) {
@@ -185,22 +218,29 @@ export class PromotionsService {
 
   // ── Admin review ──────────────────────────────────────────────────────────────
 
-  async adminList(status?: string) {
+  async adminList(status?: string, page = 1, limit = 100) {
     const filter: Record<string, unknown> = {};
     if (status) filter.status = status;
-    const requests = await this.model.find(filter).sort({ createdAt: -1 }).lean();
-    return { success: true, data: requests };
+    const take = Math.min(Math.max(Math.floor(Number(limit)) || 100, 1), 200);
+    const pageNo = Math.max(Math.floor(Number(page)) || 1, 1);
+    const [requests, total] = await Promise.all([
+      this.model.find(filter).sort({ createdAt: -1 }).skip((pageNo - 1) * take).limit(take).lean(),
+      this.model.countDocuments(filter),
+    ]);
+    return { success: true, data: requests, pagination: { page: pageNo, limit: take, total, totalPages: Math.ceil(total / take) } };
   }
 
   async approve(adminId: string, id: string) {
-    const request = await this.model.findById(id);
-    if (!request) throw new NotFoundException('Promotion request not found');
-    if (request.status !== 'pending') throw new BadRequestException('Only pending requests can be approved');
-
-    request.status = 'approved';
-    request.reviewedBy = adminId;
-    request.resolvedAt = new Date();
-    await request.save();
+    // Atomic: only a request that is still pending can be approved (two admins / double click).
+    const request = await this.model.findOneAndUpdate(
+      { _id: id, status: 'pending' },
+      { $set: { status: 'approved', reviewedBy: adminId, resolvedAt: new Date() } },
+      { new: true },
+    );
+    if (!request) {
+      if (!(await this.model.exists({ _id: id }))) throw new NotFoundException('Promotion request not found');
+      throw new BadRequestException('Only pending requests can be approved');
+    }
 
     this.log(request.storeId, 'promotion_request_approved', 'Promotion request approved', adminId, 'admin', id);
     this.notificationsService.notify({
@@ -215,15 +255,15 @@ export class PromotionsService {
 
   async reject(adminId: string, id: string, reason: string) {
     if (!reason?.trim()) throw new BadRequestException('rejectionReason is required');
-    const request = await this.model.findById(id);
-    if (!request) throw new NotFoundException('Promotion request not found');
-    if (request.status !== 'pending') throw new BadRequestException('Only pending requests can be rejected');
-
-    request.status = 'rejected';
-    request.rejectionReason = reason;
-    request.reviewedBy = adminId;
-    request.resolvedAt = new Date();
-    await request.save();
+    const request = await this.model.findOneAndUpdate(
+      { _id: id, status: 'pending' },
+      { $set: { status: 'rejected', rejectionReason: reason, reviewedBy: adminId, resolvedAt: new Date() } },
+      { new: true },
+    );
+    if (!request) {
+      if (!(await this.model.exists({ _id: id }))) throw new NotFoundException('Promotion request not found');
+      throw new BadRequestException('Only pending requests can be rejected');
+    }
 
     this.log(request.storeId, 'promotion_request_rejected', `Promotion request rejected: ${reason}`, adminId, 'admin', id);
     this.notificationsService.notify({
@@ -235,7 +275,6 @@ export class PromotionsService {
 
     return { success: true, message: 'Promotion request rejected', data: request };
   }
-
   // ── Payment ───────────────────────────────────────────────────────────────────
 
   async createPaymentIntent(sellerId: string, id: string) {
@@ -265,59 +304,108 @@ export class PromotionsService {
   }
 
   private async activatePaidRequest(request: any) {
-    // Guards against running twice — this is reachable from both the Stripe
-    // webhook (handlePaymentSucceeded) and the client-confirm path
-    // (confirmPayment), and either can legitimately race the other.
-    if (request.resultingBannerId) return;
+    // Reachable from the Stripe webhook, the client-confirm path and the cron,
+    // which can race. The claim is atomic: only the caller that flips
+    // approved -> active (with no banner yet) goes on to create the banner.
+    const claimed = await this.model.findOneAndUpdate(
+      { _id: request._id, status: 'approved', paymentStatus: 'paid', resultingBannerId: null },
+      { $set: { status: 'active' } },
+      { new: true },
+    );
+    if (!claimed) return;
 
-    // Resulting Banner is created once, directly, at the moment payment is
-    // confirmed (or immediately by the cron once startAt arrives) — not a
-    // second reconciliation pass that could drift from this request's data.
-    const currentCount = await this.bannerModel.countDocuments({ placement: request.placement });
-    const banner = await this.bannerModel.create({
-      bannerImage: request.creativeUrl,
-      publicId: request.creativePublicId,
-      urlOnTap: request.linkTarget,
-      placement: request.placement,
-      status: 'active',
-      isActive: true,
-      startAt: request.startAt,
-      endAt: request.endAt,
-      order: currentCount,
-    });
-    request.resultingBannerId = banner._id;
-    request.status = 'active';
-    await request.save();
+    let banner: any;
+    try {
+      const currentCount = await this.bannerModel.countDocuments({ placement: claimed.placement });
+      banner = await this.bannerModel.create({
+        bannerImage: claimed.creativeUrl,
+        publicId: claimed.creativePublicId,
+        urlOnTap: claimed.linkTarget,
+        placement: claimed.placement,
+        status: 'active',
+        isActive: true,
+        startAt: claimed.startAt,
+        endAt: claimed.endAt,
+        order: currentCount,
+      });
+    } catch (err: any) {
+      // Hand the claim back so the next cron tick retries.
+      await this.model.updateOne({ _id: claimed._id, status: 'active', resultingBannerId: null }, { $set: { status: 'approved' } });
+      this.logger.error(`Could not create banner for promotion ${claimed._id}: ${err?.message}`);
+      return;
+    }
 
-    this.log(request.storeId, 'promotion_request_live', 'Promotion went live', request.sellerId, 'seller', request._id.toString());
+    const linked = await this.model.updateOne(
+      { _id: claimed._id, status: 'active' },
+      { $set: { resultingBannerId: banner._id } },
+    );
+    if (!linked.modifiedCount) {
+      // Cancelled between the claim and now: do not leave an orphan banner live.
+      await this.bannerModel.findByIdAndUpdate(banner._id, { $set: { status: 'expired', isActive: false } });
+      return;
+    }
+
+    this.log(claimed.storeId, 'promotion_request_live', 'Promotion went live', claimed.sellerId, 'seller', String(claimed._id));
     this.notificationsService.notify({
-      recipientId: request.sellerId, recipientRole: 'seller',
+      recipientId: claimed.sellerId, recipientRole: 'seller',
       type: NOTIFICATION_TYPES.PROMOTION_GOING_LIVE,
-      title: 'Your promotion is live', body: `Your ${request.placement} promotion is now showing.`,
-      data: { promotionRequestId: request._id },
+      title: 'Your promotion is live', body: `Your ${claimed.placement} promotion is now showing.`,
+      data: { promotionRequestId: claimed._id },
     }).catch(() => {});
   }
 
-  // Shared by both activation triggers — the Stripe webhook (arrives async,
-  // seconds later, and needs local Stripe CLI forwarding to ever reach a dev
-  // machine) and the client-confirm path (confirmPayment, below), which
-  // verifies directly with Stripe right after the card form succeeds so the
-  // seller doesn't have to wait on/depend on a webhook for the demo to work.
-  // Safe to call from both — `paymentStatus` and `activatePaidRequest`'s own
-  // `resultingBannerId` guard make whichever one runs second a no-op.
-  private async markPaidAndMaybeActivate(request: any) {
-    request.paymentStatus = 'paid';
-    await request.save();
+  /** Tells admins a refund failed or a payment needs manual attention (activity log + e-mail). */
+  private async alertRefundProblem(request: any, message: string) {
+    this.activityLogService.log({
+      storeId: request.storeId, category: 'promotions', action: 'promotion_refund_alert',
+      description: message, actorRole: 'system', targetId: String(request._id), targetType: 'promotion_request',
+      isSecurityAlert: true, metadata: { promotionRequestId: String(request._id), priceUSD: request.priceUSD },
+    });
+    this.logger.error(`Promotion ${request._id}: ${message}`);
+    await this.notifyAdmins('Promotion payment needs attention', `<p>${message}</p><p>Promotion request: ${request._id} (store ${request.storeId}).</p>`);
+  }
+
+  // Shared by both activation triggers — the Stripe webhook and the client-confirm
+  // path (confirmPayment). Safe to call from both: the paid-claim below is atomic,
+  // so whichever runs second is a no-op.
+  // Returns 'paid' | 'already_paid' | 'refunded' (late payment on a request that
+  // is no longer approved: money sent back) | 'refund_failed' (admins alerted).
+  private async markPaidAndMaybeActivate(request: any, paymentIntentId?: string): Promise<'paid' | 'already_paid' | 'refunded' | 'refund_failed'> {
+    // Only an approved request that has not been paid can take payment.
+    const paid = await this.model.findOneAndUpdate(
+      { _id: request._id, status: 'approved', paymentStatus: { $in: ['pending', 'failed'] } },
+      { $set: { paymentStatus: 'paid' } },
+      { new: true },
+    );
+
+    if (!paid) {
+      const current: any = await this.model.findById(request._id);
+      if (!current) return 'already_paid';
+      if (current.paymentStatus === 'paid' || current.paymentStatus === 'refunded') return 'already_paid';
+      // Late payment: the request was cancelled / rejected / expired meanwhile. Return the money.
+      const piId = paymentIntentId || current.stripePaymentIntentId;
+      const result = await this.refund({ ...current.toObject(), stripePaymentIntentId: piId, _id: current._id }, current.priceUSD);
+      if (result.ok) {
+        await this.model.updateOne({ _id: current._id }, { $set: { paymentStatus: 'refunded', refundedUSD: result.amountUSD } });
+        await this.alertRefundProblem(current, `Payment of $${current.priceUSD} arrived for a promotion in status "${current.status}" and was refunded automatically.`);
+        return 'refunded';
+      }
+      await this.model.updateOne({ _id: current._id }, { $set: { paymentStatus: 'paid' } });
+      await this.alertRefundProblem(current, `Payment of $${current.priceUSD} arrived for a promotion in status "${current.status}" and the automatic refund FAILED (${result.error}). Refund it manually in Stripe.`);
+      return 'refund_failed';
+    }
+
     this.notificationsService.notify({
-      recipientId: request.sellerId, recipientRole: 'seller',
+      recipientId: paid.sellerId, recipientRole: 'seller',
       type: NOTIFICATION_TYPES.PROMOTION_PAYMENT_SUCCEEDED,
-      title: 'Payment received', body: `Payment of $${request.priceUSD} for your ${request.placement} promotion succeeded.`,
-      data: { promotionRequestId: request._id },
+      title: 'Payment received', body: `Payment of $${paid.priceUSD} for your ${paid.placement} promotion succeeded.`,
+      data: { promotionRequestId: paid._id },
     }).catch(() => {});
 
-    if (request.startAt.getTime() <= Date.now()) {
-      await this.activatePaidRequest(request);
+    if (paid.startAt.getTime() <= Date.now()) {
+      await this.activatePaidRequest(paid);
     }
+    return 'paid';
   }
 
   @OnEvent('stripe.payment_intent.succeeded')
@@ -325,16 +413,14 @@ export class PromotionsService {
     const requestId = paymentIntent.metadata?.promotionRequestId;
     if (!requestId) return; // not ours — another listener owns this event
     const request = await this.model.findById(requestId);
-    if (!request || request.paymentStatus === 'paid') return;
-    await this.markPaidAndMaybeActivate(request);
+    if (!request || request.paymentStatus === 'paid' || request.paymentStatus === 'refunded') return;
+    await this.markPaidAndMaybeActivate(request, paymentIntent.id);
   }
 
   // ── Client-confirm (called right after Stripe Elements confirms the card
   // payment) — verifies the PaymentIntent's real status directly with Stripe
   // (never trusts the client's word alone) and activates immediately instead
-  // of waiting on the webhook, which in local dev only arrives if Stripe CLI
-  // is forwarding to this machine. The webhook still runs too whenever it
-  // does arrive — this is a second, redundant trigger, not a replacement.
+  // of waiting on the webhook. The webhook still runs too whenever it arrives.
 
   async confirmPayment(sellerId: string, id: string) {
     if (!this.stripe) throw new BadRequestException('Online payments are not configured yet.');
@@ -348,10 +434,12 @@ export class PromotionsService {
       throw new BadRequestException(`Payment has not completed yet (status: ${paymentIntent.status}).`);
     }
 
-    await this.markPaidAndMaybeActivate(request);
-    return { success: true, message: 'Payment confirmed', data: request };
+    const outcome = await this.markPaidAndMaybeActivate(request, paymentIntent.id);
+    if (outcome === 'refunded') throw new BadRequestException(`This promotion is no longer open for payment (status: ${request.status}). Your payment was refunded.`);
+    if (outcome === 'refund_failed') throw new BadRequestException('This promotion is no longer open for payment. We are refunding your payment manually; support has been notified.');
+    const fresh = await this.model.findById(id);
+    return { success: true, message: 'Payment confirmed', data: fresh ?? request };
   }
-
   @OnEvent('stripe.payment_intent.payment_failed')
   async handlePaymentFailed(paymentIntent: any): Promise<void> {
     const requestId = paymentIntent.metadata?.promotionRequestId;
@@ -369,20 +457,34 @@ export class PromotionsService {
     }).catch(() => {});
   }
 
-  private async refund(request: any) {
-    if (!this.stripe || !request.stripePaymentIntentId) return;
+  /**
+   * Refund `amountUSD` of a paid promotion. Never double-refunds: if Stripe already
+   * holds a refund on the charge we treat it as done. Returns {ok:false} instead of
+   * swallowing the error so callers can refuse to change state.
+   */
+  private async refund(request: any, amountUSD: number): Promise<{ ok: true; amountUSD: number } | { ok: false; error: string }> {
+    if (!this.stripe) return { ok: false, error: 'Stripe is not configured' };
+    if (!request.stripePaymentIntentId) return { ok: false, error: 'no payment on file' };
     try {
       const pi = await this.stripe.paymentIntents.retrieve(request.stripePaymentIntentId);
       const chargeId = (pi as any).latest_charge;
-      if (chargeId) {
-        await this.stripe.refunds.create({ charge: chargeId }, { idempotencyKey: `promotion_refund_${request._id}` });
-      }
-      request.paymentStatus = 'refunded';
+      if (!chargeId) return { ok: false, error: 'no charge to refund' };
+      const existing = await this.stripe.refunds.list({ charge: chargeId, limit: 10 });
+      const alreadyCents = existing.data
+        .filter((r: any) => r.status !== 'failed' && r.status !== 'canceled')
+        .reduce((s: number, r: any) => s + (r.amount ?? 0), 0);
+      if (alreadyCents > 0) return { ok: true, amountUSD: alreadyCents / 100 };
+      const cents = Math.round(amountUSD * 100);
+      await this.stripe.refunds.create(
+        { charge: chargeId, amount: cents },
+        { idempotencyKey: `promotion_refund_${request._id}` },
+      );
+      return { ok: true, amountUSD: cents / 100 };
     } catch (err: any) {
       this.logger.error(`Refund failed for promotion request ${request._id}: ${err?.message}`);
+      return { ok: false, error: err?.message ?? 'refund error' };
     }
   }
-
   // ── Conflict detection (used by both the approval-time warning and the calendar) ──
 
   async checkConflicts(placement: PromotionPlacement, startAt: Date, endAt: Date, excludeId?: string) {

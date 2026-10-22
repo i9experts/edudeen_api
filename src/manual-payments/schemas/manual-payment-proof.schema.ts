@@ -53,9 +53,13 @@ export class ManualPaymentProof {
   // Incremented each time the buyer re-uploads after a rejection — lets
   // admins see "this is their 3rd attempt" at a glance.
   @Prop({ type: Number, default: 0 }) reuploadCount: number;
+
+  // Set when a rejected proof was never fixed and its unpaid orders were cancelled (stock returned).
+  @Prop({ type: Date, default: null }) ordersReleasedAt: Date | null;
 }
 
 export const ManualPaymentProofSchema = SchemaFactory.createForClass(ManualPaymentProof);
 ManualPaymentProofSchema.index({ userId: 1, createdAt: -1 });
 ManualPaymentProofSchema.index({ checkoutId: 1 });
 ManualPaymentProofSchema.index({ status: 1, createdAt: 1 });
+ManualPaymentProofSchema.index({ status: 1, reviewedAt: 1, ordersReleasedAt: 1 });

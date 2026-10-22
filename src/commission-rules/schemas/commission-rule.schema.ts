@@ -44,4 +44,6 @@ export class CommissionRule {
 
 export const CommissionRuleSchema = SchemaFactory.createForClass(CommissionRule);
 CommissionRuleSchema.index({ scope: 1, storeId: 1, isActive: 1 });
+// At most ONE active rule per scope+store (global rules have storeId null). A concurrent set can no longer leave two.
+CommissionRuleSchema.index({ scope: 1, storeId: 1 }, { unique: true, partialFilterExpression: { isActive: true }, name: 'one_active_rule_per_scope_store' });
 CommissionRuleSchema.index({ storeId: 1 });

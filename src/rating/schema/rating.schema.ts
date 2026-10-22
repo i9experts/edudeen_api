@@ -61,6 +61,10 @@ export class Rating {
   @Prop({ default: false })
   isFlagged!: boolean;
 
+  /** Role of whoever flagged it. Admin-flagged reviews can only be unflagged by an admin. */
+  @Prop({ type: String, default: null })
+  flaggedByRole!: string | null;
+
   @Prop({ default: false })
   isVerifiedPurchase!: boolean;
 

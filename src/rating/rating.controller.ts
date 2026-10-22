@@ -165,7 +165,7 @@ export class RatingController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('seller', 'admin')
+  @Roles('admin')
   @Delete('admin/:reviewId')
   async moderateDeleteReview(
     @Req() req: any,

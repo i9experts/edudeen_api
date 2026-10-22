@@ -409,24 +409,53 @@ export class PremiumService {
 
   // ── activation (shared by approval and admin grant) ─────────────────────
 
-  /** Makes the membership active; extends from the current period end when still running. */
+  /**
+   * Makes the membership active; extends from the current period end when still running.
+   * Read-then-write made atomic: the update only lands if the membership is still exactly as read
+   * (same status + period end); a concurrent approval/grant makes it re-read and extend on top of
+   * the other one instead of both writing from the same stale base.
+   */
   async activate(userId: string, plan: any, interval: 'monthly' | 'yearly', source: 'bank_transfer' | 'admin_grant' | 'stripe', days?: number) {
-    const now = new Date();
-    const existing: any = await this.membershipModel.findOne({ userId }).lean();
-    const running = !!existing && existing.status === 'active' && existing.currentPeriodEnd && new Date(existing.currentPeriodEnd) > now;
-    const base = running ? new Date(existing.currentPeriodEnd) : now;
-    const end = days ? new Date(base.getTime() + days * DAY) : addPeriod(base, interval);
     const planSnapshot = { name: plan.name, benefits: this.benefitsOf(plan.benefits) };
-    const m: any = await this.membershipModel.findOneAndUpdate(
-      { userId },
-      { $set: { planId: String(plan._id), planSnapshot, status: 'active', interval, startedAt: running && existing.startedAt ? existing.startedAt : now, currentPeriodEnd: end, source, cancelAtPeriodEnd: false, expiringNotifiedFor: null, expiredNotifiedAt: null } },
-      { upsert: true, returnDocument: 'after' },
-    ).lean();
-    await this.entitlements.invalidate(userId);
-    await this.issueMonthlyCoupon(userId, m, now).catch((e) => this.logger.warn(`coupon on activation failed: ${e?.message}`));
-    return m;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const now = new Date();
+      const existing: any = await this.membershipModel.findOne({ userId }).lean();
+      const running = !!existing && existing.status === 'active' && existing.currentPeriodEnd && new Date(existing.currentPeriodEnd) > now;
+      const base = running ? new Date(existing.currentPeriodEnd) : now;
+      const end = days ? new Date(base.getTime() + days * DAY) : addPeriod(base, interval);
+      const set = { planId: String(plan._id), planSnapshot, status: 'active', interval, startedAt: running && existing.startedAt ? existing.startedAt : now, currentPeriodEnd: end, source, cancelAtPeriodEnd: false, expiringNotifiedFor: null, expiredNotifiedAt: null };
+      let m: any = null;
+      try {
+        m = existing
+          ? await this.membershipModel.findOneAndUpdate({ _id: existing._id, status: existing.status, currentPeriodEnd: existing.currentPeriodEnd ?? null }, { $set: set }, { returnDocument: 'after' }).lean()
+          : await this.membershipModel.findOneAndUpdate({ userId }, { $set: set }, { upsert: true, returnDocument: 'after' }).lean();
+      } catch (err: any) {
+        if (err?.code !== 11000) throw err; // two first-time activations raced on the unique userId: re-read and extend
+      }
+      if (!m) continue;
+      await this.entitlements.invalidate(userId);
+      await this.reactivateMemberCoupons(userId, now).catch((e) => this.logger.warn(`coupon reactivation failed: ${e?.message}`));
+      await this.issueMonthlyCoupon(userId, m, now).catch((e) => this.logger.warn(`coupon on activation failed: ${e?.message}`));
+      return m;
+    }
+    throw new BadRequestException('The membership was changed at the same moment. Please retry.');
   }
 
+  /** Personal Premium coupons only work for a live member: switch the unused ones off when membership ends... */
+  private async deactivateMemberCoupons(userId: string) {
+    await this.db.repositories.couponModel.updateMany(
+      { ownerUserId: userId, platformFunded: true, isActive: true, usageCount: { $lt: 1 } },
+      { $set: { isActive: false } },
+    );
+  }
+
+  /** ...and back on (unused + not expired) if the same buyer becomes a member again. */
+  private async reactivateMemberCoupons(userId: string, now: Date) {
+    await this.db.repositories.couponModel.updateMany(
+      { ownerUserId: userId, platformFunded: true, isActive: false, isDelete: false, usageCount: { $lt: 1 }, expiresAt: { $gt: now } },
+      { $set: { isActive: true } },
+    );
+  }
   // ── admin: members, grant / revoke ───────────────────────────────────────
 
   async adminListMembers(query: any) {
@@ -476,6 +505,8 @@ export class PremiumService {
     const m = await this.membershipModel.findOneAndUpdate({ userId, status: 'active' }, { $set: { status: 'cancelled', currentPeriodEnd: new Date(), cancelAtPeriodEnd: false } }, { returnDocument: 'after' }).lean();
     if (!m) throw new NotFoundException('No active membership for this buyer');
     await this.entitlements.invalidate(userId);
+    // The member's unused personal coupons stop working with the membership (checkout also re-checks membership on apply).
+    await this.deactivateMemberCoupons(userId).catch((e) => this.logger.warn(`coupon deactivation on revoke failed: ${e?.message}`));
     await this.audit(adminId, 'premium_revoked', `Revoked Premium${reason ? `: ${reason}` : ''}`, userId, 'premium_membership', { reason: reason ?? null });
     void this.notifyUser(userId, NOTIFICATION_TYPES.PREMIUM_EXPIRED, 'Your Edudeen Premium ended', reason ? `Reason: ${reason}` : 'Your Premium membership has been ended by the Edudeen team.', { link: '/account/premium' });
     return { success: true, data: m };
@@ -584,6 +615,7 @@ export class PremiumService {
       if (!won) continue;
       expired++;
       await this.entitlements.invalidate(m.userId);
+      await this.deactivateMemberCoupons(m.userId).catch((e) => this.logger.warn(`coupon deactivation on expiry failed: ${e?.message}`));
       void this.notifyUser(m.userId, NOTIFICATION_TYPES.PREMIUM_EXPIRED, 'Your Edudeen Premium has ended',
         'Your membership period is over. Renew any time to get your member benefits back.', { link: '/account/premium' },
         notificationEmailShell('Your Premium membership has ended', '<p>Your Edudeen Premium period is over. Renew any time to get your member benefits back.</p>', { label: 'Renew Premium', url: `${WEB()}/account/premium` }));

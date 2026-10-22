@@ -23,8 +23,8 @@ export class AdminPromotionsController {
   constructor(private readonly promotionsService: PromotionsService) {}
 
   @Get()
-  list(@Query('status') status?: string) {
-    return this.promotionsService.adminList(status);
+  list(@Query('status') status?: string, @Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.promotionsService.adminList(status, Number(page) || 1, Number(limit) || 100);
   }
 
   @Get('analytics')

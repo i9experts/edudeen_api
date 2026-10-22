@@ -12,7 +12,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { PremiumService } from './premium.service';
 import {
-  CreatePremiumPlanDto, GrantPremiumDto, RejectPremiumPaymentDto, RevokePremiumDto, SubmitPremiumProofDto, SubscribePremiumDto, UpdatePremiumPlanDto,
+  CreatePremiumPlanDto, GrantPremiumDto, RejectPremiumPaymentDto, RevokePremiumDto, SubmitPremiumProofDto, SubscribePremiumDto, UpdatePremiumPlanDto, UpdatePremiumSettingsDto,
 } from './premium.dto';
 
 const PROOF_UPLOAD_OPTIONS = { storage: memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } };
@@ -84,7 +84,7 @@ export class AdminPremiumController {
 
   @Get('settings') settings() { return this.premium.adminGetSettings(); }
   @Put('settings')
-  updateSettings(@Req() req: any, @Body() body: any) { return this.premium.adminUpdateSettings(req.user.userId, body); }
+  updateSettings(@Req() req: any, @Body() body: UpdatePremiumSettingsDto) { return this.premium.adminUpdateSettings(req.user.userId, body); }
 
   @Get('plans') plans() { return this.premium.adminListPlans(); }
   @UsePipes(PIPE) @Post('plans')

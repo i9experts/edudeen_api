@@ -58,3 +58,15 @@ export class RevokePremiumDto {
 export class RejectPremiumPaymentDto {
   @IsString() @MinLength(3) @MaxLength(500) reason: string;
 }
+
+export class PremiumPlatformDiscountDto {
+  @IsOptional() @IsBoolean() enabled?: boolean;
+  @IsOptional() @IsNumber() @Min(0) @Max(30) percent?: number;
+}
+
+/** Admin -> Premium -> Platform offer. Every field optional (merged onto the saved settings). */
+export class UpdatePremiumSettingsDto {
+  @IsOptional() @ValidateNested() @Type(() => PremiumPlatformDiscountDto) platformDiscount?: PremiumPlatformDiscountDto;
+  @IsOptional() @IsNumber() @Min(0) @Max(30) premiumSellerFeePercent?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(50) minGapPercent?: number;
+}

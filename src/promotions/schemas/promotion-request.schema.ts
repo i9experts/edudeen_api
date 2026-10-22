@@ -87,6 +87,10 @@ export class PromotionRequest {
   @Prop({ type: Date, default: null })
   expiringSoonNotifiedAt: Date | null;
 
+  /** USD actually refunded to the seller (full, pro-rated on cancel, or a late-payment auto-refund). */
+  @Prop({ default: 0 })
+  refundedUSD: number;
+
   // Populated once approved+paid — the Banner row this request actually
   // produces, so admin's Banner placement management and this request stay
   // in sync (one direct creation, not a second reconciliation process).

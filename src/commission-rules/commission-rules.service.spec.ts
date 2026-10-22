@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { CommissionRulesService } from './commission-rules.service';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogService } from '../activity-log/activity-log.service';
@@ -26,6 +26,7 @@ describe('CommissionRulesService', () => {
       find: jest.fn().mockReturnValue({ sort: jest.fn().mockReturnValue({ skip: jest.fn().mockReturnValue({ limit: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }) }) }) }),
       countDocuments: jest.fn().mockResolvedValue(0),
       create: jest.fn().mockImplementation(async (doc: any) => ({ ...doc, save: jest.fn() })),
+      findOneAndUpdate: jest.fn().mockResolvedValue(null),
     };
     storeModel = {
       findById: jest.fn().mockResolvedValue({ _id: STORE_ID, isDelete: false }),
@@ -78,16 +79,42 @@ describe('CommissionRulesService', () => {
 
   describe('setSellerOverride', () => {
     it('supersedes (never mutates) a previous active override', async () => {
-      const previous = { rate: 0.03, isActive: true, save: jest.fn() };
-      ruleModel.findOne.mockResolvedValueOnce(previous);
+      const previous = { _id: 'old', rate: 0.03, isActive: true };
+      ruleModel.findOneAndUpdate.mockResolvedValueOnce(previous);
 
       await service.setSellerOverride(STORE_ID, 0.02, 'negotiated rate', ADMIN_ID);
 
-      expect(previous.isActive).toBe(false);
-      expect(previous.save).toHaveBeenCalled();
+      // The old rule is retired by ONE atomic claim, never by read-modify-save.
+      expect(ruleModel.findOneAndUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: 'seller', storeId: STORE_ID, isActive: true }),
+        { $set: expect.objectContaining({ isActive: false }) },
+        { returnDocument: 'before' },
+      );
       expect(ruleModel.create).toHaveBeenCalledWith(
         expect.objectContaining({ scope: 'seller', storeId: STORE_ID, rate: 0.02, isActive: true, createdByAdminId: ADMIN_ID }),
       );
+    });
+
+    it('retries when a concurrent admin created the active rule first (unique index), ending with ONE new rule', async () => {
+      ruleModel.create
+        .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
+        .mockImplementation(async (doc: any) => ({ ...doc }));
+      const result: any = await service.setSellerOverride(STORE_ID, 0.02, undefined, ADMIN_ID);
+      expect(ruleModel.findOneAndUpdate).toHaveBeenCalledTimes(2); // retire again, then create again
+      expect(result.rate).toBe(0.02);
+    });
+
+    it('gives a 409 when it keeps losing the race', async () => {
+      ruleModel.create.mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 }));
+      await expect(service.setSellerOverride(STORE_ID, 0.02, undefined, ADMIN_ID)).rejects.toThrow(ConflictException);
+    });
+
+    it('puts the previous rule back when the create fails for another reason', async () => {
+      ruleModel.findOneAndUpdate.mockResolvedValueOnce({ _id: 'old', rate: 0.03 });
+      ruleModel.updateOne = jest.fn().mockResolvedValue({});
+      ruleModel.create.mockRejectedValueOnce(new Error('db down'));
+      await expect(service.setSellerOverride(STORE_ID, 0.02, undefined, ADMIN_ID)).rejects.toThrow('db down');
+      expect(ruleModel.updateOne).toHaveBeenCalledWith({ _id: 'old', isActive: false }, { $set: { isActive: true, supersededAt: null } });
     });
 
     it('rejects a rate for a store that does not exist', async () => {

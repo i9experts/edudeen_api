@@ -37,7 +37,7 @@ describe('ManualPaymentsService', () => {
 
   beforeEach(() => {
     proofModel = { create: jest.fn(), findOne: jest.fn(), findById: jest.fn(), find: jest.fn().mockReturnValue({ sort: jest.fn().mockReturnValue({ skip: jest.fn().mockReturnValue({ limit: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }) }) }) }), countDocuments: jest.fn().mockResolvedValue(0) };
-    orderModel = { find: jest.fn(), findByIdAndUpdate: jest.fn().mockResolvedValue({}) };
+    orderModel = { find: jest.fn(), findByIdAndUpdate: jest.fn().mockResolvedValue({}), countDocuments: jest.fn().mockResolvedValue(1), findOne: jest.fn(), findOneAndUpdate: jest.fn() };
     userModel = { find: jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }) }) };
 
     checkoutModel = { findOne: jest.fn() };
@@ -128,18 +128,36 @@ describe('ManualPaymentsService', () => {
     });
 
     it('resets a rejected proof back to pending with the new image and increments reuploadCount', async () => {
-      const proof: any = { status: 'rejected', rejectionReason: 'bad amount', reuploadCount: 1, save: jest.fn() };
+      const proof: any = { status: 'rejected', rejectionReason: 'bad amount', reuploadCount: 1, orderIds: ['o1'], transactionReference: 'TXN1', senderName: null };
       proofModel.findOne.mockResolvedValue(proof);
+      proofModel.findOneAndUpdate = jest.fn().mockResolvedValue({ ...proof, status: 'pending', toObject() { return { ...this }; } });
 
-      await service.reuploadPayment(USER_ID, 'p1', { transactionReference: 'TXN2' } as any, FAKE_FILE);
+      const out: any = await service.reuploadPayment(USER_ID, 'p1', { transactionReference: 'TXN2' } as any, FAKE_FILE);
 
-      expect(proof.status).toBe('pending');
-      expect(proof.rejectionReason).toBeNull();
-      expect(proof.reuploadCount).toBe(2);
-      expect(proof.proofPublicId).toBe('private/payment-proofs/p1');
-      expect(proof.proofImageUrl).toBeNull();
+      // One atomic write: only a still-rejected, not-yet-released proof can flip back to pending.
+      const [filter, update] = proofModel.findOneAndUpdate.mock.calls[0];
+      expect(filter).toEqual({ _id: 'p1', userId: USER_ID, status: 'rejected', ordersReleasedAt: null });
+      expect(update.$set).toMatchObject({ status: 'pending', rejectionReason: null, proofPublicId: 'private/payment-proofs/p1', proofImageUrl: null, transactionReference: 'TXN2' });
+      expect(update.$inc).toEqual({ reuploadCount: 1 });
+      expect(out.status).toBe('pending');
       expect(uploadService.uploadFile).not.toHaveBeenCalled();
-      expect(proof.save).toHaveBeenCalled();
+    });
+
+    it('refuses once the stale sweep already cancelled the orders', async () => {
+      proofModel.findOne.mockResolvedValue({ status: 'rejected', orderIds: ['o1'], ordersReleasedAt: new Date() });
+      await expect(service.reuploadPayment(USER_ID, 'p1', {}, FAKE_FILE)).rejects.toThrow(/cancelled/);
+    });
+
+    it('refuses when the buyer already cancelled every order', async () => {
+      proofModel.findOne.mockResolvedValue({ status: 'rejected', orderIds: ['o1'] });
+      orderModel.countDocuments.mockResolvedValue(0);
+      await expect(service.reuploadPayment(USER_ID, 'p1', {}, FAKE_FILE)).rejects.toThrow(BadRequestException);
+    });
+
+    it('loses cleanly (400) when a concurrent re-upload or the sweep got there first', async () => {
+      proofModel.findOne.mockResolvedValue({ status: 'rejected', orderIds: ['o1'] });
+      proofModel.findOneAndUpdate = jest.fn().mockResolvedValue(null);
+      await expect(service.reuploadPayment(USER_ID, 'p1', {}, FAKE_FILE)).rejects.toThrow(BadRequestException);
     });
   });
 

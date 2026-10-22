@@ -3,8 +3,10 @@ import {
   BadRequestException,
   NotFoundException,
   ForbiddenException,
+  Optional,
 } from '@nestjs/common';
 import { DatabaseService } from 'src/database/databaseservice';
+import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { AddReviewDto } from './dto/add-review.dto';
 import { EditReviewDto } from './dto/edit-review.dto';
 import { SellerReplyDto } from './dto/seller-reply.dto';
@@ -20,6 +22,7 @@ export class RatingService {
   constructor(
     private databaseService: DatabaseService,
     private loyaltyService: LoyaltyService,
+    @Optional() private activityLogService?: ActivityLogService,
   ) {}
 
   private get r() {
@@ -615,6 +618,7 @@ export class RatingService {
           isVerifiedPurchase: r.isVerifiedPurchase,
           sellerReply: r.sellerReply || null,
           isFlagged: r.isFlagged,
+          flaggedByAdmin: r.isFlagged && r.flaggedByRole === 'admin',
           createdAt: r.createdAt,
         };
       }),
@@ -688,17 +692,40 @@ export class RatingService {
     return { success: true, message: 'Reply updated' };
   }
 
+  private logReviewAction(
+    action: string,
+    description: string,
+    review: any,
+    actorId: string,
+    role: string,
+  ) {
+    this.activityLogService?.log({
+      storeId: String(review.storeId ?? 'platform'),
+      category: 'moderation',
+      action,
+      description,
+      actorId,
+      actorRole: role,
+      targetId: String(review._id),
+      targetType: 'review',
+    });
+  }
+
   async flagReview(sellerId: string, role: string, reviewId: string) {
     const { ratingModel } = this.r;
 
     const review = await this.findReviewOrThrow(reviewId);
     await this.verifyStoreAccess(review.storeId as string, sellerId, role);
 
-    if (review.isFlagged)
+    // Atomic: only one flag wins, and the flagger's role is recorded.
+    const res = await ratingModel.updateOne(
+      { _id: reviewId, isDelete: false, isFlagged: { $ne: true } },
+      { isFlagged: true, flaggedByRole: role === 'admin' ? 'admin' : 'seller' },
+    );
+    if (!res.modifiedCount)
       throw new BadRequestException('Review is already flagged');
 
-    await ratingModel.findByIdAndUpdate(reviewId, { isFlagged: true });
-
+    this.logReviewAction('review_flagged', 'Review flagged', review, sellerId, role);
     return { success: true, message: 'Review flagged' };
   }
 
@@ -710,15 +737,32 @@ export class RatingService {
 
     if (!review.isFlagged)
       throw new BadRequestException('Review is not flagged');
+    // A flag raised by an admin is the platform's call; the seller cannot lift it.
+    if (role !== 'admin' && review.flaggedByRole === 'admin')
+      throw new ForbiddenException(
+        'This review was flagged by Edudeen and can only be unflagged by an admin',
+      );
 
-    await ratingModel.findByIdAndUpdate(reviewId, { isFlagged: false });
+    const filter: any = { _id: reviewId, isDelete: false, isFlagged: true };
+    if (role !== 'admin') filter.flaggedByRole = { $ne: 'admin' };
+    const res = await ratingModel.updateOne(filter, {
+      isFlagged: false,
+      flaggedByRole: null,
+    });
+    if (!res.modifiedCount)
+      throw new BadRequestException('Review is not flagged');
 
+    this.logReviewAction('review_unflagged', 'Review unflagged', review, sellerId, role);
     return { success: true, message: 'Review unflagged' };
   }
 
-  async moderateDeleteReview(sellerId: string, role: string, reviewId: string) {
+  /** Removing a review is a platform decision: admin only (sellers flag/report instead). */
+  async moderateDeleteReview(adminId: string, role: string, reviewId: string) {
+    if (role !== 'admin')
+      throw new ForbiddenException(
+        'Only Edudeen admins can remove reviews. Flag the review and our team will look at it.',
+      );
     const review = await this.findReviewOrThrow(reviewId);
-    await this.verifyStoreAccess(review.storeId as string, sellerId, role);
 
     await this.r.ratingModel.findByIdAndUpdate(reviewId, { isDelete: true });
 
@@ -727,6 +771,7 @@ export class RatingService {
       await this.recalcStoreRating(review.storeId);
     }
 
+    this.logReviewAction('review_removed', 'Review removed by admin', review, adminId, role);
     return { success: true, message: 'Review removed' };
   }
 }

@@ -83,11 +83,15 @@ export class AdminMarketingService {
    *  live, so they can join it (seller-sponsored) or know their products are
    *  already discounted (platform-sponsored). Runs in the background — the
    *  admin's request never waits on hundreds of notifications. */
-  private announceCampaignLive(campaign: { _id: unknown; name: string; sponsorType?: string; discountType?: string | null; discountValue?: number | null; startDate: Date; endDate: Date }) {
+  private announceCampaignLive(campaign: { _id: unknown; name: string; sponsorType?: string; discountType?: string | null; discountValue?: number | null; startDate: Date; endDate: Date; liveNotifiedAt?: Date | null }) {
     if (!this.notificationsService) return;
     const notifications = this.notificationsService;
+    if (campaign.liveNotifiedAt) return;
     void (async () => {
       try {
+        // Claim first: two admins (or a double click) can never announce the same campaign twice.
+        const claimed = await this.r.campaignModel.updateOne({ _id: campaign._id as any, liveNotifiedAt: null }, { $set: { liveNotifiedAt: new Date() } });
+        if (!claimed.modifiedCount) return;
         const stores = await this.r.storeModel
           .find({ status: 'active', isDelete: false })
           .select('_id sellerId')
@@ -230,6 +234,18 @@ export class AdminMarketingService {
     ) {
       throw new BadRequestException('endDate must be after startDate');
     }
+    // Once a campaign is running (or over) its money terms are frozen: buyers have been shown the price and
+    // seller/platform funding was decided on it. Change them on a draft or a not-yet-started campaign only.
+    const startedOrOver = existing.status === 'ended' || (existing.status === 'active' && new Date(existing.startDate) <= new Date());
+    if (startedOrOver) {
+      const changesMoney =
+        (dto.sponsorType !== undefined && dto.sponsorType !== existing.sponsorType) ||
+        (dto.discountType !== undefined && dto.discountType !== existing.discountType) ||
+        (dto.discountValue !== undefined && dto.discountValue !== existing.discountValue);
+      if (changesMoney) {
+        throw new BadRequestException('The discount and who pays for it cannot be changed once a campaign is live. End this campaign and create a new one.');
+      }
+    }
     if (dto.order !== undefined && dto.order !== existing.order) {
       await this.assertOrderAvailable(dto.order, id);
     }
@@ -252,7 +268,9 @@ export class AdminMarketingService {
       update.status = statusChange;
       if (statusChange === 'ended') update.order = 0;
     }
-    const campaign = await this.r.campaignModel.findByIdAndUpdate(id, { $set: update }, { returnDocument: 'after' });
+    // Atomic against a concurrent status change: the write only lands if the status is still what we validated.
+    const campaign = await this.r.campaignModel.findOneAndUpdate({ _id: id, isDelete: false, status: existing.status }, { $set: update }, { returnDocument: 'after' });
+    if (!campaign) throw new ConflictException('This campaign was changed by someone else while you were editing. Reload and try again.');
     this.log('campaign_updated', `Campaign "${campaign!.name}" updated`, meta, id);
     if (statusChange === 'active') this.announceCampaignLive(campaign as any);
     if (statusChange === 'ended' && existing.status === 'active') this.announceCampaignEnded(campaign as any);
@@ -265,9 +283,20 @@ export class AdminMarketingService {
       throw new BadRequestException('This campaign has already ended — extend its endDate before activating it');
     }
     if (dto.status === 'active' && campaign.order != null && campaign.status !== 'active') {
-      await this.assertOrderAvailable(campaign.order, id);
+      try {
+        await this.assertOrderAvailable(campaign.order, id);
+      } catch (err) {
+        if (err instanceof ConflictException) {
+          throw new ConflictException(`${(err as ConflictException).message.replace(/ — choose a different number\.$/, '')}. Open the campaign, pick a free rotation position and save, then activate it.`);
+        }
+        throw err;
+      }
     }
-    await this.r.campaignModel.findByIdAndUpdate(id, { $set: dto.status === 'ended' ? { status: 'ended', order: 0 } : { status: dto.status } });
+    const moved = await this.r.campaignModel.findOneAndUpdate(
+      { _id: id, isDelete: false, status: campaign.status },
+      { $set: dto.status === 'ended' ? { status: 'ended', order: 0 } : { status: dto.status } },
+    );
+    if (!moved) throw new ConflictException('This campaign was changed by someone else. Reload and try again.');
     this.log('campaign_status_changed', `Campaign "${campaign.name}" set to ${dto.status}`, meta, id);
     if (dto.status === 'active' && campaign.status !== 'active') this.announceCampaignLive(campaign as any);
     if (dto.status === 'ended' && campaign.status === 'active') this.announceCampaignEnded(campaign as any);
@@ -371,6 +400,13 @@ export class AdminMarketingService {
     const mergedValue = (dto as any).discountValue ?? existing.discountValue;
     if (!Number.isFinite(mergedValue) || mergedValue <= 0) throw new BadRequestException('Discount value must be greater than 0');
     if (existing.discountType === 'percentage' && mergedValue > 100) throw new BadRequestException('Percentage discount cannot exceed 100');
+    if (dto.usageLimit !== undefined && dto.usageLimit < (existing.usageCount ?? 0)) {
+      throw new BadRequestException(`Usage limit cannot be lower than the ${existing.usageCount} times this coupon was already used`);
+    }
+    if (dto.expiresAt !== undefined) {
+      const when = new Date(dto.expiresAt);
+      if (Number.isNaN(when.getTime()) || when <= new Date()) throw new BadRequestException('expiresAt must be in the future');
+    }
     const update: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(dto)) {
       if (value === undefined) continue;
