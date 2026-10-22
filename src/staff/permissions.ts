@@ -1,3 +1,4 @@
+import { normalizeRequestPath } from '../common/request-path.util';
 /* eslint-disable prettier/prettier */
 /**
  * Staff permissions: what an admin-panel staff member may do.
@@ -73,45 +74,47 @@ export const ROLE_TEMPLATES: { slug: string; name: string; description: string; 
 type Rule = { re: RegExp; read?: string | null; write?: string | null };
 /** `null` = allowed for every staff member. First matching rule wins. */
 const RULES: Rule[] = [
-  { re: /^\/api\/admin\/staff\/(me|tasks|notes|approvals)(\/|$)/, read: null, write: null }, // checked again inside the controller
-  { re: /^\/api\/admin\/reauth(\/|$)/, read: null, write: null },
-  { re: /^\/api\/admin\/staff(\/|$)/, read: 'staff.view', write: 'staff.manage' },
-  { re: /^\/api\/auth\/admin\/create-admin/, write: 'staff.manage', read: 'staff.manage' },
-  { re: /^\/api\/admin\/finance\/payouts\/[^/]+\/(approve|reject|retry|destination)/, read: 'finance.payouts', write: 'finance.payouts' },
-  { re: /^\/api\/admin\/finance(\/|$)/, read: 'finance.view', write: 'finance.manage' },
-  { re: /^\/api\/admin\/commission-rules(\/|$)/, read: 'finance.view', write: 'finance.manage' },
-  { re: /^\/api\/admin\/manual-payments(\/|$)/, read: 'payments.view', write: 'payments.approve' },
-  { re: /^\/api\/admin\/orders(\/|$)/, read: 'orders.view', write: 'orders.manage' },
-  { re: /^\/api\/orders\/(seller-orders|returns)/, read: 'orders.view', write: 'orders.manage' },
-  { re: /^\/api\/orders\/(mark-paid|update-status|return-action)/, read: 'orders.view', write: 'orders.manage' },
-  { re: /^\/api\/refund-request\/[^/]+\/(approve|reject)/, read: 'orders.refund', write: 'orders.refund' },
-  { re: /^\/api\/refund-request\/admin/, read: 'orders.view', write: 'orders.refund' },
-  { re: /^\/api\/admin\/users(\/|$)/, read: 'users.view', write: 'users.manage' },
-  { re: /^\/api\/admin\/marketplace\/leads/, read: 'marketplace.view', write: 'stores.approve' },
-  { re: /^\/api\/admin\/marketplace(\/|$)/, read: 'marketplace.view', write: 'marketplace.manage' },
-  { re: /^\/api\/admin\/moderation(\/|$)/, read: 'moderation.view', write: 'moderation.manage' },
-  { re: /^\/api\/rating\/(flag|unflag|admin|reply|edit-reply)/, read: 'moderation.view', write: 'moderation.manage' },
-  { re: /^\/api\/(admin\/chat|contact\/admin|messaging\/admin)(\/|$)/, read: 'support.view', write: 'support.reply' },
-  { re: /^\/api\/admin\/marketing(\/|$)/, read: 'marketing.view', write: 'marketing.manage' },
-  { re: /^\/api\/(banners\/(admin|count)|onboarding-slides\/admin|testimonials\/admin|admin\/announcements)/, read: 'content.view', write: 'content.manage' },
-  { re: /^\/api\/(banners|onboarding-slides|testimonials|faqs|learning-paths|announcements)(\/|$)/, write: 'content.manage' },
-  { re: /^\/api\/categories\/admin/, read: 'categories.manage', write: 'categories.manage' },
-  { re: /^\/api\/categories(\/|$)/, write: 'categories.manage' },
-  { re: /^\/api\/admin\/seo(\/|$)/, read: 'seo.view', write: 'seo.manage' },
-  { re: /^\/api\/admin\/ai-studio(\/|$)/, read: 'ai.manage', write: 'ai.manage' },
-  { re: /^\/api\/(platform-plans\/admin|subscriptions\/admin|admin\/premium)(\/|$)/, read: 'plans.view', write: 'plans.manage' },
-  { re: /^\/api\/checkout\/admin(\/|$)/, read: 'config.view', write: 'config.manage' },
-  { re: /^\/api\/admin\/analytics(\/|$)/, read: 'analytics.view', write: 'analytics.view' },
-  { re: /^\/api\/admin\/activity-log(\/|$)/, read: 'activity.view', write: 'activity.view' },
-  { re: /^\/api\/admin\/platform-config(\/|$)/, read: 'config.view', write: 'config.manage' },
+  { re: /^\/api\/admin\/staff\/(me|tasks|notes|approvals)(\/|$)/i, read: null, write: null }, // checked again inside the controller
+  { re: /^\/api\/admin\/reauth(\/|$)/i, read: null, write: null },
+  { re: /^\/api\/admin\/staff(\/|$)/i, read: 'staff.view', write: 'staff.manage' },
+  { re: /^\/api\/auth\/admin\/create-admin/i, write: 'staff.manage', read: 'staff.manage' },
+  { re: /^\/api\/admin\/finance\/payouts\/[^/]+\/(approve|reject|retry|destination)/i, read: 'finance.payouts', write: 'finance.payouts' },
+  { re: /^\/api\/admin\/finance(\/|$)/i, read: 'finance.view', write: 'finance.manage' },
+  { re: /^\/api\/admin\/commission-rules(\/|$)/i, read: 'finance.view', write: 'finance.manage' },
+  { re: /^\/api\/admin\/manual-payments(\/|$)/i, read: 'payments.view', write: 'payments.approve' },
+  { re: /^\/api\/admin\/orders(\/|$)/i, read: 'orders.view', write: 'orders.manage' },
+  { re: /^\/api\/orders\/(seller-orders|returns)/i, read: 'orders.view', write: 'orders.manage' },
+  { re: /^\/api\/orders\/(mark-paid|update-status|return-action)/i, read: 'orders.view', write: 'orders.manage' },
+  { re: /^\/api\/refund-request\/[^/]+\/(approve|reject)/i, read: 'orders.refund', write: 'orders.refund' },
+  { re: /^\/api\/refund-request\/admin/i, read: 'orders.view', write: 'orders.refund' },
+  { re: /^\/api\/admin\/users(\/|$)/i, read: 'users.view', write: 'users.manage' },
+  { re: /^\/api\/admin\/marketplace\/leads/i, read: 'marketplace.view', write: 'stores.approve' },
+  { re: /^\/api\/admin\/marketplace(\/|$)/i, read: 'marketplace.view', write: 'marketplace.manage' },
+  { re: /^\/api\/admin\/moderation(\/|$)/i, read: 'moderation.view', write: 'moderation.manage' },
+  { re: /^\/api\/rating\/(flag|unflag|admin|reply|edit-reply)/i, read: 'moderation.view', write: 'moderation.manage' },
+  { re: /^\/api\/(admin\/chat|contact\/admin|messaging\/admin)(\/|$)/i, read: 'support.view', write: 'support.reply' },
+  { re: /^\/api\/admin\/marketing(\/|$)/i, read: 'marketing.view', write: 'marketing.manage' },
+  { re: /^\/api\/((banners|spotlight)\/(admin|count)|onboarding-slides\/admin|testimonials\/admin|admin\/announcements)/i, read: 'content.view', write: 'content.manage' },
+  { re: /^\/api\/(banners|spotlight|onboarding-slides|testimonials|faqs|learning-paths|announcements)(\/|$)/i, write: 'content.manage' },
+  { re: /^\/api\/categories\/admin/i, read: 'categories.manage', write: 'categories.manage' },
+  { re: /^\/api\/categories(\/|$)/i, write: 'categories.manage' },
+  { re: /^\/api\/admin\/seo(\/|$)/i, read: 'seo.view', write: 'seo.manage' },
+  { re: /^\/api\/admin\/ai-studio(\/|$)/i, read: 'ai.manage', write: 'ai.manage' },
+  { re: /^\/api\/(platform-plans\/admin|subscriptions\/admin|admin\/premium)(\/|$)/i, read: 'plans.view', write: 'plans.manage' },
+  { re: /^\/api\/checkout\/admin(\/|$)/i, read: 'config.view', write: 'config.manage' },
+  { re: /^\/api\/admin\/analytics(\/|$)/i, read: 'analytics.view', write: 'analytics.view' },
+  { re: /^\/api\/admin\/activity-log(\/|$)/i, read: 'activity.view', write: 'activity.view' },
+  { re: /^\/api\/admin\/platform-config(\/|$)/i, read: 'config.view', write: 'config.manage' },
 ];
 
 /** Everything a signed-in person may always do (own session, uploads, notifications, own profile). */
-const BASE_ALLOW = [/^\/api\/auth(\/|$)/, /^\/api\/upload(\/|$)/, /^\/api\/notifications(\/|$)/, /^\/api\/users(\/|$)/];
+const BASE_ALLOW = [/^\/api\/auth(\/|$)/i, /^\/api\/upload(\/|$)/i, /^\/api\/notifications(\/|$)/i, /^\/api\/users(\/|$)/i];
 
 /** The permission a STAFF token needs for this request; `null` = allowed; `DENY` = never. */
 export const DENY = '__deny__';
-export function permissionForRequest(method: string, path: string): string | null {
+export function permissionForRequest(method: string, rawPath: string): string | null {
+  const path = normalizeRequestPath(rawPath);
+  if (path === null) return DENY;
   const write = !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase());
   for (const r of RULES) {
     if (!r.re.test(path)) continue;

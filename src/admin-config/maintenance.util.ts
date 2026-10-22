@@ -1,3 +1,4 @@
+import { normalizeRequestPath } from '../common/request-path.util';
 /** Maintenance mode: WHAT is down and WHY, so the platform can block only the affected area and tell users plainly. */
 export const BASE_MAINTENANCE_SCOPES = ['all', 'buyer', 'seller', 'checkout', 'uploads'] as const;
 
@@ -7,16 +8,16 @@ export const BASE_MAINTENANCE_SCOPES = ['all', 'buyer', 'seller', 'checkout', 'u
  * admin's message in place of that page or section.
  */
 export const MAINTENANCE_FEATURES = {
-  flash_sale:   { apiPatterns: [/^\/api\/public\/marketing\//, /^\/api\/marketing\/[^/]+\/campaigns/] },
-  search:       { apiPatterns: [/^\/api\/search\/(products|trending)/] },
-  categories:   { apiPatterns: [/^\/api\/categories(\/|$)/, /^\/api\/products\/products-by-category/] },
-  product_page: { apiPatterns: [/^\/api\/products\/(getProductById|getVariantById|preview|sample|also-bought)/] },
-  cart:         { apiPatterns: [/^\/api\/cart(\/|$)/] },
-  reviews:      { apiPatterns: [/^\/api\/rating(\/|$)/] },
-  messaging:    { apiPatterns: [/^\/api\/messaging(\/|$)/] },
-  stores:       { apiPatterns: [/^\/api\/search\/stores/, /^\/api\/store\/(getStoreById|public)/] },
-  learn:        { apiPatterns: [/^\/api\/products\/education(\/|$)/] },
-  orders:       { apiPatterns: [/^\/api\/orders(\/|$)/] },
+  flash_sale:   { apiPatterns: [/^\/api\/public\/marketing\//i, /^\/api\/marketing\/[^/]+\/campaigns/i] },
+  search:       { apiPatterns: [/^\/api\/search\/(products|trending)/i] },
+  categories:   { apiPatterns: [/^\/api\/categories(\/|$)/i, /^\/api\/products\/products-by-category/i] },
+  product_page: { apiPatterns: [/^\/api\/products\/(getProductById|getVariantById|preview|sample|also-bought)/i] },
+  cart:         { apiPatterns: [/^\/api\/cart(\/|$)/i] },
+  reviews:      { apiPatterns: [/^\/api\/rating(\/|$)/i] },
+  messaging:    { apiPatterns: [/^\/api\/messaging(\/|$)/i] },
+  stores:       { apiPatterns: [/^\/api\/search\/stores/i, /^\/api\/store\/(getStoreById|public)/i] },
+  learn:        { apiPatterns: [/^\/api\/products\/education(\/|$)/i] },
+  orders:       { apiPatterns: [/^\/api\/orders(\/|$)/i] },
 } as const;
 export type MaintenanceFeature = keyof typeof MAINTENANCE_FEATURES;
 const FEATURE_KEYS = Object.keys(MAINTENANCE_FEATURES) as MaintenanceFeature[];
@@ -91,23 +92,25 @@ export function maintenanceState(m: MaintenanceSettings, now = new Date()): 'act
 }
 
 /** Never blocked: admin tools and sign-in (so admins can switch maintenance off), the status endpoint, and payment webhooks (blocking those loses money). */
-const EXEMPT = [/^\/api\/admin(\/|$)/, /^\/api\/auth(\/|$)/, /^\/api\/platform-config(\/|$)/, /webhook/i, /^\/api\/payment\/pk\/[a-z]+\/callback/i, /^\/api\/health/, /^\/health/];
+const EXEMPT = [/^\/api\/admin(\/|$)/i, /^\/api\/auth(\/|$)/i, /^\/api\/platform-config(\/|$)/i, /webhook/i, /^\/api\/payment\/pk\/[a-z]+\/callback/i, /^\/api\/health/i, /^\/health/i];
 
 export type RequestArea = 'checkout' | 'uploads' | 'seller' | 'buyer';
 
 /** Which part of the platform a request belongs to; null = never blocked. */
-export function areaOfRequest(method: string, path: string): RequestArea | null {
+export function areaOfRequest(method: string, rawPath: string): RequestArea | null {
+  const path = normalizeRequestPath(rawPath) ?? '/api/__bad_path__';
   if (!path.startsWith('/api/') || EXEMPT.some((r) => r.test(path))) return null;
-  if (/^\/api\/(checkout|payment)(\/|$)/.test(path)) return 'checkout';
-  if (/^\/api\/upload(\/|$)/.test(path)) return 'uploads';
+  if (/^\/api\/(checkout|payment)(\/|$)/i.test(path)) return 'checkout';
+  if (/^\/api\/upload(\/|$)/i.test(path)) return 'uploads';
   const write = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
-  if (/^\/api\/(finance|promotions|marketing|ai-studio|seller|store-banner|shipping|inventory|loyalty)(\/|$)/.test(path)) return 'seller';
-  if (write && /^\/api\/(store|products|collections|bundles)(\/|$)/.test(path)) return 'seller';
+  if (/^\/api\/(finance|promotions|marketing|ai-studio|seller|store-banner|shipping|inventory|loyalty)(\/|$)/i.test(path)) return 'seller';
+  if (write && /^\/api\/(store|products|collections|bundles)(\/|$)/i.test(path)) return 'seller';
   return 'buyer';
 }
 
 /** Features whose API this request belongs to (a request can match several). */
-export function featuresOfRequest(path: string): MaintenanceFeature[] {
+export function featuresOfRequest(rawPath: string): MaintenanceFeature[] {
+  const path = normalizeRequestPath(rawPath) ?? '/api/__bad_path__';
   return FEATURE_KEYS.filter((k) => MAINTENANCE_FEATURES[k].apiPatterns.some((r) => r.test(path)));
 }
 

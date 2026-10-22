@@ -4,16 +4,20 @@
  * It becomes an approval request; the owner (or a staff member with `approvals.decide`) must approve it,
  * and then the requester repeats the same action once within 24 h.
  */
+import { normalizeRequestPath } from '../common/request-path.util';
+
 export interface ApprovalRoute { key: string; label: string; method: string; re: RegExp }
 
 export const APPROVAL_ROUTES: ApprovalRoute[] = [
-  { key: 'payout', label: 'Approve a seller payout', method: 'PATCH', re: /^\/api\/admin\/finance\/payouts\/[^/]+\/approve$/ },
-  { key: 'payout_retry', label: 'Retry a failed payout', method: 'PATCH', re: /^\/api\/admin\/finance\/payouts\/[^/]+\/retry$/ },
-  { key: 'refund', label: 'Approve a refund', method: 'PATCH', re: /^\/api\/refund-request\/[^/]+\/approve$/ },
-  { key: 'payment_proof', label: 'Approve a payment proof', method: 'PATCH', re: /^\/api\/admin\/manual-payments\/[^/]+\/approve$/ },
+  { key: 'payout', label: 'Approve a seller payout', method: 'PATCH', re: /^\/api\/admin\/finance\/payouts\/[^/]+\/approve$/i },
+  { key: 'payout_retry', label: 'Retry a failed payout', method: 'PATCH', re: /^\/api\/admin\/finance\/payouts\/[^/]+\/retry$/i },
+  { key: 'refund', label: 'Approve a refund', method: 'PATCH', re: /^\/api\/refund-request\/[^/]+\/approve$/i },
+  { key: 'payment_proof', label: 'Approve a payment proof', method: 'PATCH', re: /^\/api\/admin\/manual-payments\/[^/]+\/approve$/i },
 ];
 
-export function approvalRouteFor(method: string, path: string): ApprovalRoute | null {
+export function approvalRouteFor(method: string, rawPath: string): ApprovalRoute | null {
+  const path = normalizeRequestPath(rawPath);
+  if (path === null) return null;
   const m = method.toUpperCase();
   return APPROVAL_ROUTES.find((r) => r.method === m && r.re.test(path)) ?? null;
 }

@@ -2,6 +2,7 @@
 import { StaffService } from './staff.service';
 import { StaffExtrasService } from './staff-extras.service';
 import { accessWindowViolation } from './access-window.util';
+import { normalizeRequestPath } from '../common/request-path.util';
 import { DENY, permissionForRequest } from './permissions';
 
 type Access = Awaited<ReturnType<StaffService['accessFor']>>;
@@ -22,7 +23,9 @@ export function createStaffAccessMiddleware(staff: StaffService, extras?: StaffE
     let adminToken = false;
     try {
       const auth: string | undefined = req.headers.authorization;
-      if (!auth?.startsWith('Bearer ') || !req.path.startsWith('/api/')) return next();
+      const path = normalizeRequestPath(req.path);
+      // A malformed encoding is only rejected for admin tokens below; everything else is left to the router.
+      if (!auth?.startsWith('Bearer ') || (path !== null && !path.startsWith('/api/'))) return next();
       const payload = staff.verifyToken(auth.slice(7));
       if (!payload?.sub || payload.role !== 'admin' || (payload.typ && payload.typ !== 'access')) return next();
       adminToken = true;
@@ -31,11 +34,12 @@ export function createStaffAccessMiddleware(staff: StaffService, extras?: StaffE
       if (!hit || Date.now() - hit.at > TTL) { hit = { at: Date.now(), v: await staff.accessFor(payload.sub) }; cache.set(payload.sub, hit); }
       const access = hit.v;
       if (!access || !access.isStaff) return next(); // owner (or unknown id -> the normal guards decide)
+      if (path === null) return res.status(400).json({ statusCode: 400, code: 'BAD_PATH', message: 'Invalid request path.' });
 
       const write = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
       const ip = (req.ip as string) ?? '';
       const deny = (code: string, message: string, need?: string) => {
-        if (write) void staff.audit({ adminId: payload.sub, name: access.name, method: req.method, path: req.path, status: 403, ip, denied: need ?? code });
+        if (write) void staff.audit({ adminId: payload.sub, name: access.name, method: req.method, path: path ?? '', status: 403, ip, denied: need ?? code });
         return res.status(403).json({ statusCode: 403, code, message, permission: need ?? null });
       };
       if ((payload.tokenVersion ?? 0) !== access.tokenVersion) return next(); // stale token: JwtAuthGuard answers 401
@@ -43,20 +47,20 @@ export function createStaffAccessMiddleware(staff: StaffService, extras?: StaffE
       const outside = accessWindowViolation(access, ip);
       if (outside) return deny('STAFF_OUTSIDE_ACCESS_WINDOW', outside);
 
-      const need = permissionForRequest(req.method, req.path);
+      const need = permissionForRequest(req.method, path);
       if (need === DENY) return deny('STAFF_FORBIDDEN', 'You do not have access to this action.');
       if (need && !access.permissions.has(need)) return deny('STAFF_FORBIDDEN', 'Your role does not include this action.', need);
 
       // Two-person rule: sensitive money actions by staff wait for another person's approval.
       if (write && extras) {
-        const gate = await extras.approvalGate(payload.sub, access.name, req.method, req.path);
+        const gate = await extras.approvalGate(payload.sub, access.name, req.method, path);
         if (gate !== 'proceed') {
-          void staff.audit({ adminId: payload.sub, name: access.name, method: req.method, path: req.path, status: 202, ip, denied: `approval:${gate.label}` });
+          void staff.audit({ adminId: payload.sub, name: access.name, method: req.method, path: path ?? '', status: 202, ip, denied: `approval:${gate.label}` });
           return res.status(202).json({ success: true, approvalRequired: true, requestId: gate.requestId, message: `Sent for approval: . Another person must approve it, then you repeat this action once.` });
         }
       }
 
-      if (write) res.on('finish', () => void staff.audit({ adminId: payload.sub, name: access.name, method: req.method, path: req.path, status: res.statusCode, ip }));
+      if (write) res.on('finish', () => void staff.audit({ adminId: payload.sub, name: access.name, method: req.method, path: path ?? '', status: res.statusCode, ip }));
       return next();
     } catch {
       // Fail CLOSED for admin tokens: if rights cannot be checked, nothing is let through. Other traffic is unaffected.
