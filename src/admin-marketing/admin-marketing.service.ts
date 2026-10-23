@@ -184,6 +184,7 @@ export class AdminMarketingService {
       slug,
       description: dto.description ?? null,
       bannerImage: dto.bannerImage ?? null,
+      backgroundImage: dto.backgroundImage ?? null,
       startDate: new Date(dto.startDate),
       endDate: new Date(dto.endDate),
       discountType: dto.discountType ?? null,

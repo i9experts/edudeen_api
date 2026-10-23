@@ -430,6 +430,7 @@ export class MarketingService {
         name: c.name,
         description: c.description,
         bannerImage: c.bannerImage,
+        backgroundImage: c.backgroundImage ?? null,
         endDate: c.endDate,
         discountType: c.discountType,
         discountValue: c.discountValue,

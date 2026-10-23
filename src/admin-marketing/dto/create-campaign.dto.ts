@@ -21,6 +21,12 @@ export class CreateCampaignDto {
   @MaxLength(500)
   bannerImage?: string;
 
+  @ApiProperty({ required: false, description: 'Background image of the Mega Sale strip' })
+  @IsOptional()
+  @IsUrl({ protocols: ['https'], require_protocol: true })
+  @MaxLength(500)
+  backgroundImage?: string | null;
+
   @ApiProperty({ example: '2026-08-01T00:00:00.000Z' })
   @IsDateString()
   startDate: string;

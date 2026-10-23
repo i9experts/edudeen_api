@@ -23,6 +23,10 @@ export class Campaign {
   @Prop({ type: String, default: null })
   bannerImage: string | null;
 
+  // Background of the Mega Sale strip (DealsBanner); bannerImage is the product/promo picture.
+  @Prop({ type: String, default: null })
+  backgroundImage: string | null;
+
   @Prop({ required: true })
   startDate: Date;
 
