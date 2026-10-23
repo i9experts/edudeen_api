@@ -2,6 +2,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsOptional, IsUrl, IsNumber, IsIn, IsArray, IsBoolean, IsDateString, Min } from 'class-validator';
 import { Type } from 'class-transformer';
+import { IsLinkTarget } from '../../common/link-target.util';
 import { PROMOTION_PLACEMENTS, PromotionPlacement } from '../../common/promotion-placements.const';
 
 export class CreateBannerDto {
@@ -41,7 +42,7 @@ export class CreateBannerDto {
     description: 'URL to open when the banner is tapped',
   })
   @IsOptional()
-  @IsUrl({}, { message: 'urlOnTap must be a valid URL' })
+  @IsLinkTarget()
   urlOnTap?: string;
 
   @ApiProperty({ required: false, description: 'Save without publishing: the banner stays a draft (never shown) until published.' })

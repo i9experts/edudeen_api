@@ -17,6 +17,7 @@ import { UsersModule } from './users/users.module';
 import { OtpModule } from './otp/otp.module';
 import { UploadModule } from './upload/upload.module';
 import { BannersModule } from './banner/banner.module';
+import { HomeCardsModule } from './home-cards/home-cards.module';
 import { FaqModule } from './faqs/faq.module';
 import { NewsletterModule } from './newsletter/newsletter.module';
 import { ContactModule } from './contact/contact.module';
@@ -105,6 +106,7 @@ import { PhoneVerificationModule } from './phone-verification/phone-verification
     OtpModule,
     UploadModule,
     BannersModule,
+    HomeCardsModule,
     OnboardingSlidesModule,
     FaqModule,
     NewsletterModule,
