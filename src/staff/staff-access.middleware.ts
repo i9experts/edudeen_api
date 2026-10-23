@@ -60,6 +60,8 @@ export function createStaffAccessMiddleware(staff: StaffService, extras?: StaffE
       if (need === DENY) return deny('STAFF_FORBIDDEN', 'You do not have access to this action.');
       if (need && !access.permissions.has(need)) return deny('STAFF_FORBIDDEN', 'Your role does not include this action.', need);
 
+      req.staffPermissions = access.permissions; // lets read-only summary endpoints (pending-counts) trim what they return
+
       // Two-person rule: sensitive money actions by staff wait for another person's approval.
       if (write && extras) {
         const gate = await extras.approvalGate(payload.sub, access.name, req.method, path);

@@ -34,6 +34,10 @@ export class ManualPaymentProof {
   @Prop({ type: String, default: null }) proofPublicId: string | null;
   @Prop({ type: String, default: null }) proofResourceType: string | null;
   @Prop({ type: String, default: null }) transactionReference: string | null;
+  // Duplicate-proof signals (advisory only, never blocks): sha256 of the uploaded file and the reference number
+  // normalised (trim, upper-case, no spaces). The admin screen flags other proofs that share either.
+  @Prop({ type: String, default: null }) proofHash: string | null;
+  @Prop({ type: String, default: null }) transactionReferenceKey: string | null;
   // Advisory AI read of the receipt screenshot (amount vs the order) — never blocks anything.
   @Prop({ type: Object, default: null }) receiptCheck: Record<string, any> | null;
   @Prop({ type: String, default: null }) senderName: string | null;
@@ -61,5 +65,7 @@ export class ManualPaymentProof {
 export const ManualPaymentProofSchema = SchemaFactory.createForClass(ManualPaymentProof);
 ManualPaymentProofSchema.index({ userId: 1, createdAt: -1 });
 ManualPaymentProofSchema.index({ checkoutId: 1 });
+ManualPaymentProofSchema.index({ proofHash: 1 }, { sparse: true });
+ManualPaymentProofSchema.index({ transactionReferenceKey: 1 }, { sparse: true });
 ManualPaymentProofSchema.index({ status: 1, createdAt: 1 });
 ManualPaymentProofSchema.index({ status: 1, reviewedAt: 1, ordersReleasedAt: 1 });

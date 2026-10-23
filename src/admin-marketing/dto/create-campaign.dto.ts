@@ -49,6 +49,13 @@ export class CreateCampaignDto {
   @IsEnum(['seller', 'platform'])
   sponsorType?: 'seller' | 'platform';
 
+  @ApiProperty({ required: false, description: 'Platform subsidy budget in USD (0 = no cap). Only meaningful for sponsorType "platform".' })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(10000000)
+  subsidyCapUSD?: number;
+
   @ApiProperty({ required: false, example: 0, description: 'Rotation order in the buyer-facing deals banner when multiple campaigns are active (0 = shown first). Defaults to appended-last.' })
   @IsOptional()
   @IsInt()

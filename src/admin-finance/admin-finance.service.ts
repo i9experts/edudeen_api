@@ -3,7 +3,7 @@ import { BadRequestException, ConflictException, Injectable } from '@nestjs/comm
 import { DatabaseService } from '../database/databaseservice';
 import { RedisService } from '../redis/redis.service';
 import { EXPORT_ROW_CAP, FinanceService } from '../finance/finance.service';
-import { csvCell } from '../common/query-safety.util';
+import { clampInt, csvCell, escapeRegex, searchTerm } from '../common/query-safety.util';
 import { resolveDateRange, enumerateBuckets } from '../analytics/utils/analytics-date.util';
 import { round } from '../common/number.util';
 import { buildAnalyticsCacheKey, withAnalyticsCache } from '../analytics/utils/analytics-cache.util';
@@ -240,13 +240,29 @@ export class AdminFinanceService {
   // ═══════════════════════════════════════════════════════════════════════
 
   async getSellerBalances(query: any) {
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 20;
+    const page = clampInt(query.page, 1, 1, 100_000);
+    const limit = clampInt(query.limit, 20, 1, EXPORT_ROW_CAP); // the CSV export asks for up to the export cap
     const sort = ['availableBalance', 'pendingBalance', 'totalRevenue', 'totalPayouts'].includes(query.sort) ? query.sort : 'availableBalance';
     const order = query.order === 'asc' ? 1 : -1;
+    const searchText = searchTerm(query.search);
+    const flaggedOnly = query.flaggedOnly === 'true' || query.flaggedOnly === true;
 
-    return this.cached(this.key('seller-balances', { page, limit, sort, order, search: query.search ?? '', flaggedOnly: query.flaggedOnly ?? '' }), async () => {
-      const balances = await this.r.sellerBalanceModel.find({}).lean();
+    return this.cached(this.key('seller-balances', { page, limit, sort, order, search: searchText ?? '', flaggedOnly }), async () => {
+      // Filter, sort and page IN THE DATABASE: this used to load every balance row (and filter/sort in memory) per call.
+      const match: Record<string, any> = {};
+      if (flaggedOnly) match.isFlaggedForReview = true;
+      if (searchText) {
+        const rx = { $regex: escapeRegex(searchText), $options: 'i' };
+        const [sMatch, stMatch] = await Promise.all([
+          this.r.sellerModel.find({ $or: [{ name: rx }, { email: rx }] }).select('_id').limit(500).lean(),
+          this.r.storeModel.find({ name: rx }).select('_id').limit(500).lean(),
+        ]);
+        match.$or = [{ sellerId: { $in: sMatch.map((s: any) => String(s._id)) } }, { storeId: { $in: stMatch.map((s: any) => String(s._id)) } }];
+      }
+      const [total, balances] = await Promise.all([
+        this.r.sellerBalanceModel.countDocuments(match),
+        this.r.sellerBalanceModel.find(match).sort({ [sort]: order, _id: 1 }).skip((page - 1) * limit).limit(limit).lean(),
+      ]);
       const sellerIds = [...new Set(balances.map((b: any) => b.sellerId))];
       const storeIds = balances.map((b: any) => b.storeId);
 
@@ -257,7 +273,7 @@ export class AdminFinanceService {
       const sellerMap = new Map(sellers.map((s: any) => [s._id.toString(), s]));
       const storeMap = new Map(stores.map((s: any) => [s._id.toString(), s]));
 
-      let rows = balances.map((b: any) => ({
+      const rows = balances.map((b: any) => ({
         storeId: b.storeId,
         storeName: storeMap.get(b.storeId)?.name ?? 'Unknown store',
         sellerId: b.sellerId,
@@ -274,25 +290,11 @@ export class AdminFinanceService {
         flaggedReason: b.flaggedReason ?? null,
       }));
 
-      if (query.search) {
-        const q = String(query.search).toLowerCase();
-        rows = rows.filter((r) => r.sellerName.toLowerCase().includes(q) || r.sellerEmail.toLowerCase().includes(q) || r.storeName.toLowerCase().includes(q));
-      }
-
-      if (query.flaggedOnly === 'true' || query.flaggedOnly === true) {
-        rows = rows.filter((r) => r.isFlaggedForReview);
-      }
-
-      rows.sort((a: any, b: any) => order * (a[sort] - b[sort]));
-
-      const total = rows.length;
-      const start = (page - 1) * limit;
-
       return {
         success: true,
         data: {
           pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
-          sellers: rows.slice(start, start + limit),
+          sellers: rows,
         },
       };
     });

@@ -563,8 +563,23 @@ describe('FinanceService', () => {
   describe('processClearingBalances', () => {
     const oldSale = { _id: 'tx1', storeId: STORE_ID, sellerId: SELLER_ID, currency: 'USD', createdAt: new Date(Date.now() - 400 * 24 * 3600 * 1000), metadata: { netAmount: 92, clearingDays: 7 } };
 
+    // find().sort().limit().lean() — the job reads due sales in _id-ordered batches
+    const rowsChain = (rows: any[]) => ({ sort: jest.fn().mockReturnThis(), limit: jest.fn().mockReturnThis(), lean: jest.fn().mockResolvedValue(rows) });
+
+    it('selects only due pending sales in the database and reads a next batch when the first one was full', async () => {
+      const full = Array.from({ length: 500 }, (_, i) => ({ ...oldSale, _id: `tx${i}`, metadata: { netAmount: 0, clearingDays: 7 } }));
+      txModel.find.mockReturnValueOnce(rowsChain(full)).mockReturnValueOnce(rowsChain([]));
+      const res = await service.processClearingBalances();
+      expect(txModel.find).toHaveBeenCalledTimes(2);
+      const firstFilter = (txModel.find as jest.Mock).mock.calls[0][0];
+      expect(firstFilter).toMatchObject({ type: 'sale', status: 'pending' });
+      expect(firstFilter.$expr).toBeDefined();
+      expect((txModel.find as jest.Mock).mock.calls[1][0]._id).toEqual({ $gt: 'tx499' });
+      expect(res.processed).toBe(500);
+    });
+
     it('credits available balance once, only after winning the pending→completed claim', async () => {
-      txModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([oldSale]) });
+      txModel.find.mockReturnValue(rowsChain([oldSale]));
       const balance = makeBalance({ pendingBalance: 92 });
       balanceModel.findOne.mockResolvedValue(balance);
       const res = await service.processClearingBalances();
@@ -574,7 +589,7 @@ describe('FinanceService', () => {
     });
 
     it('a concurrent run that loses the claim credits nothing (no double credit)', async () => {
-      txModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([oldSale]) });
+      txModel.find.mockReturnValue(rowsChain([oldSale]));
       txModel.updateOne.mockResolvedValue({ modifiedCount: 0 });
       const balance = makeBalance({ pendingBalance: 92 });
       balanceModel.findOne.mockResolvedValue(balance);
@@ -586,7 +601,7 @@ describe('FinanceService', () => {
 
     it('one poison row does not stop later sales from clearing', async () => {
       const second = { ...oldSale, _id: 'tx2', storeId: 'store-2' };
-      txModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([oldSale, second]) });
+      txModel.find.mockReturnValue(rowsChain([oldSale, second]));
       const good = makeBalance({ pendingBalance: 92 });
       balanceModel.findOne.mockImplementation(async (q: any) => { if (q.storeId === STORE_ID) throw new Error('boom'); return good; });
       jest.spyOn((service as any).logger, 'error').mockImplementation(() => undefined);

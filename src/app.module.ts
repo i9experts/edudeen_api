@@ -57,6 +57,8 @@ import { AdminMarketplaceModule } from './admin-marketplace/admin-marketplace.mo
 import { AdminOrdersModule } from './admin-orders/admin-orders.module';
 import { AdminModerationModule } from './admin-moderation/admin-moderation.module';
 import { AdminUsersModule } from './admin-users/admin-users.module';
+import { AdminExportsModule } from './admin-exports/admin-exports.module';
+import { AdminPendingModule } from './admin-pending/admin-pending.module';
 import { AdminMarketingModule } from './admin-marketing/admin-marketing.module';
 import { MediaLibraryModule } from './media-library/media-library.module';
 import { StoreBannerModule } from './store-banner/store-banner.module';
@@ -145,6 +147,8 @@ import { PhoneVerificationModule } from './phone-verification/phone-verification
     AdminOrdersModule,
     AdminModerationModule,
     AdminUsersModule,
+    AdminExportsModule,
+    AdminPendingModule,
     AdminMarketingModule,
     MediaLibraryModule,
     StoreBannerModule,

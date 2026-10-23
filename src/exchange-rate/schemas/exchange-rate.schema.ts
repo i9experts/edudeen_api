@@ -69,6 +69,17 @@ export class ExchangeRate {
   @Prop({ type: String, enum: ['sanity_band', 'abnormal_jump', null], default: null })
   rejectionReason: 'sanity_band' | 'abnormal_jump' | null;
 
+  // A held ('abnormal_jump') row waits for an admin decision: null = still waiting, 'confirmed' = an admin applied it
+  // (as a NEW current row), 'dismissed' = an admin refused it. The held row itself is never promoted in place.
+  @Prop({ type: String, enum: ['confirmed', 'dismissed', null], default: null })
+  heldResolution: 'confirmed' | 'dismissed' | null;
+
+  @Prop({ type: String, default: null })
+  heldResolvedBy: string | null;
+
+  @Prop({ type: Date, default: null })
+  heldResolvedAt: Date | null;
+
   createdAt?: Date;
   updatedAt?: Date;
 }

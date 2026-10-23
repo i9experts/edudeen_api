@@ -6,6 +6,7 @@ import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogCategory } from './schemas/activity-log.schema';
 import { ActivityLogGateway } from './activity-log.gateway';
 import { currentRequestAudit } from '../common/request-audit.context';
+import { EXPORT_ROW_CAP, toExportCsv } from '../common/csv-export.util';
 
 export interface LogActivityInput {
   /** Omit for a platform-level action with no single store (e.g. admin managing a PlatformPlan) — stored as the 'platform' sentinel. */
@@ -189,7 +190,7 @@ export class ActivityLogService {
 
   private buildAdminFilter(query: any): Record<string, any> {
     const filter: Record<string, any> = {};
-    for (const key of ['storeId', 'category', 'actorId', 'actorRole', 'action', 'targetType'] as const) {
+    for (const key of ['storeId', 'category', 'actorId', 'actorRole', 'action', 'targetType', 'targetId'] as const) {
       const v = plainString(query[key]);
       if (v) filter[key] = v;
     }
@@ -239,10 +240,10 @@ export class ActivityLogService {
     };
   }
 
-  async adminExportCsv(query: any): Promise<string> {
+  async adminExportCsv(query: any, actor?: { id?: string; name?: string | null; role?: string | null }): Promise<string> {
     const { activityLogModel } = this.databaseService.repositories;
     const filter = this.buildAdminFilter(query);
-    const logs = await activityLogModel.find(filter).sort({ createdAt: -1 }).limit(5000).lean();
+    const logs = await activityLogModel.find(filter).sort({ createdAt: -1 }).limit(EXPORT_ROW_CAP + 1).lean();
 
     const header = ['Date', 'Store', 'Category', 'Action', 'Actor', 'Role', 'Description', 'Security Alert', 'IP'];
     const rows = logs.map((l: any) => [
@@ -257,8 +258,26 @@ export class ActivityLogService {
       l.ip ?? '',
     ]);
 
-    // csvLine neutralises spreadsheet formulas (= + - @) — actor names and descriptions are user-influenced.
-    return [header, ...rows].map((r) => csvLine(r)).join('\n');
+    // csvCell neutralises spreadsheet formulas (= + - @) — actor names and descriptions are user-influenced.
+    const out = toExportCsv(header, rows, { label: 'events' });
+    await this.logExport({ kind: 'activity_log', rowCount: out.rowCount, truncated: out.truncated, filters: query, actor });
+    return out.csv;
+  }
+
+  /** Every admin CSV export leaves an audit entry (who, what, how many rows, which filters). Fail-soft like log(). */
+  async logExport(i: { kind: string; rowCount: number; truncated: boolean; filters?: any; actor?: { id?: string; name?: string | null; role?: string | null } }): Promise<boolean> {
+    const f: Record<string, string> = {};
+    for (const [k, v] of Object.entries(i.filters ?? {})) if (typeof v === 'string' || typeof v === 'number') f[k] = String(v).slice(0, 80);
+    return this.log({
+      category: 'settings',
+      action: 'data_export',
+      description: `Exported ${i.rowCount} ${i.kind} row(s)${i.truncated ? ' (truncated at the cap)' : ''}`,
+      actorId: i.actor?.id ?? null,
+      actorName: i.actor?.name ?? null,
+      actorRole: i.actor?.role ?? 'admin',
+      targetType: `export:${i.kind}`,
+      metadata: { kind: i.kind, rowCount: i.rowCount, truncated: i.truncated, filters: f },
+    });
   }
 
   async exportCsv(sellerId: string, storeId: string, query: any): Promise<string> {

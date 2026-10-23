@@ -17,6 +17,7 @@ import { ReuploadManualPaymentDto } from './dto/reupload-manual-payment.dto';
 import { clampInt } from 'src/common/query-safety.util';
 import { assertProofFile } from 'src/common/proof-file.util';
 import { ReceiptCheckService, buildReceiptExpectation } from './receipt-check.service';
+import { DuplicateHit, findDuplicates, proofFileHash, referenceKey } from './duplicate-proof.util';
 import { GoneException } from '@nestjs/common';
 import type { DirectPaymentDetails } from 'src/common/direct-payment.util';
 /** Mirrors OrdersService's local `sellerPayoutBasis`/`sellerPayoutCurrency` —
@@ -140,6 +141,8 @@ export class ManualPaymentsService {
       proofPublicId: upload.publicId,
       proofResourceType: upload.resourceType,
       transactionReference: dto.transactionReference ?? null,
+      transactionReferenceKey: referenceKey(dto.transactionReference),
+      proofHash: proofFileHash(file.buffer),
       senderName: dto.senderName ?? null,
       status: 'pending',
     });
@@ -198,6 +201,8 @@ export class ManualPaymentsService {
           proofResourceType: upload.resourceType,
           proofImageUrl: null, // supersedes any legacy public URL
           transactionReference: dto.transactionReference ?? proof.transactionReference,
+          transactionReferenceKey: referenceKey(dto.transactionReference ?? proof.transactionReference),
+          proofHash: proofFileHash(file.buffer),
           senderName: dto.senderName ?? proof.senderName,
           status: 'pending',
           rejectionReason: null,
@@ -245,20 +250,34 @@ export class ManualPaymentsService {
     const users = await this.db.repositories.userModel.find({ _id: { $in: userIds } }).select('name email').lean();
     const userMap = new Map(users.map((u: any) => [u._id.toString(), u]));
 
+    const dupes = await this.duplicateFlags(proofs as any[]);
     return {
       proofs: (proofs as any[]).map((p) => ({
         ...this.presentProof(p),
         buyerName: userMap.get(p.userId)?.name ?? 'Unknown buyer',
         buyerEmail: userMap.get(p.userId)?.email ?? '',
+        possibleDuplicates: dupes.get(String(p._id)) ?? [],
       })),
       total, page, limit, pages: Math.ceil(total / limit),
     };
   }
 
+  /** Advisory duplicate signals for a page of proofs (same image bytes or same reference in ANOTHER checkout). One query. */
+  private async duplicateFlags(page: any[]) {
+    const hashes = [...new Set(page.map((p) => p.proofHash).filter(Boolean))];
+    const keys = [...new Set(page.map((p) => p.transactionReferenceKey).filter(Boolean))];
+    if (!hashes.length && !keys.length) return new Map<string, DuplicateHit[]>();
+    const candidates = await this.proofModel
+      .find({ $or: [...(hashes.length ? [{ proofHash: { $in: hashes } }] : []), ...(keys.length ? [{ transactionReferenceKey: { $in: keys } }] : [])] })
+      .select('checkoutId status proofHash transactionReferenceKey').limit(500).lean();
+    return findDuplicates(page, candidates as any[]);
+  }
+
   async adminGetById(proofId: string) {
     const proof = await this.proofModel.findById(proofId).lean();
     if (!proof) throw new NotFoundException('Payment proof not found');
-    return this.presentProof(proof);
+    const dupes = await this.duplicateFlags([proof]);
+    return { ...this.presentProof(proof), possibleDuplicates: dupes.get(String(proof._id)) ?? [] };
   }
 
   /** `scope.storeId` = the seller confirming a transfer into their own account (only their proofs match). */

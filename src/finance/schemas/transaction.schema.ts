@@ -55,3 +55,5 @@ export const TransactionSchema = SchemaFactory.createForClass(Transaction);
 TransactionSchema.index({ storeId: 1, createdAt: -1 });
 TransactionSchema.index({ storeId: 1, type: 1, createdAt: -1 });
 TransactionSchema.index({ referenceId: 1 });
+// Clearing job: pending sales per type/status, oldest first.
+TransactionSchema.index({ type: 1, status: 1, createdAt: 1 });

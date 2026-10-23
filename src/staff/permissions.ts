@@ -12,6 +12,11 @@ export interface PermissionDef { key: string; label: string; group: string; sens
 export const PERMISSIONS: PermissionDef[] = [
   { key: 'analytics.view', label: 'View analytics & overview', group: 'Insights' },
   { key: 'activity.view', label: 'View the platform activity log', group: 'Insights' },
+  { key: 'activity.export', label: 'Download the activity log as CSV', group: 'Exports', sensitive: true },
+  { key: 'users.export', label: 'Download buyers & sellers as CSV', group: 'Exports', sensitive: true },
+  { key: 'orders.export', label: 'Download orders as CSV', group: 'Exports', sensitive: true },
+  { key: 'marketplace.export', label: 'Download listings as CSV', group: 'Exports', sensitive: true },
+  { key: 'payments.export', label: 'Download payment proofs as CSV', group: 'Exports', sensitive: true },
   { key: 'users.view', label: 'View buyers & sellers', group: 'Users' },
   { key: 'users.manage', label: 'Suspend / unsuspend accounts', group: 'Users', sensitive: true },
   { key: 'marketplace.view', label: 'View listings & stores', group: 'Marketplace' },
@@ -71,13 +76,22 @@ export const ROLE_TEMPLATES: { slug: string; name: string; description: string; 
 ];
 
 // ── Request → permission rules ────────────────────────────────────────────────
+export const DENY = '__deny__';
 type Rule = { re: RegExp; read?: string | null; write?: string | null };
 /** `null` = allowed for every staff member. First matching rule wins. */
 const RULES: Rule[] = [
   { re: /^\/api\/admin\/staff\/(me|tasks|notes|approvals)(\/|$)/i, read: null, write: null }, // checked again inside the controller
   { re: /^\/api\/admin\/reauth(\/|$)/i, read: null, write: null },
+  { re: /^\/api\/admin\/pending-counts$/i, read: null, write: DENY }, // numbers only; the controller trims queues to the staff member's rights
   { re: /^\/api\/admin\/staff(\/|$)/i, read: 'staff.view', write: 'staff.manage' },
   { re: /^\/api\/auth\/admin\/create-admin/i, write: 'staff.manage', read: 'staff.manage' },
+  // CSV exports are GETs, so the module's *.view right would let any viewer bulk-download personal data: they need their own right.
+  { re: /^\/api\/admin\/exports\/users$/i, read: 'users.export', write: 'users.export' },
+  { re: /^\/api\/admin\/exports\/orders$/i, read: 'orders.export', write: 'orders.export' },
+  { re: /^\/api\/admin\/exports\/listings$/i, read: 'marketplace.export', write: 'marketplace.export' },
+  { re: /^\/api\/admin\/exports\/payment-proofs$/i, read: 'payments.export', write: 'payments.export' },
+  { re: /^\/api\/admin\/activity-log\/export$/i, read: 'activity.export', write: 'activity.export' },
+  { re: /^\/api\/admin\/exports(\/|$)/i, read: DENY, write: DENY },
   { re: /^\/api\/admin\/finance\/payouts\/[^/]+\/(approve|reject|retry|destination)/i, read: 'finance.payouts', write: 'finance.payouts' },
   { re: /^\/api\/admin\/finance(\/|$)/i, read: 'finance.view', write: 'finance.manage' },
   { re: /^\/api\/admin\/commission-rules(\/|$)/i, read: 'finance.view', write: 'finance.manage' },
@@ -112,7 +126,6 @@ const RULES: Rule[] = [
 const BASE_ALLOW = [/^\/api\/auth(\/|$)/i, /^\/api\/upload(\/|$)/i, /^\/api\/notifications(\/|$)/i, /^\/api\/users(\/|$)/i];
 
 /** The permission a STAFF token needs for this request; `null` = allowed; `DENY` = never. */
-export const DENY = '__deny__';
 export function permissionForRequest(method: string, rawPath: string): string | null {
   const path = normalizeRequestPath(rawPath);
   if (path === null) return DENY;

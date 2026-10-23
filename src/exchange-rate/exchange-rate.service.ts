@@ -4,6 +4,8 @@ import { AdminConfigService } from 'src/admin-config/admin-config.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { FxSnapshot, SUPPORTED_CURRENCIES, SupportedCurrency } from './schemas/exchange-rate.schema';
 
+const STALE_ALERT_WINDOW_MS = 10 * 60_000;
+
 interface AuditMeta {
   adminId?: string;
   ip?: string;
@@ -62,6 +64,16 @@ export class ExchangeRateService {
     return Object.fromEntries(entries);
   }
 
+  private readonly lastStaleAlertAt = new Map<string, number>();
+
+  /** True at most once per currency per STALE_ALERT_WINDOW_MS (per process). */
+  shouldAlertStale(currency: string, now = Date.now()): boolean {
+    const last = this.lastStaleAlertAt.get(currency);
+    if (last !== undefined && now - last < STALE_ALERT_WINDOW_MS) return false;
+    this.lastStaleAlertAt.set(currency, now);
+    return true;
+  }
+
   private async requireCurrentRate(currency: string) {
     if (currency === 'USD') {
       return { currency: 'USD', ratePerUSD: 1, effectiveFrom: new Date(), source: 'admin' as const, _id: null };
@@ -84,15 +96,18 @@ export class ExchangeRateService {
     const staleThresholdHours = fxConfig?.staleRateAlertThresholdHours ?? 48;
     const hoursOld = (Date.now() - new Date(rate.effectiveFrom).getTime()) / (1000 * 60 * 60);
     if (hoursOld > staleThresholdHours) {
-      await this.activityLogService.log({
-        storeId: 'platform',
-        category: 'finance',
-        action: 'fx_rate_too_stale_for_checkout',
-        description: `Blocked a conversion/checkout needing ${currency} — its current rate is ${hoursOld.toFixed(1)}h old, past the ${staleThresholdHours}h ceiling`,
-        actorId: 'system',
-        actorRole: 'system',
-        isSecurityAlert: true,
-      });
+      // Every blocked checkout used to write one alert: a stale rate under load flooded the log. One per currency per window.
+      if (this.shouldAlertStale(currency)) {
+        await this.activityLogService.log({
+          storeId: 'platform',
+          category: 'finance',
+          action: 'fx_rate_too_stale_for_checkout',
+          description: `Blocked a conversion/checkout needing ${currency} — its current rate is ${hoursOld.toFixed(1)}h old, past the ${staleThresholdHours}h ceiling (further blocks in the next ${STALE_ALERT_WINDOW_MS / 60000} min are not logged again)`,
+          actorId: 'system',
+          actorRole: 'system',
+          isSecurityAlert: true,
+        });
+      }
       throw new BadRequestException(
         `${currency} pricing is temporarily unavailable while we refresh exchange rates — please try again shortly or choose a different currency.`,
       );
@@ -307,6 +322,57 @@ export class ExchangeRateService {
     }
 
     return { applied: true, held: false, data: row };
+  }
+
+  /** Provider rates that jumped too far and wait for an admin decision (newest first). */
+  async listHeldRates() {
+    return this.model.find({ isRejected: true, rejectionReason: 'abnormal_jump', heldResolution: null }).sort({ effectiveFrom: -1 }).limit(50).lean();
+  }
+
+  /**
+   * Admin confirms a held rate: it is applied as a NEW current row (the held row is only marked 'confirmed'), so
+   * history stays append-only. Refused when it is no longer the newest word on that currency (a newer rate was
+   * ingested since) or was already decided; the claim is atomic so two admins cannot both apply it.
+   */
+  async confirmHeldRate(id: string, meta: AuditMeta = {}) {
+    const held: any = await this.model.findOne({ _id: id, isRejected: true, rejectionReason: 'abnormal_jump', heldResolution: null }).lean();
+    if (!held) throw new BadRequestException('This held rate was not found or has already been decided');
+    const newer = await this.model.exists({ currency: held.currency, isRejected: false, effectiveFrom: { $gt: held.effectiveFrom } });
+    if (newer) throw new BadRequestException('A newer rate for this currency was applied after this one was held - dismiss it instead');
+    const fxConfig = await this.adminConfigService.getFxConfig();
+    const min = fxConfig?.sanityBandMinPKR ?? 150;
+    const max = fxConfig?.sanityBandMaxPKR ?? 450;
+    if (held.currency !== 'USD' && !(held.ratePerUSD >= min && held.ratePerUSD <= max)) {
+      throw new BadRequestException(`Rate ${held.ratePerUSD} is outside the sane band [${min}, ${max}] now - dismiss it`);
+    }
+    const claim = await this.model.findOneAndUpdate(
+      { _id: id, heldResolution: null },
+      { $set: { heldResolution: 'confirmed', heldResolvedBy: meta.adminId ?? null, heldResolvedAt: new Date() } },
+    );
+    if (!claim) throw new BadRequestException('This held rate was just decided by someone else');
+    const row = await this.model.create({ currency: held.currency, ratePerUSD: held.ratePerUSD, effectiveFrom: new Date(), source: 'admin', createdBy: meta.adminId ?? null, isRejected: false });
+    await this.activityLogService.log({
+      storeId: 'platform', category: 'finance', action: 'fx_held_rate_confirmed',
+      description: `Admin confirmed held ${held.currency} rate ${held.ratePerUSD} per USD`,
+      actorId: meta.adminId ?? 'admin', actorRole: 'admin', targetId: String(held._id), targetType: 'exchange_rate',
+      ip: meta.ip, userAgent: meta.userAgent, metadata: { heldId: String(held._id), appliedId: String(row._id), currency: held.currency, ratePerUSD: held.ratePerUSD },
+    });
+    return { applied: true, data: row };
+  }
+
+  async dismissHeldRate(id: string, reason: string | undefined, meta: AuditMeta = {}) {
+    const claim: any = await this.model.findOneAndUpdate(
+      { _id: id, isRejected: true, rejectionReason: 'abnormal_jump', heldResolution: null },
+      { $set: { heldResolution: 'dismissed', heldResolvedBy: meta.adminId ?? null, heldResolvedAt: new Date() } },
+    );
+    if (!claim) throw new BadRequestException('This held rate was not found or has already been decided');
+    await this.activityLogService.log({
+      storeId: 'platform', category: 'finance', action: 'fx_held_rate_dismissed',
+      description: `Admin dismissed held ${claim.currency} rate ${claim.ratePerUSD} per USD${reason ? `: ${reason.slice(0, 200)}` : ''}`,
+      actorId: meta.adminId ?? 'admin', actorRole: 'admin', targetId: String(claim._id), targetType: 'exchange_rate',
+      ip: meta.ip, userAgent: meta.userAgent, metadata: { heldId: String(claim._id), currency: claim.currency, ratePerUSD: claim.ratePerUSD },
+    });
+    return { applied: false, dismissed: true };
   }
 
   /** History for the admin FX settings page — newest first, paginated. */

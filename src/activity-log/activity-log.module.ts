@@ -7,6 +7,7 @@ import { AdminActivityLogController } from './admin-activity-log.controller';
 import { ActivityLogService } from './activity-log.service';
 import { ActivityLogGateway } from './activity-log.gateway';
 import { RedisModule } from '../redis/redis.module';
+import { AdminReauthModule } from '../admin-reauth/admin-reauth.module';
 
 // Deliberately does NOT import AuthModule: AuthService injects ActivityLogService
 // (a global provider), so importing AuthModule here would create a circular
@@ -17,6 +18,7 @@ import { RedisModule } from '../redis/redis.module';
 @Module({
   imports: [
     RedisModule,
+    AdminReauthModule,
     ConfigModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Post, Query, Req, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req, UseGuards, UseInterceptors } from '@nestjs/common';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { AdminReauthGuard, RequireReauth } from '../admin-reauth/admin-reauth.guard';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -43,6 +44,26 @@ export class AdminFxController {
   @Get('staleness')
   async getStaleness() {
     const data = await this.exchangeRateService.getStaleness();
+    return { success: true, data };
+  }
+
+  @Get('held')
+  async held() {
+    return { success: true, data: await this.exchangeRateService.listHeldRates() };
+  }
+
+  @RequireReauth()
+  @Post('held/:id/confirm')
+  async confirmHeld(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
+    const data = await this.exchangeRateService.confirmHeldRate(id, { adminId: req.user.userId, ip: req.ip, userAgent: req.headers['user-agent'] });
+    return { success: true, data };
+  }
+
+  @RequireReauth()
+  @Post('held/:id/dismiss')
+  async dismissHeld(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() body: { reason?: string }) {
+    const reason = typeof body?.reason === 'string' ? body.reason : undefined;
+    const data = await this.exchangeRateService.dismissHeldRate(id, reason, { adminId: req.user.userId, ip: req.ip, userAgent: req.headers['user-agent'] });
     return { success: true, data };
   }
 

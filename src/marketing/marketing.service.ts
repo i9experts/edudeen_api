@@ -7,6 +7,7 @@ import { UpdateCouponDto } from './dto/update-coupon.dto';
 import { ActiveCampaignForStore } from './campaign-pricing.util';
 import { parseCampaignIdsInput } from './campaign-eligibility.util';
 import { generateUniqueSlug } from 'src/common/slug.util';
+import { CAMPAIGN_WITHIN_CAP } from './schemas/campaign.schema';
 
 import { clampInt } from 'src/common/query-safety.util';
 @Injectable()
@@ -328,6 +329,7 @@ export class MarketingService {
           { sponsorType: 'platform' },
           { participatingStoreIds: { $in: uniqueIds } },
         ],
+        ...CAMPAIGN_WITHIN_CAP, // platform budget used up -> no campaign price in cart/checkout/badges
       })
       .select('name endDate discountType discountValue currency participatingStoreIds sponsorType startDate')
       .lean();
@@ -398,6 +400,7 @@ export class MarketingService {
             ? { participatingStoreIds: { $in: eligibleStoreIds } }
             : { 'participatingStoreIds.0': { $exists: true } },
         ],
+        ...CAMPAIGN_WITHIN_CAP,
       })
       // Admin-controlled rotation order first (see Campaign.order), soonest-
       // ending as the tiebreaker for campaigns left at their default order.

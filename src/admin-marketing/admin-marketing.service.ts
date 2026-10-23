@@ -189,6 +189,7 @@ export class AdminMarketingService {
       discountType: dto.discountType ?? null,
       discountValue: dto.discountValue ?? null,
       sponsorType: dto.sponsorType ?? 'seller',
+      subsidyCapUSD: dto.subsidyCapUSD && dto.subsidyCapUSD > 0 && (dto.sponsorType ?? 'seller') === 'platform' ? dto.subsidyCapUSD : null,
       order: dto.order ?? currentCount,
       createdBy: meta.adminId,
     });
@@ -227,6 +228,9 @@ export class AdminMarketingService {
     const effectiveValue = dto.discountValue !== undefined ? dto.discountValue : existing.discountValue;
     if (effectiveType === 'percentage' && effectiveValue != null && effectiveValue > 100) {
       throw new BadRequestException('Percentage discount cannot exceed 100');
+    }
+    if ((dto.subsidyCapUSD ?? 0) > 0 && (dto.sponsorType ?? existing.sponsorType) !== 'platform') {
+      throw new BadRequestException('A subsidy cap only applies to platform-sponsored campaigns');
     }
     if (
       (dto.startDate !== undefined || dto.endDate !== undefined) &&

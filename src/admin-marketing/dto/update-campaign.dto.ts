@@ -48,6 +48,13 @@ export class UpdateCampaignDto {
   @IsEnum(['seller', 'platform'])
   sponsorType?: 'seller' | 'platform';
 
+  @ApiProperty({ required: false, description: 'Platform subsidy budget in USD (0 = no cap). Only meaningful for sponsorType "platform".' })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(10000000)
+  subsidyCapUSD?: number;
+
   @ApiProperty({ required: false })
   @IsOptional()
   @IsInt()

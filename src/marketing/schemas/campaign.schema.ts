@@ -66,6 +66,12 @@ export class Campaign {
   @Prop({ type: Number, default: 0 })
   totalPlatformSubsidyUSD: number;
 
+  // Budget for a platform-sponsored campaign (USD). null / 0 = no cap. Once totalPlatformSubsidyUSD reaches it the
+  // campaign stops giving its price (see CAMPAIGN_WITHIN_CAP) - a soft cap: sales already in flight may overshoot by
+  // their own discount because the running total is credited when the sale is recorded.
+  @Prop({ type: Number, default: null })
+  subsidyCapUSD: number | null;
+
   @Prop({ type: [String], default: [] })
   participatingStoreIds: string[];
 
@@ -91,5 +97,28 @@ export class Campaign {
 }
 
 export const CampaignSchema = SchemaFactory.createForClass(Campaign);
+
+/**
+ * Mongo filter fragment: drops a platform-sponsored campaign whose subsidy budget is used up. Spread into the
+ * `$and` of every query that decides whether a campaign still gives a price (cart, checkout, badges, deals banner).
+ */
+export const CAMPAIGN_WITHIN_CAP = {
+  $expr: {
+    $not: [{
+      $and: [
+        { $eq: ['$sponsorType', 'platform'] },
+        { $gt: [{ $ifNull: ['$subsidyCapUSD', 0] }, 0] },
+        { $gte: [{ $ifNull: ['$totalPlatformSubsidyUSD', 0] }, '$subsidyCapUSD'] },
+      ],
+    }],
+  },
+};
+
+/** Pure twin of CAMPAIGN_WITHIN_CAP (used where a campaign document is already loaded, and in tests). */
+export function campaignHasBudget(c: { sponsorType?: string | null; subsidyCapUSD?: number | null; totalPlatformSubsidyUSD?: number | null }): boolean {
+  if (c.sponsorType !== 'platform') return true;
+  const cap = c.subsidyCapUSD ?? 0;
+  return !(cap > 0 && (c.totalPlatformSubsidyUSD ?? 0) >= cap);
+}
 
 CampaignSchema.index({ status: 1, startDate: 1, endDate: 1 });

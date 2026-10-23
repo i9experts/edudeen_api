@@ -33,7 +33,8 @@ const decryptAccountNumber = (payload: string) => {
 export const PLATFORM_FEE_RATE       = 0.08;   // 8% per sale — last-resort fallback, see CommissionRulesService
 export const PAYMENT_PROCESSING_RATE = 0.029;  // 2.9%
 export const PAYMENT_PROCESSING_FIXED = 0.30;  // $0.30 per transaction
-export const CLEARING_DAYS           = 3;      // default — non-card rails (manual bank transfer, COD)
+export const CLEARING_BATCH_SIZE     = 500;    // sale rows read per round by processClearingBalances
+export const CLEARING_DAYS           = 3;     // default — non-card rails (manual bank transfer, COD)
 // Card-funded (Stripe) sales carry real chargeback exposure that can
 // surface weeks after the charge — a Pakistani bank-transfer payment has no
 // equivalent reversal mechanism once sent. Holding card-funded proceeds
@@ -1878,8 +1879,16 @@ export class FinanceService {
     // bank-transfer one. Fetches every still-pending sale and filters in
     // JS rather than in the query — clearingDays varies per row, so a
     // single Mongo date-range filter can't express it directly.
-    const pendingSales = await this.txModel.find({ type: 'sale', status: 'pending' }).lean();
+    // Only rows whose OWN window has passed are selected (createdAt + clearingDays <= now, expressed with $expr), read
+    // in _id-ordered batches so a large backlog never sits in memory at once. Rows flip to 'completed' as they are
+    // claimed; a row that fails stays pending and is skipped by the _id cursor (retried on the next run).
     const now = Date.now();
+    const batchSize = CLEARING_BATCH_SIZE;
+    const dueFilter = (afterId: unknown): Record<string, any> => ({
+      type: 'sale', status: 'pending',
+      ...(afterId ? { _id: { $gt: afterId } } : {}),
+      $expr: { $lte: [{ $add: ['$createdAt', { $multiply: [{ $ifNull: ['$metadata.clearingDays', CLEARING_DAYS] }, 24 * 60 * 60 * 1000] }] }, new Date(now)] },
+    });
 
     let processed = 0;
     let totalAmount = 0;
@@ -1888,7 +1897,12 @@ export class FinanceService {
     // and USD amounts cleared in the same run must never be summed together.
     const totalsByCurrency = new Map<string, number>();
 
-    for (const tx of pendingSales as any[]) {
+    let afterId: unknown = null;
+    for (;;) {
+      const batch = (await this.txModel.find(dueFilter(afterId)).sort({ _id: 1 }).limit(batchSize).lean()) as any[];
+      if (batch.length === 0) break;
+      afterId = batch[batch.length - 1]._id;
+    for (const tx of batch) {
       const clearingDays = tx.metadata?.clearingDays ?? CLEARING_DAYS;
       const eligibleAt = new Date(tx.createdAt).getTime() + clearingDays * 24 * 60 * 60 * 1000;
       if (eligibleAt > now) continue; // not yet past its own clearing window
@@ -1936,6 +1950,8 @@ export class FinanceService {
         // One poison row must not starve every later sale on every run.
         this.logger.error(`Clearing failed for sale tx ${tx._id}: ${err?.message}`, err?.stack);
       }
+    }
+      if (batch.length < batchSize) break;
     }
 
     const byCurrency = [...totalsByCurrency.entries()].map(([currency, amount]) => ({ currency, amount }));
