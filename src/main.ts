@@ -10,6 +10,7 @@ import cookieParser from 'cookie-parser';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
 import { GLOBAL_VALIDATION_OPTIONS } from './common/validation.config';
+import { requestAuditMiddleware } from './common/request-audit.context';
 
 // Optional Sentry: only when SENTRY_DSN is set AND @sentry/node is installed (npm i @sentry/node). Never blocks boot.
 async function initSentry() {
@@ -53,6 +54,7 @@ async function bootstrap() {
   }
 
   app.use(cookieParser());
+  app.use(requestAuditMiddleware); // ip + user-agent for audit entries (ActivityLogService fills them in when a caller omits them)
 
   // Baseline security headers (no helmet dependency). The API serves JSON plus the bot prerender HTML, so these are safe
   // everywhere: no sniffing, no referrer leak (framing left open: course/preview PDFs may be embedded from the web app), HSTS only in production (https).

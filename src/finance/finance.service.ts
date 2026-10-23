@@ -1,7 +1,7 @@
 /* eslint-disable prettier/prettier */
-import { Injectable, NotFoundException, BadRequestException, ConflictException, Logger, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ServiceUnavailableException, Logger, Optional } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
-import { Connection, ClientSession } from 'mongoose';
+import { Connection, ClientSession, isValidObjectId } from 'mongoose';
 import { DatabaseService } from 'src/database/databaseservice';
 import { RequestPayoutDto } from './dto/request-payout.dto';
 import { AddPayoutMethodDto } from './dto/add-payout-method.dto';
@@ -15,7 +15,7 @@ import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 
-import { clampInt } from 'src/common/query-safety.util';
+import { clampInt, csvCell, csvLine, parseDateParam } from 'src/common/query-safety.util';
 import { encryptSeoCredential, decryptSeoCredential } from 'src/common/seo-token-encryption.util';
 
 /** Keys the account-number encryption may use, most preferred first. Always has JWT_SECRET to fall back on, so saving a payout method never fails just because a dedicated key was not configured; decryption tries every candidate so adding a dedicated key later does not strand existing data. */
@@ -110,6 +110,9 @@ function clearingDaysForRail(paymentMethodType: string): number {
   return paymentMethodType === 'stripe' ? CLEARING_DAYS_CARD : CLEARING_DAYS;
 }
 const ESTIMATED_TAX_RATE      = 0.15;   // 15% estimate shown in UI
+export const EXPORT_ROW_CAP   = 5000;   // CSV exports stop here and say so in the file
+export const MANUAL_PAYOUT_MAX = 10_000_000; // sanity ceiling for one admin-issued payout (also @Max on the DTO)
+export const MANUAL_PAYOUT_CURRENCIES = ['USD', 'PKR'];
 
 /** Currency-aware amount formatting for CSV export — every other currency-agnostic $-literal in this file was a latent multi-currency bug waiting to happen; this is the one shared spot so it can't drift per call site. */
 function amountFmt(n: number, currency: string): string {
@@ -159,6 +162,16 @@ export class FinanceService {
 
   private async verifyStoreOwnership(sellerId: string, storeId: string) {
     return verifyStoreOwnershipStrict(this.storeModel, storeId, sellerId);
+  }
+
+  /** A suspended seller / store is on hold: no payout is paid or auto-created until an admin unsuspends them. */
+  private async isPayoutHold(storeId: string, sellerId?: string): Promise<boolean> {
+    const store: any = await this.storeModel.findOne({ _id: storeId }).select('status sellerId').lean();
+    if (store && store.status === 'suspended') return true;
+    const sid = sellerId ?? store?.sellerId;
+    if (!sid) return false;
+    const seller: any = await this.sellerModel.findOne({ _id: sid }).select('status').lean();
+    return seller?.status === 'suspended';
   }
 
   /** Admin-facing equivalent — admins may act on any store, so this only checks the store exists (not who owns it). */
@@ -433,15 +446,28 @@ export class FinanceService {
   /** Shared filter builder — used by the seller's own transaction list/export and by the admin platform-wide equivalents. */
   private buildTransactionFilter(query: any, extra?: Record<string, any>): Record<string, any> {
     const filter: Record<string, any> = { ...extra };
-    if (query.type)    filter.type   = query.type;
-    if (query.status)  filter.status = query.status;
-    if (query.storeId) filter.storeId = query.storeId;
-    if (query.sellerId) filter.sellerId = query.sellerId;
-    if (query.currency) filter.currency = query.currency;
-    if (query.from || query.to) {
+    // Plain strings only — ?status[$ne]=x would otherwise reach Mongo as an operator.
+    const text = (v: unknown, name: string) => {
+      if (v === undefined || v === null || v === '') return undefined;
+      if (typeof v !== 'string' || v.length > 100) throw new BadRequestException(`${name} is not valid`);
+      return v;
+    };
+    const type = text(query.type, 'type');
+    const status = text(query.status, 'status');
+    const storeId = text(query.storeId, 'storeId');
+    const sellerId = text(query.sellerId, 'sellerId');
+    const currency = text(query.currency, 'currency');
+    if (type) filter.type = type;
+    if (status) filter.status = status;
+    if (storeId && !extra?.storeId) filter.storeId = storeId;
+    if (sellerId) filter.sellerId = sellerId;
+    if (currency) filter.currency = currency;
+    const from = parseDateParam(query.from, 'from');
+    const to = parseDateParam(query.to, 'to');
+    if (from || to) {
       filter.createdAt = {};
-      if (query.from) filter.createdAt.$gte = new Date(query.from);
-      if (query.to)   filter.createdAt.$lte = new Date(query.to);
+      if (from) filter.createdAt.$gte = from;
+      if (to)   filter.createdAt.$lte = to;
     }
     return filter;
   }
@@ -460,15 +486,19 @@ export class FinanceService {
     return { transactions, total, page, limit, pages: Math.ceil(total / limit) };
   }
 
-  private transactionsToCsv(txs: any[]): string {
+  /** `truncated` = the query hit the export row cap, so older rows are missing — said in the file itself. */
+  private transactionsToCsv(txs: any[], truncated = false): string {
     const header = 'Date,Store,Description,Type,Currency,Amount,Balance After,Status\n';
     const rows = txs.map((t: any) => {
       const date = new Date(t.createdAt).toISOString().split('T')[0];
       const currency = t.currency || 'USD';
+      // Text cells go through csvCell (escapes quotes, defuses =,+,-,@ — descriptions/store ids can carry user text).
+      // The two amount cells are built from numbers only, so their "+"/"-" sign is data, not a formula: quoted as-is.
       const amount = t.amount >= 0 ? `+${amountFmt(t.amount, currency)}` : `-${amountFmt(Math.abs(t.amount), currency)}`;
-      return `"${date}","${t.storeId}","${t.description}","${t.type}","${currency}","${amount}","${amountFmt(t.balanceAfter, currency)}","${t.status}"`;
+      return [csvCell(date), csvCell(t.storeId), csvCell(t.description), csvCell(t.type), csvCell(currency), `"${amount}"`, `"${amountFmt(t.balanceAfter, currency)}"`, csvCell(t.status)].join(',');
     }).join('\n');
-    return header + rows;
+    const note = truncated ? `\n${csvLine([`TRUNCATED: only the newest ${EXPORT_ROW_CAP} rows are included - narrow the date range to see older rows`])}` : '';
+    return header + rows + note;
   }
 
   async getTransactions(sellerId: string, storeId: string, query: any) {
@@ -480,8 +510,8 @@ export class FinanceService {
   async exportTransactionsCsv(sellerId: string, storeId: string, query: any): Promise<string> {
     await this.verifyStoreOwnership(sellerId, storeId);
     const filter = this.buildTransactionFilter(query, { storeId });
-    const txs = await this.txModel.find(filter).sort({ createdAt: -1 }).limit(5000).lean();
-    return this.transactionsToCsv(txs);
+    const txs = await this.txModel.find(filter).sort({ createdAt: -1 }).limit(EXPORT_ROW_CAP + 1).lean();
+    return this.transactionsToCsv(txs.slice(0, EXPORT_ROW_CAP), txs.length > EXPORT_ROW_CAP);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -612,6 +642,7 @@ export class FinanceService {
         await this.scheduleModel.updateOne({ _id: schedule._id }, { $set: { nextPayoutAt: nextDate } });
 
         if (!schedule.defaultPayoutMethodId) { skipped++; continue; }
+        if (await this.isPayoutHold(schedule.storeId, schedule.sellerId)) { skipped++; continue; }
 
         const currency = schedule.currency || 'USD';
         const [method, balance, hasPendingPayout] = await Promise.all([
@@ -790,11 +821,13 @@ export class FinanceService {
     if (method?.accountNumberEnc) {
       try { accountNumber = decryptAccountNumber(method.accountNumberEnc); } catch { throw new BadRequestException('Could not decrypt this account number — ask the seller to re-enter it.'); }
     }
-    this.activityLogService.log({
+    // Fail closed: a full account number is only revealed once the reveal is on record (field is `ip` — it used to be `ipAddress`, which was dropped).
+    const audited = await this.activityLogService.log({
       storeId: payout.storeId, category: 'finance', action: 'payout_destination_viewed',
       description: 'Admin viewed a payout destination (full account number)', actorId: adminId, actorRole: 'admin',
-      targetId: payoutId, targetType: 'payout', ipAddress: ip, userAgent,
-    } as any);
+      targetId: payoutId, targetType: 'payout', ip, userAgent,
+    });
+    if (audited === false) throw new ServiceUnavailableException('Could not record this access in the audit log - try again');
     return {
       payoutId, amount: payout.amount, currency: payout.currency, type: method?.type ?? payout.payoutMethodSnapshot?.type ?? null,
       bankName: method?.bankName ?? payout.payoutMethodSnapshot?.bankName ?? null, accountHolder: method?.accountHolder ?? null,
@@ -805,26 +838,35 @@ export class FinanceService {
   }
 
   /** Admin-only — moves a payout method to 'active' (or back to 'inactive') after reviewing it. No live automated verification exists yet, so every new method starts 'pending_verification' and must pass through here before a seller can withdraw to it. */
-  async adminVerifyPayoutMethod(storeId: string, methodId: string, adminId: string, approve: boolean, note?: string) {
+  async adminVerifyPayoutMethod(storeId: string, methodId: string, adminId: string, approve: boolean, note?: string, ip?: string, userAgent?: string) {
     await this.verifyStoreExistsForAdmin(storeId);
-    const method = await this.methodModel.findOne({ _id: methodId, storeId });
-    if (!method) throw new NotFoundException('Payout method not found');
+    const target = approve ? 'active' : 'inactive';
 
-    method.status = approve ? 'active' : 'inactive';
-    method.verifiedByAdminId = adminId;
-    method.verifiedAt = new Date();
-    if (note) method.accountTitleMismatchNote = note;
-    await method.save();
+    // Transition check done atomically: a method that is already in the requested state is not "verified" twice
+    // (that would overwrite who verified it and when), and two admins clicking at once can't both win.
+    const before = await this.methodModel.findOneAndUpdate(
+      { _id: methodId, storeId, status: { $ne: target } },
+      { $set: { status: target, verifiedByAdminId: adminId, verifiedAt: new Date(), ...(note ? { accountTitleMismatchNote: note } : {}) } },
+      { returnDocument: 'before' },
+    );
+    if (!before) {
+      const existing = await this.methodModel.findOne({ _id: methodId, storeId }).select('status').lean<{ status: string }>();
+      if (!existing) throw new NotFoundException('Payout method not found');
+      throw new BadRequestException(`Payout method is already ${existing.status === 'active' ? 'active' : 'inactive'}`);
+    }
+    const method = await this.methodModel.findById(methodId);
 
-    this.activityLogService.log({
+    await this.activityLogService.log({
       storeId,
       category: 'finance',
       action: approve ? 'payout_method_verified' : 'payout_method_rejected',
-      description: `Payout method (${method.type}) ${approve ? 'verified and activated' : 'rejected'} by admin`,
+      description: `Payout method (${before.type}) ${approve ? 'verified and activated' : 'rejected'} by admin (was ${before.status})`,
       actorId: adminId,
       actorRole: 'admin',
       targetId: methodId,
       targetType: 'payout_method',
+      ip, userAgent,
+      metadata: { from: before.status, to: target },
     });
 
     return method;
@@ -1481,8 +1523,8 @@ export class FinanceService {
 
   async adminExportTransactionsCsv(query: any): Promise<string> {
     const filter = await this.applyPaymentMethodTypeFilter(this.buildTransactionFilter(query), query.paymentMethodType);
-    const txs = await this.txModel.find(filter).sort({ createdAt: -1 }).limit(5000).lean();
-    return this.transactionsToCsv(txs);
+    const txs = await this.txModel.find(filter).sort({ createdAt: -1 }).limit(EXPORT_ROW_CAP + 1).lean();
+    return this.transactionsToCsv(txs.slice(0, EXPORT_ROW_CAP), txs.length > EXPORT_ROW_CAP);
   }
 
   async adminGetPayoutQueue(query: any) {
@@ -1491,22 +1533,32 @@ export class FinanceService {
     const skip  = (page - 1) * limit;
 
     const filter: Record<string, any> = {};
-    if (query.status)   filter.status   = query.status;
-    if (query.storeId)  filter.storeId  = query.storeId;
-    if (query.sellerId) filter.sellerId = query.sellerId;
+    for (const k of ['status', 'storeId', 'sellerId'] as const) {
+      const v = query[k];
+      if (v === undefined || v === null || v === '') continue;
+      if (typeof v !== 'string' || v.length > 100) throw new BadRequestException(`${k} is not valid`);
+      filter[k] = v;
+    }
 
     const [payouts, total, statusRows] = await Promise.all([
       this.payoutModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       this.payoutModel.countDocuments(filter),
-      this.payoutModel.aggregate([{ $group: { _id: '$status', count: { $sum: 1 }, amount: { $sum: '$amount' } } }]),
+      // Grouped by currency too: a PKR and a USD payout must never be summed into one figure.
+      this.payoutModel.aggregate([{ $group: { _id: { status: '$status', currency: { $ifNull: ['$currency', 'USD'] } }, count: { $sum: 1 }, amount: { $sum: '$amount' } } }]),
     ]);
 
-    const statusCounts: Record<string, { count: number; amount: number }> = {
-      pending: { count: 0, amount: 0 }, processing: { count: 0, amount: 0 },
-      completed: { count: 0, amount: 0 }, failed: { count: 0, amount: 0 },
+    // `amount` = USD payouts only (kept so older clients still read a number); the full split is in `byCurrency`.
+    const statusCounts: Record<string, { count: number; amount: number; byCurrency: { currency: string; count: number; amount: number }[] }> = {
+      pending: { count: 0, amount: 0, byCurrency: [] }, processing: { count: 0, amount: 0, byCurrency: [] },
+      completed: { count: 0, amount: 0, byCurrency: [] }, failed: { count: 0, amount: 0, byCurrency: [] },
     };
     for (const row of statusRows) {
-      if (statusCounts[row._id]) statusCounts[row._id] = { count: row.count, amount: this.round(row.amount) };
+      const bucket = statusCounts[row._id?.status];
+      if (!bucket) continue;
+      const currency = row._id.currency as string;
+      bucket.count += row.count;
+      bucket.byCurrency.push({ currency, count: row.count, amount: this.round(row.amount) });
+      if (currency === 'USD') bucket.amount = this.round(bucket.amount + row.amount);
     }
 
     return { payouts, total, page, limit, pages: Math.ceil(total / limit), statusCounts };
@@ -1529,7 +1581,10 @@ export class FinanceService {
     // The method may have been edited (back to pending_verification) or deleted
     // after the seller requested this payout — never wire money to a destination
     // nobody has verified. The admin can reject instead.
-    const pending = await this.payoutModel.findOne({ _id: payoutId, status: { $in: ['pending', 'processing'] } }).select('payoutMethodId').lean<{ payoutMethodId: string }>();
+    const pending = await this.payoutModel.findOne({ _id: payoutId, status: { $in: ['pending', 'processing'] } }).select('payoutMethodId storeId sellerId').lean<{ payoutMethodId: string; storeId: string; sellerId: string }>();
+    if (pending && await this.isPayoutHold(pending.storeId, pending.sellerId)) {
+      throw new BadRequestException('This seller is suspended - the payout is on hold. Unsuspend the seller to pay it, or reject it to return the money to their balance');
+    }
     if (pending && pending.payoutMethodId !== 'admin-manual') {
       const method = await this.methodModel.findById(pending.payoutMethodId).select('status').lean<{ status: string }>();
       if (!method || method.status !== 'active') {
@@ -1648,6 +1703,14 @@ export class FinanceService {
         throw new BadRequestException('Only failed payouts can be retried');
       }
 
+      // The method may have been rejected / deactivated since the payout failed — never re-queue money to it.
+      // (Off-platform manual payouts have no method document, so only real method ids are checked.)
+      if (claimed.payoutMethodId && isValidObjectId(claimed.payoutMethodId)) {
+        const method = await this.methodModel.findOne({ _id: claimed.payoutMethodId, storeId: claimed.storeId }).session(session).select('status').lean<{ status: string }>();
+        if (!method) throw new BadRequestException('Cannot retry — the payout method no longer exists');
+        if (method.status !== 'active') throw new BadRequestException('Cannot retry — the payout method is not active any more');
+      }
+
       const currency = claimed.currency || 'USD';
       const balance = await this.getOrCreateBalance(claimed.storeId, claimed.sellerId, currency, session);
       if (claimed.amount > balance.availableBalance) {
@@ -1679,7 +1742,7 @@ export class FinanceService {
       return claimed;
     });
 
-    this.activityLogService.log({
+    await this.activityLogService.log({
       storeId: payout.storeId,
       category: 'finance',
       action: 'payout_retried',
@@ -1708,23 +1771,35 @@ export class FinanceService {
     storeId: string, adminId: string,
     amount: number, payoutMethodId: string | undefined, notes: string | undefined,
     ip?: string, userAgent?: string,
+    requestedCurrency?: string,
   ) {
     const store = await this.verifyStoreExistsForAdmin(storeId);
     amount = this.normalizeAmount(amount);
+    if (amount > MANUAL_PAYOUT_MAX) throw new BadRequestException(`A single manual payout cannot exceed ${MANUAL_PAYOUT_MAX.toLocaleString('en-US')}`);
+    if (requestedCurrency !== undefined && !MANUAL_PAYOUT_CURRENCIES.includes(requestedCurrency)) {
+      throw new BadRequestException(`Currency must be one of ${MANUAL_PAYOUT_CURRENCIES.join(', ')}`);
+    }
 
     let methodSnapshot: { type: string; bankName: string | null; accountLast4?: string } = {
       type: 'manual', bankName: null, accountLast4: 'ADMIN',
     };
     let resolvedMethodId = 'admin-manual';
-    let currency = 'USD';
+    // Off-platform payouts: the admin names the currency (default = the store's settlement currency, else USD)
+    // and the balance debited is that currency's balance — never silently USD.
+    let currency = requestedCurrency || (store as any).currency || 'USD';
     if (payoutMethodId) {
       const method = await this.methodModel.findOne({ _id: payoutMethodId, storeId });
       if (!method) throw new NotFoundException('Payout method not found');
       if (method.status !== 'active') throw new BadRequestException('Payout method is not verified/active');
+      const methodCurrency = method.currency || 'USD';
+      if (requestedCurrency && requestedCurrency !== methodCurrency) {
+        throw new BadRequestException(`This payout method pays in ${methodCurrency}, not ${requestedCurrency}`);
+      }
       methodSnapshot = { type: method.type, bankName: method.bankName, accountLast4: method.accountLast4 ?? undefined };
       resolvedMethodId = payoutMethodId;
-      currency = method.currency || 'USD';
+      currency = methodCurrency;
     }
+    if (!MANUAL_PAYOUT_CURRENCIES.includes(currency)) currency = 'USD';
 
     const payout = await this.withTransaction(async (session) => {
       const balance = await this.getOrCreateBalance(storeId, store.sellerId, currency, session);
@@ -1774,7 +1849,7 @@ export class FinanceService {
       return createdPayout;
     });
 
-    this.activityLogService.log({
+    await this.activityLogService.log({
       storeId,
       category: 'finance',
       action: 'manual_payout_issued',

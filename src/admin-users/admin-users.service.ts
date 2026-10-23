@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { AdminUsersQueryDto } from './dto/admin-users-query.dto';
@@ -29,8 +29,9 @@ export class AdminUsersService {
     return this.databaseService.repositories;
   }
 
-  private log(action: string, description: string, meta: AuditMeta, targetId?: string) {
-    this.activityLogService.log({
+  /** Awaited by callers: suspending / signing someone out is on record before the response goes out. */
+  private log(action: string, description: string, meta: AuditMeta, targetId?: string, metadata?: object) {
+    return this.activityLogService.log({
       storeId: 'platform',
       category: 'customers',
       action,
@@ -40,6 +41,7 @@ export class AdminUsersService {
       targetId,
       ip: meta.ip,
       userAgent: meta.userAgent,
+      metadata: metadata ?? null,
     });
   }
 
@@ -151,7 +153,15 @@ export class AdminUsersService {
     return { success: true, data: doc };
   }
 
-  async suspend(role: 'buyer' | 'seller', id: string, meta: AuditMeta) {
+  /** A suspension needs a written reason (kept in the audit log with who/when/where from). */
+  private cleanReason(reason: unknown): string {
+    const r = typeof reason === 'string' ? reason.trim() : '';
+    if (r.length < 3) throw new BadRequestException('A reason is required to suspend an account');
+    return r.slice(0, 500);
+  }
+
+  async suspend(role: 'buyer' | 'seller', id: string, meta: AuditMeta, reason?: string) {
+    const why = this.cleanReason(reason);
     const doc = await this.findOrThrow(role, id);
 
     if (role === 'buyer') {
@@ -159,7 +169,7 @@ export class AdminUsersService {
         $set: { status: 'suspended' },
         $inc: { tokenVersion: 1 }, // invalidates any already-issued session on its next request
       });
-      this.log('buyer_suspended', `Buyer "${doc.name ?? doc.email}" set to suspended`, meta, id);
+      await this.log('buyer_suspended', `Buyer "${doc.name ?? doc.email}" set to suspended: ${why}`, meta, id, { reason: why });
       return { success: true, message: 'Buyer set to suspended' };
     }
 
@@ -167,22 +177,47 @@ export class AdminUsersService {
     // rule that lets unsuspend restore exactly those stores).
     const { suspendedStores } = await suspendSellerCascade(this.databaseService, id);
 
-    this.log(
+    // What the suspension leaves hanging, so the admin sees it right away and it is on record:
+    //  - pending / processing payouts are on HOLD (FinanceService refuses to approve them while suspended;
+    //    the admin can still reject them, which returns the money to the seller's balance),
+    //  - customer orders that are still open are flagged in the audit entry (admin decides: cancel, refund, reassign).
+    const stores = await this.r.storeModel.find({ sellerId: id, isDelete: false }).select('_id').lean();
+    const storeIds = stores.map((s: any) => String(s._id));
+    const [heldPayouts, openOrderDocs] = await Promise.all([
+      this.r.payoutModel.countDocuments({ sellerId: id, status: { $in: ['pending', 'processing'] } }),
+      storeIds.length
+        ? this.r.orderModel
+            .find({ isDelete: false, sellerOrders: { $elemMatch: { storeId: { $in: storeIds }, status: { $in: ['pending', 'processing', 'shipped'] } } } })
+            .select('orderNumber').limit(51).lean()
+        : Promise.resolve([] as any[]),
+    ]);
+    const openOrders = openOrderDocs.length > 50 ? '50+' : openOrderDocs.length;
+
+    await this.log(
       'seller_suspended',
-      `Seller "${doc.name ?? doc.email}" suspended (${suspendedStores} store(s) suspended with it)`,
+      `Seller "${doc.name ?? doc.email}" suspended (${suspendedStores} store(s) suspended with it): ${why}. ${heldPayouts} payout(s) on hold, ${openOrders} open order(s) need attention`,
       meta,
       id,
+      { reason: why, suspendedStores, heldPayouts, openOrders, openOrderNumbers: openOrderDocs.slice(0, 50).map((o: any) => o.orderNumber ?? String(o._id)) },
     );
-    return { success: true, message: 'Seller set to suspended' };
+    return { success: true, message: 'Seller set to suspended', data: { suspendedStores, heldPayouts, openOrders } };
   }
 
+  /** Ends every session of the account right now (token version bump) without suspending it. */
+  async forceLogout(role: 'buyer' | 'seller', id: string, meta: AuditMeta) {
+    const doc = await this.findOrThrow(role, id);
+    const model: any = role === 'buyer' ? this.r.userModel : this.r.sellerModel;
+    await model.updateOne({ _id: id, isDelete: false }, { $inc: { tokenVersion: 1 } });
+    await this.log(`${role}_force_logout`, `All sessions of ${role} "${doc.name ?? doc.email}" ended by an admin`, meta, id);
+    return { success: true, message: 'Signed out everywhere' };
+  }
   async unsuspend(role: 'buyer' | 'seller', id: string, meta: AuditMeta) {
     const doc = await this.findOrThrow(role, id);
 
     if (role === 'buyer') {
       const restored = await this.r.userModel.updateOne({ _id: id, isDelete: false, status: 'suspended' }, { $set: { status: 'active' } });
       if (!restored.modifiedCount) throw new ConflictException('Buyer is not suspended');
-      this.log('buyer_unsuspended', `Buyer "${doc.name ?? doc.email}" set to active`, meta, id);
+      await this.log('buyer_unsuspended', `Buyer "${doc.name ?? doc.email}" set to active`, meta, id);
       return { success: true, message: 'Buyer set to active' };
     }
 
@@ -203,7 +238,7 @@ export class AdminUsersService {
       );
     }
 
-    this.log(
+    await this.log(
       'seller_unsuspended',
       `Seller "${doc.name ?? doc.email}" unsuspended (${storeIdsToRestore.length} store(s) restored)`,
       meta,

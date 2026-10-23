@@ -5,6 +5,7 @@ import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogCategory } from './schemas/activity-log.schema';
 import { ActivityLogGateway } from './activity-log.gateway';
+import { currentRequestAudit } from '../common/request-audit.context';
 
 export interface LogActivityInput {
   /** Omit for a platform-level action with no single store (e.g. admin managing a PlatformPlan) — stored as the 'platform' sentinel. */
@@ -35,31 +36,48 @@ export class ActivityLogService {
     private readonly gateway: ActivityLogGateway,
   ) {}
 
-  /** Fire-and-forget write — never let logging break the caller's main flow. */
-  async log(data: LogActivityInput): Promise<void> {
-    try {
-      const entry = await this.databaseService.repositories.activityLogModel.create({
-        storeId: data.storeId ?? 'platform',
-        actorId: data.actorId ?? null,
-        actorName: data.actorName ?? null,
-        actorRole: data.actorRole ?? null,
-        category: data.category,
-        action: data.action,
-        description: data.description ?? null,
-        targetId: data.targetId ?? null,
-        targetType: data.targetType ?? null,
-        ip: data.ip ?? null,
-        userAgent: data.userAgent ?? null,
-        isSecurityAlert: data.isSecurityAlert ?? false,
-        metadata: data.metadata ?? null,
-      });
-
-      this.gateway.emitNewActivity(data.storeId ?? 'platform', entry.toObject());
-    } catch (err) {
-      // logging must never break the operation that triggered it — but we
-      // still want visibility that an entry was lost, so it's not silent.
-      this.logger.error(`Failed to write activity log (${data.category}/${data.action}): ${err?.message}`);
+  /**
+   * Never lets logging break the caller's main flow (it does not throw), but it is not silent either: the write is
+   * retried once, and if it still fails the whole entry is written to the error log so it can be recovered by hand.
+   * Callers that audit a sensitive action (money, rights, destructive admin work) should `await` it so the entry is
+   * stored before the response goes out; everything else may leave it un-awaited. Resolves `true` when stored.
+   */
+  async log(data: LogActivityInput): Promise<boolean> {
+    const doc = {
+      storeId: data.storeId ?? 'platform',
+      actorId: data.actorId ?? null,
+      actorName: data.actorName ?? null,
+      actorRole: data.actorRole ?? null,
+      category: data.category,
+      action: data.action,
+      description: data.description ?? null,
+      targetId: data.targetId ?? null,
+      targetType: data.targetType ?? null,
+      // Callers that have the request pass ip/userAgent; everyone else gets them from the request context.
+      ip: data.ip ?? currentRequestAudit()?.ip ?? null,
+      userAgent: data.userAgent ?? currentRequestAudit()?.userAgent ?? null,
+      isSecurityAlert: data.isSecurityAlert ?? false,
+      metadata: data.metadata ?? null,
+    };
+    let entry: any = null;
+    let lastErr: any;
+    for (let attempt = 0; attempt < 2 && !entry; attempt++) {
+      try {
+        entry = await this.databaseService.repositories.activityLogModel.create(doc);
+      } catch (err) {
+        lastErr = err;
+      }
     }
+    if (!entry) {
+      this.logger.error(`AUDIT ENTRY LOST (${doc.category}/${doc.action}): ${lastErr?.message} :: ${JSON.stringify(doc)}`);
+      return false;
+    }
+    try {
+      this.gateway.emitNewActivity(doc.storeId, entry.toObject());
+    } catch (err) {
+      this.logger.warn(`Activity log stored but live emit failed (${doc.category}/${doc.action}): ${err?.message}`);
+    }
+    return true;
   }
 
   /** Chronological audit trail for one entity (e.g. a StoreBanner or PromotionRequest) — no separate timeline schema, this just reads ActivityLog. */

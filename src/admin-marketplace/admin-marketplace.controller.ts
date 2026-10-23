@@ -8,6 +8,7 @@ import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { AdminMarketplaceService } from './admin-marketplace.service';
 import { MarketplaceListingQueryDto } from './dto/marketplace-listing-query.dto';
 import { SetFeaturedDto } from './dto/set-featured.dto';
+import { RemoveListingDto } from './dto/remove-listing.dto';
 import { SetTestDto } from './dto/set-test.dto';
 import { SetTrustBadgesDto } from './dto/set-trust-badges.dto';
 import { SetStoreBadgeDto } from './dto/set-store-badge.dto';
@@ -56,8 +57,8 @@ export class AdminMarketplaceController {
   }
 
   @Patch('listings/:id/remove')
-  remove(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
-    return this.adminMarketplaceService.remove(id, this.meta(req));
+  remove(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: RemoveListingDto) {
+    return this.adminMarketplaceService.remove(id, this.meta(req), dto.reason);
   }
 
   // ── Listing review (new listings wait here before going live) ──

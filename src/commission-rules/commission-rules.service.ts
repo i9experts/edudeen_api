@@ -109,7 +109,7 @@ export class CommissionRulesService {
       notes: notes ?? null, createdByAdminId: adminId, isActive: true,
     });
 
-    this.activityLogService.log({
+    await this.activityLogService.log({
       storeId: 'platform',
       category: 'finance',
       action: 'global_commission_rate_changed',
@@ -136,7 +136,7 @@ export class CommissionRulesService {
       notes: notes ?? null, createdByAdminId: adminId, isActive: true,
     });
 
-    this.activityLogService.log({
+    await this.activityLogService.log({
       storeId,
       category: 'finance',
       action: 'seller_commission_override_set',
@@ -158,7 +158,7 @@ export class CommissionRulesService {
     rule.supersededAt = new Date();
     await rule.save();
 
-    this.activityLogService.log({
+    await this.activityLogService.log({
       storeId,
       category: 'finance',
       action: 'seller_commission_override_removed',

@@ -6,6 +6,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CommissionRulesService } from './commission-rules.service';
 import { SetCommissionRateDto } from './dto/set-commission-rate.dto';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 
 @ApiTags('Admin Commission Rules')
 @ApiBearerAuth()
@@ -41,27 +42,27 @@ export class CommissionRulesController {
   }
 
   @Get('sellers/:storeId')
-  resolveForStore(@Param('storeId') storeId: string) {
+  resolveForStore(@Param('storeId', ParseObjectIdPipe) storeId: string) {
     return this.commissionRulesService.resolveRate(storeId);
   }
 
   @Get('sellers/:storeId/override')
-  getSellerOverride(@Param('storeId') storeId: string) {
+  getSellerOverride(@Param('storeId', ParseObjectIdPipe) storeId: string) {
     return this.commissionRulesService.getSellerOverride(storeId);
   }
 
   @Get('sellers/:storeId/history')
-  getSellerHistory(@Param('storeId') storeId: string) {
+  getSellerHistory(@Param('storeId', ParseObjectIdPipe) storeId: string) {
     return this.commissionRulesService.getHistory('seller', storeId);
   }
 
   @Put('sellers/:storeId')
-  setSellerOverride(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: SetCommissionRateDto) {
+  setSellerOverride(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Body() dto: SetCommissionRateDto) {
     return this.commissionRulesService.setSellerOverride(storeId, dto.rate, dto.notes, req.user.userId);
   }
 
   @Delete('sellers/:storeId')
-  removeSellerOverride(@Req() req: any, @Param('storeId') storeId: string) {
+  removeSellerOverride(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string) {
     return this.commissionRulesService.removeSellerOverride(storeId, req.user.userId);
   }
 }

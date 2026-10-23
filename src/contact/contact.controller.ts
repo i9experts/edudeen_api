@@ -18,6 +18,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 
 @ApiTags('Contact')
 @Controller('api/contact')
@@ -56,7 +57,7 @@ export class ContactController {
   @Roles('admin')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update a contact submission status (admin)' })
-  updateStatus(@Param('id') id: string, @Body() dto: UpdateContactStatusDto) {
+  updateStatus(@Param('id', ParseObjectIdPipe) id: string, @Body() dto: UpdateContactStatusDto) {
     return this.contactService.updateStatus(id, dto);
   }
 
@@ -65,7 +66,7 @@ export class ContactController {
   @Roles('admin')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete a contact submission (admin)' })
-  remove(@Param('id') id: string) {
+  remove(@Param('id', ParseObjectIdPipe) id: string) {
     return this.contactService.remove(id);
   }
 }

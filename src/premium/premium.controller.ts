@@ -11,6 +11,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { PremiumService } from './premium.service';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import {
   CreatePremiumPlanDto, GrantPremiumDto, RejectPremiumPaymentDto, RevokePremiumDto, SubmitPremiumProofDto, SubscribePremiumDto, UpdatePremiumPlanDto, UpdatePremiumSettingsDto,
 } from './premium.dto';
@@ -59,7 +60,7 @@ export class PremiumController {
   @UseInterceptors(FileInterceptor('file', PROOF_UPLOAD_OPTIONS))
   @UsePipes(PIPE)
   @Post('payments/:paymentId/proof')
-  proof(@Req() req: any, @Param('paymentId') paymentId: string, @Body() dto: SubmitPremiumProofDto, @UploadedFile() file: Express.Multer.File) {
+  proof(@Req() req: any, @Param('paymentId', ParseObjectIdPipe) paymentId: string, @Body() dto: SubmitPremiumProofDto, @UploadedFile() file: Express.Multer.File) {
     return this.premium.submitProof(req.user.userId, paymentId, dto, file);
   }
 
@@ -90,19 +91,19 @@ export class AdminPremiumController {
   @UsePipes(PIPE) @Post('plans')
   createPlan(@Req() req: any, @Body() dto: CreatePremiumPlanDto) { return this.premium.adminCreatePlan(req.user.userId, dto); }
   @UsePipes(PIPE) @Patch('plans/:id')
-  updatePlan(@Req() req: any, @Param('id') id: string, @Body() dto: UpdatePremiumPlanDto) { return this.premium.adminUpdatePlan(req.user.userId, id, dto); }
+  updatePlan(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: UpdatePremiumPlanDto) { return this.premium.adminUpdatePlan(req.user.userId, id, dto); }
   @Delete('plans/:id')
-  deletePlan(@Req() req: any, @Param('id') id: string) { return this.premium.adminDeletePlan(req.user.userId, id); }
+  deletePlan(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) { return this.premium.adminDeletePlan(req.user.userId, id); }
 
   @Get('members') members(@Query() query: any) { return this.premium.adminListMembers(query); }
   @RequireReauth() @UsePipes(PIPE) @Post('members/grant')
   grant(@Req() req: any, @Body() dto: GrantPremiumDto) { return this.premium.adminGrant(req.user.userId, dto); }
   @UsePipes(PIPE) @Post('members/:userId/revoke')
-  revoke(@Req() req: any, @Param('userId') userId: string, @Body() dto: RevokePremiumDto) { return this.premium.adminRevoke(req.user.userId, userId, dto.reason); }
+  revoke(@Req() req: any, @Param('userId', ParseObjectIdPipe) userId: string, @Body() dto: RevokePremiumDto) { return this.premium.adminRevoke(req.user.userId, userId, dto.reason); }
 
   @Get('payments') payments(@Query() query: any) { return this.premium.adminListPayments(query); }
-  @Get('payments/:id/proof-url') proofUrl(@Param('id') id: string) { return this.premium.adminProofUrl(id); }
-  @RequireReauth() @Patch('payments/:id/approve') approve(@Req() req: any, @Param('id') id: string) { return this.premium.adminApprove(req.user.userId, id); }
+  @Get('payments/:id/proof-url') proofUrl(@Param('id', ParseObjectIdPipe) id: string) { return this.premium.adminProofUrl(id); }
+  @RequireReauth() @Patch('payments/:id/approve') approve(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) { return this.premium.adminApprove(req.user.userId, id); }
   @UsePipes(PIPE) @Patch('payments/:id/reject')
-  reject(@Req() req: any, @Param('id') id: string, @Body() dto: RejectPremiumPaymentDto) { return this.premium.adminReject(req.user.userId, id, dto.reason); }
+  reject(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: RejectPremiumPaymentDto) { return this.premium.adminReject(req.user.userId, id, dto.reason); }
 }

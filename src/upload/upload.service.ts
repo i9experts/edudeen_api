@@ -12,6 +12,7 @@ import {
   PREVIEW_URL_TTL_SECONDS,
   PREVIEW_SOURCE_FOLDER,
 } from '../products/constants/preview.constants';
+import { assertFileContent } from '../common/file-signature.util';
 
 // Public uploads are served inline from Cloudinary, so anything that a
 // browser would execute or render as active content (SVG, HTML, JS) is
@@ -74,6 +75,9 @@ export class UploadService {
     options?: { folder?: string; maxDimension?: number },
   ): Promise<{ url: string; publicId: string; resourceType: string; width?: number; height?: number }> {
     assertUploadAllowed(file, 'public');
+    // Judge by the bytes, not the declared type: images/PDFs must really be that, no markup behind a safe extension.
+    const sniffedMime = assertFileContent(file);
+    if (sniffedMime) file.mimetype = sniffedMime;
     const resourceType = this.getResourceType(file.mimetype);
     const folder = options?.folder ?? (resourceType === 'raw' ? 'uploads/documents' : `uploads/${resourceType}s`);
     const transformation =
@@ -112,6 +116,7 @@ export class UploadService {
     folder: string = 'private/digital-products',
   ): Promise<{ publicId: string; resourceType: string; fileName: string; fileSize: number; mimeType: string }> {
     assertUploadAllowed(file, 'private');
+    assertFileContent(file, { allowMarkup: file.originalname?.toLowerCase().endsWith('.svg') });
     const mimeType = this.getMimeTypeFromExtension(file.originalname) || file.mimetype;
     const resourceType = this.getResourceType(mimeType);
     return new Promise((resolve, reject) => {

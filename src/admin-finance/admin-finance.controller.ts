@@ -4,6 +4,7 @@ import { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AdminReauthGuard, RequireReauth } from '../admin-reauth/admin-reauth.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { AdminFinanceService } from './admin-finance.service';
@@ -49,7 +50,7 @@ export class AdminFinanceController {
 
   @Get('reconciliation')
   getReconciliation(@Query('days') days?: string) {
-    return this.adminFinanceService.getReconciliation(days ? Number(days) : 1);
+    return this.adminFinanceService.getReconciliation(days === undefined || days === '' ? 1 : Number(days));
   }
 
   @Get('reconciliation/history')
@@ -70,19 +71,19 @@ export class AdminFinanceController {
   }
 
   @Get('sellers/:storeId')
-  getSellerFinancialDetails(@Param('storeId') storeId: string) {
+  getSellerFinancialDetails(@Param('storeId', ParseObjectIdPipe) storeId: string) {
     return this.adminFinanceService.getSellerFinancialDetails(storeId);
   }
 
   @Get('sellers/:storeId/transactions')
-  getSellerTransactions(@Param('storeId') storeId: string, @Query() query: AdminTransactionsQueryDto) {
+  getSellerTransactions(@Param('storeId', ParseObjectIdPipe) storeId: string, @Query() query: AdminTransactionsQueryDto) {
     return this.adminFinanceService.getSellerTransactions(storeId, query);
   }
 
   @RequireReauth()
   @Post('sellers/:storeId/payouts/manual')
-  createManualPayout(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: ManualPayoutDto) {
-    return this.adminFinanceService.createManualPayout(storeId, req.user.userId, dto.amount, dto.payoutMethodId, dto.notes, req.ip, req.headers['user-agent']);
+  createManualPayout(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Body() dto: ManualPayoutDto) {
+    return this.adminFinanceService.createManualPayout(storeId, req.user.userId, dto.amount, dto.payoutMethodId, dto.notes, req.ip, req.headers['user-agent'], dto.currency);
   }
 
   // ─── Failed / pending seller credits (sale_credit_jobs outbox) ───────────
@@ -94,7 +95,7 @@ export class AdminFinanceController {
 
   @RequireReauth()
   @Post('credit-jobs/:id/retry')
-  retryCreditJob(@Req() req: any, @Param('id') id: string) {
+  retryCreditJob(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
     return this.adminFinanceService.retryCreditJob(id, req.user.userId, req.ip, req.headers['user-agent']);
   }
 
@@ -114,22 +115,22 @@ export class AdminFinanceController {
 
   /** Full bank/wallet destination for a payout (decrypted, audit-logged) — what the admin pays the seller to. */
   @Get('payouts/:payoutId/destination')
-  getPayoutDestination(@Req() req: any, @Param('payoutId') payoutId: string) {
+  getPayoutDestination(@Req() req: any, @Param('payoutId', ParseObjectIdPipe) payoutId: string) {
     return this.adminFinanceService.getPayoutDestination(payoutId, req.user.userId, req.ip, req.headers['user-agent']);
   }
 
   @Patch('payouts/:payoutId/approve')
-  approvePayout(@Req() req: any, @Param('payoutId') payoutId: string) {
+  approvePayout(@Req() req: any, @Param('payoutId', ParseObjectIdPipe) payoutId: string) {
     return this.adminFinanceService.approvePayout(payoutId, req.user.userId, req.ip, req.headers['user-agent']);
   }
 
   @Patch('payouts/:payoutId/reject')
-  rejectPayout(@Req() req: any, @Param('payoutId') payoutId: string, @Body() dto: RejectPayoutDto) {
+  rejectPayout(@Req() req: any, @Param('payoutId', ParseObjectIdPipe) payoutId: string, @Body() dto: RejectPayoutDto) {
     return this.adminFinanceService.rejectPayout(payoutId, req.user.userId, dto.reason, req.ip, req.headers['user-agent']);
   }
 
   @Patch('payouts/:payoutId/retry')
-  retryPayout(@Req() req: any, @Param('payoutId') payoutId: string) {
+  retryPayout(@Req() req: any, @Param('payoutId', ParseObjectIdPipe) payoutId: string) {
     return this.adminFinanceService.retryPayout(payoutId, req.user.userId, req.ip, req.headers['user-agent']);
   }
 
@@ -168,11 +169,11 @@ export class AdminFinanceController {
   @Patch('sellers/:storeId/payout-methods/:methodId/verify')
   verifyPayoutMethod(
     @Req() req: any,
-    @Param('storeId') storeId: string,
-    @Param('methodId') methodId: string,
+    @Param('storeId', ParseObjectIdPipe) storeId: string,
+    @Param('methodId', ParseObjectIdPipe) methodId: string,
     @Body() dto: VerifyPayoutMethodDto,
   ) {
-    return this.adminFinanceService.verifyPayoutMethod(storeId, methodId, req.user.userId, dto.approve, dto.note);
+    return this.adminFinanceService.verifyPayoutMethod(storeId, methodId, req.user.userId, dto.approve, dto.note, req.ip, req.headers['user-agent']);
   }
 
   // ─── Reports ─────────────────────────────────────────────────────────────

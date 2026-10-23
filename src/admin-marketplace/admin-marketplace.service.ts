@@ -59,8 +59,9 @@ export class AdminMarketplaceService {
       this.r.productModel.countDocuments({ isDelete: false, status: 'active' }),
       this.r.reportModel.countDocuments({ targetType: 'listing', status: { $ne: 'resolved' } }),
       this.r.orderModel.aggregate([
-        { $match: { isPaid: true, createdAt: { $gte: startOfMonth } } },
-        { $group: { _id: null, gmv: { $sum: '$totalAmount' } } },
+        // Paid and not refunded; grouped per currency - PKR and USD totals are never added together.
+        { $match: { isPaid: true, paymentStatus: { $ne: 'refunded' }, status: { $nin: ['refunded', 'cancelled'] }, createdAt: { $gte: startOfMonth } } },
+        { $group: { _id: { $ifNull: ['$currency', 'USD'] }, gmv: { $sum: '$totalAmount' } } },
       ]),
     ]);
 
@@ -70,7 +71,9 @@ export class AdminMarketplaceService {
         totalListings: total,
         active,
         flagged,
-        gmvThisMonth: gmvRows[0]?.gmv ?? 0,
+        // gmvThisMonth = USD orders only (kept for older clients); every currency is in gmvByCurrency.
+        gmvThisMonth: gmvRows.find((r: any) => r._id === 'USD')?.gmv ?? 0,
+        gmvByCurrency: gmvRows.map((r: any) => ({ currency: r._id as string, gmv: Math.round((r.gmv ?? 0) * 100) / 100 })),
       },
     };
   }
@@ -198,11 +201,19 @@ export class AdminMarketplaceService {
     return { success: true, message: 'Trust badges updated', data: next };
   }
 
-  async remove(id: string, meta: AuditMeta) {
+  async remove(id: string, meta: AuditMeta, reason?: string) {
+    const why = typeof reason === 'string' ? reason.trim().slice(0, 500) : '';
+    if (why.length < 3) throw new BadRequestException('A reason is required to remove a listing');
     const product = await this.findProductOrThrow(id);
     // Also drops the featured flag, or a removed listing kept its slot in featured rails.
-    await this.r.productModel.findByIdAndUpdate(id, { $set: { isDelete: true, status: 'inactive', isFeatured: false, removedByAdmin: true } });
-    this.log('listing_removed', `Listing "${product.name}" removed by admin`, meta, id);
+    await this.r.productModel.findByIdAndUpdate(id, { $set: { isDelete: true, status: 'inactive', isFeatured: false, removedByAdmin: true, removalReason: why } });
+    // A removed listing must not linger where buyers still hold it: pull it out of every cart and wishlist.
+    const [carts, wishes] = await Promise.all([
+      this.r.cartModel.updateMany({ 'items.productId': id }, { $pull: { items: { productId: id } } }),
+      this.r.wishListModel.deleteMany({ productId: id }),
+    ]);
+    this.log('listing_removed', `Listing "${product.name}" removed by admin: ${why} (${carts.modifiedCount} cart(s), ${wishes.deletedCount} wishlist entr(ies) cleaned)`, meta, id);
+    this.notifySeller(product, NOTIFICATION_TYPES.LISTING_REJECTED, `Your listing "${product.name}" was removed`, `Reason: ${why}`);
     return { success: true, message: 'Listing removed' };
   }
 
@@ -297,6 +308,10 @@ export class AdminMarketplaceService {
   async approveListing(id: string, note: string | undefined, meta: AuditMeta) {
     const now = new Date();
     const current = await this.findProductOrThrow(id);
+    // A suspended / rejected / closed store cannot get listings published: approving would make them live on a store buyers can't reach.
+    if (!(await isStoreLive(this.r.storeModel, (current as any).storeId))) {
+      throw new ConflictException('This listing belongs to a store that is not active (suspended or closed) - it cannot be approved');
+    }
     // A seller's edit to a live listing: publish the held changes, status stays as it is.
     const pending = (current as any).pendingEdit as { changes?: Record<string, unknown>; submittedAt?: Date } | null;
     if (pending?.changes && pending.submittedAt) {

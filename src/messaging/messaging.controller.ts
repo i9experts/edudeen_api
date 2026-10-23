@@ -18,6 +18,7 @@ import { EditMessageDto } from './dto/edit-message.dto';
 import { BlockDto } from './dto/block.dto';
 import { ReportDto } from './dto/report.dto';
 import { AdminUpdateMessagingReportDto } from './dto/admin-update-report.dto';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 
 @ApiTags('Messaging')
 @ApiBearerAuth()
@@ -196,14 +197,14 @@ export class MessagingController {
   @UseGuards(RolesGuard)
   @Roles('admin')
   @Patch('admin/reports/:id')
-  adminUpdateReport(@Req() req: any, @Param('id') id: string, @Body() dto: AdminUpdateMessagingReportDto) {
+  adminUpdateReport(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: AdminUpdateMessagingReportDto) {
     return this.messagingService.adminUpdateReport(id, dto, req.user.userId);
   }
 
   @UseGuards(RolesGuard)
   @Roles('admin')
   @Get('admin/conversations/:id')
-  adminGetConversation(@Param('id') id: string) {
+  adminGetConversation(@Param('id', ParseObjectIdPipe) id: string) {
     return this.messagingService.adminGetConversation(id);
   }
 }

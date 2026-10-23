@@ -367,6 +367,10 @@ export class Product {
   @Prop({ default: false })
   removedByAdmin: boolean;
 
+  /** Why an admin removed the listing (also sent to the seller and kept in the activity log). */
+  @Prop({ type: String, default: null })
+  removalReason: string | null;
+
   // Urdu copy (AI-translated drafts the seller reviews; shown to buyers browsing in Urdu).
   @Prop({ type: String, default: null })
   nameUr: string | null;

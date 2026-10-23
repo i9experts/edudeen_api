@@ -25,6 +25,8 @@ import { ReorderOnboardingSlidesDto } from './dto/reorder-onboarding-slides.dto'
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
+import { assertRasterImage } from '../common/file-signature.util';
 
 const SLIDE_UPLOAD_MIME = /\/(jpg|jpeg|png|webp)$/;
 const SLIDE_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
@@ -85,6 +87,7 @@ export class OnboardingSlidesController {
     @Body('order') order?: string,
   ) {
     if (!file) throw new BadRequestException('Please provide a slide image file');
+    file.mimetype = assertRasterImage(file);
     return this.onboardingSlidesService.uploadSlide(file, req.user.userId, title, subtitle, order !== undefined ? Number(order) : undefined);
   }
 
@@ -93,7 +96,7 @@ export class OnboardingSlidesController {
   @Roles('admin')
   @ApiBearerAuth()
   @Patch(':id')
-  updateSlide(@Param('id') id: string, @Body() dto: UpdateOnboardingSlideDto) {
+  updateSlide(@Param('id', ParseObjectIdPipe) id: string, @Body() dto: UpdateOnboardingSlideDto) {
     return this.onboardingSlidesService.updateSlide(id, dto);
   }
 
@@ -111,7 +114,7 @@ export class OnboardingSlidesController {
   @Roles('admin')
   @ApiBearerAuth()
   @Delete(':id')
-  deleteSlide(@Param('id') id: string) {
+  deleteSlide(@Param('id', ParseObjectIdPipe) id: string) {
     return this.onboardingSlidesService.deleteSlide(id);
   }
 }

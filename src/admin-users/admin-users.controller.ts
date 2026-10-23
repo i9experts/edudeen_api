@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, Controller, Get, Param, Patch, Query, Req, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Query, Req, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -7,6 +7,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { AdminUsersService } from './admin-users.service';
 import { AdminUsersQueryDto } from './dto/admin-users-query.dto';
+import { SuspendAccountDto } from './dto/suspend-account.dto';
 
 @ApiTags('Admin Users & Sellers')
 @ApiBearerAuth()
@@ -44,8 +45,14 @@ export class AdminUsersController {
   }
 
   @Patch(':role/:id/suspend')
-  suspend(@Req() req: any, @Param('role') role: string, @Param('id', ParseObjectIdPipe) id: string) {
-    return this.adminUsersService.suspend(this.validateRole(role), id, this.meta(req));
+  suspend(@Req() req: any, @Param('role') role: string, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: SuspendAccountDto) {
+    return this.adminUsersService.suspend(this.validateRole(role), id, this.meta(req), dto.reason);
+  }
+
+  /** Ends every session of the account immediately, without suspending it. */
+  @Patch(':role/:id/force-logout')
+  forceLogout(@Req() req: any, @Param('role') role: string, @Param('id', ParseObjectIdPipe) id: string) {
+    return this.adminUsersService.forceLogout(this.validateRole(role), id, this.meta(req));
   }
 
   @Patch(':role/:id/unsuspend')

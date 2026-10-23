@@ -11,6 +11,15 @@ const TTL = 15_000;
 /** Drop cached rights (called after any staff change in this process). */
 export const clearStaffAccessCache = () => cache.clear();
 
+/** Normalised (lower-case, no trailing slash) admin GET paths that expose personal data. */
+export const SENSITIVE_READS: RegExp[] = [
+  /^\/api\/admin\/users\/[^/]+\/[^/]+$/i, // user detail
+  /^\/api\/admin\/orders\/[^/]+$/i, // order detail (address, phone)
+  /^\/api\/messaging\/admin\/conversations\/[^/]+$/i, // private buyer-seller chat (admin view)
+  /^\/api\/admin\/finance\/payouts\/[^/]+\/destination$/i, // full bank / wallet destination
+  /^\/api\/admin\/staff\/notes(\/|$)/i,
+];
+
 /**
  * Server-side enforcement for staff. Runs on every request:
  *  - no token / not an admin token / owner  -> untouched
@@ -60,6 +69,8 @@ export function createStaffAccessMiddleware(staff: StaffService, extras?: StaffE
         }
       }
 
+      // Reads of personal data are audited too (who looked at which buyer, order, private chat or bank destination).
+      if (!write && req.method === 'GET' && SENSITIVE_READS.some((re) => re.test(path))) res.on('finish', () => void staff.audit({ adminId: payload.sub, name: access.name, method: req.method, path, status: res.statusCode, ip }));
       if (write) res.on('finish', () => void staff.audit({ adminId: payload.sub, name: access.name, method: req.method, path: path ?? '', status: res.statusCode, ip }));
       return next();
     } catch {

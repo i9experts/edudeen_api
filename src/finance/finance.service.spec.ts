@@ -86,8 +86,9 @@ describe('FinanceService', () => {
     payoutModel.findOneAndUpdate = jest.fn();
     methodModel = { findById: jest.fn(), findOne: jest.fn(), find: jest.fn().mockReturnValue(makeChainableFind([])), exists: jest.fn().mockResolvedValue(true), updateMany: jest.fn() };
     scheduleModel = { findOne: jest.fn(), find: jest.fn().mockReturnValue(makeChainableFind([])), updateOne: jest.fn().mockResolvedValue({}) };
-    storeModel = { findById: jest.fn().mockResolvedValue({ _id: STORE_ID, sellerId: SELLER_ID, isDelete: false }) };
-    sellerModel = { findById: jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ name: 'Jane Seller' }) }) }) };
+    const leanOf = (v: any) => ({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(v) }) });
+    storeModel = { findById: jest.fn().mockResolvedValue({ _id: STORE_ID, sellerId: SELLER_ID, isDelete: false }), findOne: jest.fn().mockReturnValue(leanOf({ status: 'active', sellerId: SELLER_ID })) };
+    sellerModel = { findById: jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ name: 'Jane Seller' }) }) }), findOne: jest.fn().mockReturnValue(leanOf({ status: 'active' })) };
     orderModel = { find: jest.fn().mockReturnValue(makeChainableFind([])) };
     jobModel = {
       findOneAndUpdate: jest.fn().mockResolvedValue({ _id: 'job-1', orderId: 'o', storeId: STORE_ID, status: 'pending', attempts: 0 }),
@@ -883,6 +884,144 @@ describe('FinanceService', () => {
       balanceModel.findOne.mockResolvedValue(makeBalance({ availableBalance: 500 }));
       payoutModel.exists = jest.fn().mockReturnValue({ session: jest.fn().mockResolvedValue({ _id: 'earlier' }) });
       await expect(service.adminCreateManualPayout(STORE_ID, 'admin-1', 25, 'm1', undefined)).rejects.toThrow(/refusing to pay twice/);
+    });
+  });
+
+  describe('admin audit phase 5', () => {
+    const selLean = (v: any) => ({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(v) }) });
+    const methodLookup = (v: any) => ({ session: jest.fn().mockReturnValue(selLean(v)) });
+    const OBJ_ID = '64b0000000000000000000a1';
+
+    describe('manual payout currency', () => {
+      beforeEach(() => {
+        payoutModel.exists = jest.fn().mockReturnValue({ session: jest.fn().mockResolvedValue(null) });
+      });
+
+      it('debits the PKR balance (not USD) for an off-platform payout in PKR and records PKR on the payout', async () => {
+        const balance = makeBalance({ currency: 'PKR', availableBalance: 5000 });
+        balanceModel.findOne.mockResolvedValue(balance);
+        await service.adminCreateManualPayout(STORE_ID, 'admin-1', 1200, undefined, 'fix', undefined, undefined, 'PKR');
+        expect(balanceModel.findOne).toHaveBeenCalledWith({ storeId: STORE_ID, currency: 'PKR' }, null, expect.anything());
+        expect(balance.availableBalance).toBe(3800);
+        expect(payoutModel.created[0].currency).toBe('PKR');
+      });
+
+      it('refuses a currency that is not supported, an amount over the ceiling, and a currency that disagrees with the payout method', async () => {
+        await expect(service.adminCreateManualPayout(STORE_ID, 'admin-1', 5, undefined, undefined, undefined, undefined, 'EUR')).rejects.toThrow(/Currency must be/);
+        await expect(service.adminCreateManualPayout(STORE_ID, 'admin-1', 10_000_001, undefined, undefined)).rejects.toThrow(/cannot exceed/);
+        methodModel.findOne.mockResolvedValue({ status: 'active', currency: 'USD', type: 'bank' });
+        await expect(service.adminCreateManualPayout(STORE_ID, 'admin-1', 5, 'm1', undefined, undefined, undefined, 'PKR')).rejects.toThrow(/pays in USD/);
+      });
+    });
+
+    describe('retry of a failed payout', () => {
+      const failed = { _id: 'p1', storeId: STORE_ID, sellerId: SELLER_ID, amount: 50, currency: 'USD', payoutMethodId: OBJ_ID, payoutMethodSnapshot: {} };
+
+      it('refuses when the payout method was deactivated or deleted meanwhile (checked inside the claim, so the claim rolls back)', async () => {
+        payoutModel.findOneAndUpdate.mockResolvedValue({ ...failed });
+        methodModel.findOne.mockReturnValue(methodLookup({ status: 'inactive' }));
+        await expect(service.adminRetryFailedPayout('p1', 'admin-1')).rejects.toThrow(/not active any more/);
+        methodModel.findOne.mockReturnValue(methodLookup(null));
+        await expect(service.adminRetryFailedPayout('p1', 'admin-1')).rejects.toThrow(/no longer exists/);
+        expect(balanceModel.findOne).not.toHaveBeenCalled();
+      });
+
+      it('re-queues when the method is still active', async () => {
+        payoutModel.findOneAndUpdate.mockResolvedValue({ ...failed });
+        methodModel.findOne.mockReturnValue(methodLookup({ status: 'active' }));
+        balanceModel.findOne.mockResolvedValue(makeBalance({ availableBalance: 100 }));
+        await expect(service.adminRetryFailedPayout('p1', 'admin-1', '1.2.3.4', 'jest')).resolves.toBeTruthy();
+        expect(activityLogService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'payout_retried', ip: '1.2.3.4', userAgent: 'jest' }));
+      });
+    });
+
+    describe('payout method verification', () => {
+      it('does not re-verify a method that is already in the requested state, and says so', async () => {
+        methodModel.findOneAndUpdate = jest.fn().mockResolvedValue(null);
+        methodModel.findOne.mockReturnValue(selLean({ status: 'active' }));
+        await expect(service.adminVerifyPayoutMethod(STORE_ID, 'm1', 'admin-1', true)).rejects.toThrow(/already active/);
+      });
+
+      it('moves a pending method to active atomically and records previous state + ip/user-agent', async () => {
+        methodModel.findOneAndUpdate = jest.fn().mockResolvedValue({ type: 'bank_transfer', status: 'pending_verification' });
+        methodModel.findById.mockResolvedValue({ _id: 'm1', status: 'active' });
+        await service.adminVerifyPayoutMethod(STORE_ID, 'm1', 'admin-1', true, 'ok', '9.9.9.9', 'jest-ua');
+        expect(methodModel.findOneAndUpdate).toHaveBeenCalledWith(
+          { _id: 'm1', storeId: STORE_ID, status: { $ne: 'active' } },
+          { $set: expect.objectContaining({ status: 'active', verifiedByAdminId: 'admin-1' }) },
+          { returnDocument: 'before' },
+        );
+        expect(activityLogService.log).toHaveBeenCalledWith(expect.objectContaining({
+          action: 'payout_method_verified', ip: '9.9.9.9', userAgent: 'jest-ua', metadata: { from: 'pending_verification', to: 'active' },
+        }));
+      });
+    });
+
+    describe('transaction filter + CSV', () => {
+      const build = (q: any, extra?: any) => (service as any).buildTransactionFilter(q, extra);
+
+      it('rejects invalid dates and operator-shaped values with a 400, and a seller query cannot override its own storeId', () => {
+        expect(() => build({ from: 'not-a-date' })).toThrow(/from is not a valid date/);
+        expect(() => build({ to: '2026-13-45' })).toThrow(BadRequestException);
+        expect(() => build({ status: { $ne: 'x' } })).toThrow(BadRequestException);
+        expect(build({ storeId: 'someone-elses-store' }, { storeId: STORE_ID }).storeId).toBe(STORE_ID);
+        expect(build({ from: '2026-01-01', to: '2026-02-01' }).createdAt.$gte).toBeInstanceOf(Date);
+      });
+
+      it('escapes quotes, defuses spreadsheet formulas and says when the export was cut off', () => {
+        const tx = { createdAt: '2026-10-01T00:00:00Z', storeId: STORE_ID, description: '=HYPERLINK("http://x")', type: 'sale', currency: 'USD', amount: 5, balanceAfter: 5, status: 'completed' };
+        const csv: string = (service as any).transactionsToCsv([tx, { ...tx, description: 'say "hi", ok' }], true);
+        expect(csv).toContain(`"'=HYPERLINK(""http://x"")"`);
+        expect(csv).toContain('"say ""hi"", ok"');
+        expect(csv).toContain('"+$5.00"');
+        expect(csv).toMatch(/TRUNCATED: only the newest 5000 rows/);
+        expect((service as any).transactionsToCsv([tx], false)).not.toMatch(/TRUNCATED/);
+      });
+    });
+
+    describe('payout queue', () => {
+      it('counts per currency and never adds PKR to USD', async () => {
+        payoutModel.find.mockReturnValue(makeChainableFind([]));
+        payoutModel.aggregate.mockResolvedValue([
+          { _id: { status: 'pending', currency: 'USD' }, count: 2, amount: 100 },
+          { _id: { status: 'pending', currency: 'PKR' }, count: 1, amount: 28000 },
+        ]);
+        const res: any = await service.adminGetPayoutQueue({});
+        expect(res.statusCounts.pending.count).toBe(3);
+        expect(res.statusCounts.pending.amount).toBe(100);
+        expect(res.statusCounts.pending.byCurrency).toEqual([
+          { currency: 'USD', count: 2, amount: 100 }, { currency: 'PKR', count: 1, amount: 28000 },
+        ]);
+        await expect(service.adminGetPayoutQueue({ status: { $ne: 'x' } })).rejects.toThrow(BadRequestException);
+      });
+    });
+
+    describe('suspended seller payout hold', () => {
+      it('refuses to approve a payout of a suspended seller (reject still possible), and the scheduled run skips them', async () => {
+        sellerModel.findOne.mockReturnValue(selLean({ status: 'suspended' }));
+        payoutModel.findOne = jest.fn().mockReturnValue(selLean({ payoutMethodId: 'm1', storeId: STORE_ID, sellerId: SELLER_ID }));
+        await expect(service.adminApprovePayout('p1', 'admin-1')).rejects.toThrow(/on hold/);
+        expect(payoutModel.findOneAndUpdate).not.toHaveBeenCalled();
+
+        scheduleModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: 's1', storeId: STORE_ID, sellerId: SELLER_ID, currency: 'USD', frequency: 'weekly', defaultPayoutMethodId: 'm1', minimumAmount: 0 }]) });
+        const res = await service.processScheduledPayouts();
+        expect(res.payoutsCreated).toBe(0);
+        expect(res.skipped).toBe(1);
+      });
+    });
+
+    describe('payout destination reveal', () => {
+      it('fails closed: no account number leaves if the audit entry could not be stored', async () => {
+        payoutModel.findById = jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ storeId: STORE_ID, payoutMethodId: 'admin-manual' }) });
+        (activityLogService.log as jest.Mock).mockResolvedValueOnce(false);
+        await expect(service.adminGetPayoutDestination('p1', 'admin-1', '1.1.1.1', 'ua')).rejects.toThrow(/audit log/);
+      });
+
+      it('writes ip + user-agent under the right field names', async () => {
+        payoutModel.findById = jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ storeId: STORE_ID, payoutMethodId: 'admin-manual' }) });
+        await service.adminGetPayoutDestination('p1', 'admin-1', '1.1.1.1', 'ua');
+        expect(activityLogService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'payout_destination_viewed', ip: '1.1.1.1', userAgent: 'ua' }));
+      });
     });
   });
 });

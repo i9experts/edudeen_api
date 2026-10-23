@@ -17,6 +17,9 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 
+/** Public upload cap - this route is open to every signed-in account (buyers too), so it stays small. */
+export const PUBLIC_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+
 @Controller('api/upload')
 @UseGuards(JwtAuthGuard)
 export class UploadController {
@@ -29,7 +32,7 @@ export class UploadController {
   @Post('file')
   @UseInterceptors(FileInterceptor('file', {
     storage: memoryStorage(),
-    limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
+    limits: { fileSize: PUBLIC_UPLOAD_MAX_BYTES }, // any logged-in user: small public files only (sold files use /private-file)
   }))
   async uploadFile(@UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException('No file uploaded');

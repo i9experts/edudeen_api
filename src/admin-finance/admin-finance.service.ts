@@ -1,8 +1,9 @@
 /* eslint-disable prettier/prettier */
-import { ConflictException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { RedisService } from '../redis/redis.service';
-import { FinanceService } from '../finance/finance.service';
+import { EXPORT_ROW_CAP, FinanceService } from '../finance/finance.service';
+import { csvCell } from '../common/query-safety.util';
 import { resolveDateRange, enumerateBuckets } from '../analytics/utils/analytics-date.util';
 import { round } from '../common/number.util';
 import { buildAnalyticsCacheKey, withAnalyticsCache } from '../analytics/utils/analytics-cache.util';
@@ -360,8 +361,8 @@ export class AdminFinanceService {
     return { success: true, data };
   }
 
-  async createManualPayout(storeId: string, adminId: string, amount: number, payoutMethodId: string | undefined, notes: string | undefined, ip?: string, userAgent?: string) {
-    const data = await this.financeService.adminCreateManualPayout(storeId, adminId, amount, payoutMethodId, notes, ip, userAgent);
+  async createManualPayout(storeId: string, adminId: string, amount: number, payoutMethodId: string | undefined, notes: string | undefined, ip?: string, userAgent?: string, currency?: string) {
+    const data = await this.financeService.adminCreateManualPayout(storeId, adminId, amount, payoutMethodId, notes, ip, userAgent, currency);
     return { success: true, data };
   }
 
@@ -427,8 +428,8 @@ export class AdminFinanceService {
     return { success: true, data: enriched };
   }
 
-  async verifyPayoutMethod(storeId: string, methodId: string, adminId: string, approve: boolean, note?: string) {
-    const data = await this.financeService.adminVerifyPayoutMethod(storeId, methodId, adminId, approve, note);
+  async verifyPayoutMethod(storeId: string, methodId: string, adminId: string, approve: boolean, note?: string, ip?: string, userAgent?: string) {
+    const data = await this.financeService.adminVerifyPayoutMethod(storeId, methodId, adminId, approve, note, ip, userAgent);
     return { success: true, data };
   }
 
@@ -606,15 +607,18 @@ export class AdminFinanceService {
     switch (section) {
       case 'payouts': {
         const { from, to } = resolveDateRange(query);
-        const rows = await this.r.payoutModel.find({ createdAt: { $gte: from, $lte: to } }).sort({ createdAt: -1 }).limit(5000).lean();
-        return toCsv(
-          ['Payout ID', 'Store ID', 'Amount', 'Status', 'Method', 'Requested At', 'Processed At'],
+        const fetched = await this.r.payoutModel.find({ createdAt: { $gte: from, $lte: to } }).sort({ createdAt: -1 }).limit(EXPORT_ROW_CAP + 1).lean();
+        const truncated = fetched.length > EXPORT_ROW_CAP;
+        const rows = fetched.slice(0, EXPORT_ROW_CAP);
+        const csv = toCsv(
+          ['Payout ID', 'Store ID', 'Currency', 'Amount', 'Status', 'Method', 'Requested At', 'Processed At'],
           (rows as any[]).map((p) => [
-            p._id.toString(), p.storeId, p.amount.toFixed(2), p.status, p.payoutMethodSnapshot?.type ?? '',
+            p._id.toString(), p.storeId, p.currency ?? 'USD', p.amount.toFixed(2), p.status, p.payoutMethodSnapshot?.type ?? '',
             new Date(p.createdAt).toISOString().split('T')[0],
             p.processedAt ? new Date(p.processedAt).toISOString().split('T')[0] : '',
           ]),
         );
+        return truncated ? csv + "\n" + csvCell(`TRUNCATED: only the newest ${EXPORT_ROW_CAP} payouts are included - narrow the date range to see older rows`) : csv;
       }
       case 'sellers': {
         const data = await this.getSellerBalances({ ...query, page: 1, limit: 5000 });
@@ -718,11 +722,13 @@ export class AdminFinanceService {
    * never corrects them automatically.
    */
   async getReconciliation(days = 1) {
+    if (!Number.isInteger(days) || days < 1 || days > 365) throw new BadRequestException('days must be a whole number between 1 and 365');
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
     const [orders, saleTx, feeTx, refundTx] = await Promise.all([
       this.r.orderModel.aggregate([
-        { $match: { createdAt: { $gte: since }, isDelete: false } },
+        // Only money actually received: unpaid / pending-proof / failed / refunded orders are not 'collected', so they must not count against the ledger.
+        { $match: { createdAt: { $gte: since }, isDelete: false, isPaid: true, paymentStatus: 'paid' } },
         { $group: { _id: '$currency', totalCollected: { $sum: '$totalAmount' }, count: { $sum: 1 } } },
       ]),
       this.r.transactionModel.aggregate([
@@ -810,7 +816,7 @@ export class AdminFinanceService {
     const runs = await this.r.reconciliationRunModel
       .find({})
       .sort({ runAt: -1 })
-      .limit(Math.min(100, limit))
+      .limit(Number.isFinite(limit) ? Math.min(100, Math.max(1, Math.trunc(limit))) : 30)
       .lean();
     return { success: true, data: runs };
   }

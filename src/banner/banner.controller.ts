@@ -29,6 +29,7 @@ import { AdminReauthGuard } from '../admin-reauth/admin-reauth.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { PromotionPlacement } from '../common/promotion-placements.const';
 import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
+import { assertRasterImage } from '../common/file-signature.util';
 
 const BANNER_UPLOAD_MIME = /\/(jpg|jpeg|png|webp)$/;
 const BANNER_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
@@ -103,6 +104,7 @@ export class BannersController {
     @Query('placement') placement?: string,
   ) {
     if (!file) throw new BadRequestException('Please provide a banner image file');
+    file.mimetype = assertRasterImage(file); // content decides, not the declared MIME
     return this.bannersService.uploadBanner(file, req.user.userId, urlOnTap, placement);
   }
 

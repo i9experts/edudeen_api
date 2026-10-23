@@ -64,7 +64,7 @@ export class PromotionsService {
   }
 
   private log(storeId: string, action: string, description: string, actorId: string, actorRole: 'seller' | 'admin', targetId: string) {
-    this.activityLogService.log({ storeId, category: 'promotions', action, description, actorId, actorRole, targetId, targetType: 'promotion_request' });
+    return this.activityLogService.log({ storeId, category: 'promotions', action, description, actorId, actorRole, targetId, targetType: 'promotion_request' });
   }
 
   private async notifyAdmins(subject: string, html: string) {
@@ -242,7 +242,7 @@ export class PromotionsService {
       throw new BadRequestException('Only pending requests can be approved');
     }
 
-    this.log(request.storeId, 'promotion_request_approved', 'Promotion request approved', adminId, 'admin', id);
+    await this.log(request.storeId, 'promotion_request_approved', 'Promotion request approved', adminId, 'admin', id);
     this.notificationsService.notify({
       recipientId: request.sellerId, recipientRole: 'seller',
       type: NOTIFICATION_TYPES.PROMOTION_APPROVED,
@@ -265,7 +265,7 @@ export class PromotionsService {
       throw new BadRequestException('Only pending requests can be rejected');
     }
 
-    this.log(request.storeId, 'promotion_request_rejected', `Promotion request rejected: ${reason}`, adminId, 'admin', id);
+    await this.log(request.storeId, 'promotion_request_rejected', `Promotion request rejected: ${reason}`, adminId, 'admin', id);
     this.notificationsService.notify({
       recipientId: request.sellerId, recipientRole: 'seller',
       type: NOTIFICATION_TYPES.PROMOTION_REJECTED,
