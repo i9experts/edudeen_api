@@ -163,6 +163,7 @@ export class BannersService {
     const banner = await this.bannerModel.create({
       bannerImage: hosted.secure_url,
       publicId: hosted.public_id,
+      title: dto.title?.trim() ?? '',
       urlOnTap: dto.urlOnTap || null,
       order: dto.order ?? currentCount,
       placement,
@@ -223,6 +224,7 @@ export class BannersService {
 
     const { saveAsDraft, ...rest } = dto;
     const set: Record<string, unknown> = { ...rest };
+    if (rest.title !== undefined) set.title = rest.title.trim();
     // Keep the legacy scalar `placement` in sync as `placements[0]` whenever
     // the multi-select array is what actually changed.
     if (dto.placements?.length) {

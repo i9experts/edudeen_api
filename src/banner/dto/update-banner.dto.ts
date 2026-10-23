@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsOptional, IsUrl, IsBoolean, IsNumber, IsIn, IsArray, IsDateString, Min } from 'class-validator';
+import { IsString, MaxLength, IsOptional, IsUrl, IsBoolean, IsNumber, IsIn, IsArray, IsDateString, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { IsLinkTarget } from '../../common/link-target.util';
 import { PROMOTION_PLACEMENTS, PromotionPlacement } from '../../common/promotion-placements.const';
@@ -31,6 +31,12 @@ export class UpdateBannerDto {
   @IsOptional()
   @IsUrl({}, { message: 'bannerImage must be a valid URL' })
   bannerImage?: string;
+
+  @ApiProperty({ required: false, example: 'Mathematics sale' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  title?: string;
 
   @ApiProperty({ required: false, example: 'https://example.com/sale' })
   @IsOptional()

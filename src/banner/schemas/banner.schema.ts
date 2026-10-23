@@ -17,6 +17,10 @@ export class Banner {
   @Prop({ default: '' })
   publicId: string;
 
+  // Admin-given name of the banner (shown in the admin list, used as the picture's alt text).
+  @Prop({ type: String, default: '', trim: true })
+  title: string;
+
   @Prop({ type: String, default: null })
   urlOnTap: string | null;
 
