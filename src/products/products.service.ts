@@ -396,6 +396,12 @@ export class ProductsService {
     const sourceFileIndex = digital.preview.sourceFileIndex ?? 0;
     // The seller's free sample is what buyers preview; without one, the chosen paid file is used.
     const file = digital.sampleFile?.url ? digital.sampleFile : digital.files?.[sourceFileIndex];
+    // Course / live-class products have no files to preview: nothing to build, so just switch preview off.
+    if (!file && !(digital.files?.length > 0))
+      return {
+        ...digital,
+        preview: { enabled: false, sourceFileIndex: null, previewSourcePublicId: null, previewSourceResourceType: null, previewSourceUrl: null },
+      };
     if (!file)
       throw new BadRequestException(
         'preview.sourceFileIndex does not match any uploaded file',
