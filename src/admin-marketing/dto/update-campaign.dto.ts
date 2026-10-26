@@ -13,13 +13,13 @@ export class UpdateCampaignDto {
   @IsOptional()
   @IsString()
   @MaxLength(1000)
-  description?: string;
+  description?: string | null;
 
   @ApiProperty({ required: false })
   @IsOptional()
   @IsUrl({ protocols: ['https'], require_protocol: true })
   @MaxLength(500)
-  bannerImage?: string;
+  bannerImage?: string | null;
 
   @ApiProperty({ required: false, description: 'Background image of the Mega Sale strip (null clears it)' })
   @IsOptional()
