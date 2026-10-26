@@ -1665,7 +1665,7 @@ export class ProductsService {
     assertOfferExclusive(store as any, { ...premiumFieldsFromBody(body), campaignIds });
     const slug = await generateProductSlug(productModel, title);
     const learnMeta = cleanLearningMeta(body);
-    const quality = this.checkListing({ title, type: 'physical', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, requestedStatus: status });
+    const quality = this.checkListing({ title, type: 'physical', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, requestedStatus: status });
     const requestedStatus = status ? resolveSellerPublishStatus(status, null) : 'draft';
     // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
     const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
@@ -1859,7 +1859,7 @@ export class ProductsService {
     assertOfferExclusive(store as any, { ...premiumFieldsFromBody(body), campaignIds });
     const slug = await generateProductSlug(productModel, title);
     const learnMeta = cleanLearningMeta(body);
-    const quality = this.checkListing({ title, type: 'digital', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, requestedStatus: status });
+    const quality = this.checkListing({ title, type: 'digital', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, requestedStatus: status });
     const requestedStatus = status ? resolveSellerPublishStatus(status, null) : 'draft';
     // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
     const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
@@ -1928,9 +1928,12 @@ export class ProductsService {
    * Quality checks shared by every create/edit: class range (needed to go live for digital/educational), the non-blocking
    * title warnings, and the off-platform contact scan of the seller-written text.
    */
-  private checkListing(opts: { title: string; type: 'physical' | 'digital'; description?: unknown; classFrom?: string | null; classTo?: string | null; requestedStatus?: string | null; fields?: Record<string, unknown> }) {
+  private checkListing(opts: { title: string; type: 'physical' | 'digital'; description?: unknown; classFrom?: string | null; classTo?: string | null; requestedStatus?: string | null; fields?: Record<string, unknown>; coverStyle?: string | null }) {
     const goingLive = opts.requestedStatus === 'active' || opts.requestedStatus === 'scheduled';
     assertClassRangeRule({ type: opts.type, classFrom: opts.classFrom, classTo: opts.classTo, goingLive });
+    if (goingLive && opts.coverStyle !== 'book' && opts.coverStyle !== 'flat') {
+      throw new BadRequestException('Choose how your product card looks: Book or Flat photo.');
+    }
     return {
       warnings: productWarnings(opts.title, opts.classFrom, opts.classTo),
       scan: scanListingText(opts.fields ?? { name: opts.title, description: opts.description }),
@@ -2161,7 +2164,7 @@ export class ProductsService {
       const effFrom = productUpdate.classFrom !== undefined ? productUpdate.classFrom : product.classFrom;
       const effTo = productUpdate.classTo !== undefined ? productUpdate.classTo : product.classTo;
       const effDescription = description !== undefined ? description : product.description;
-      const quality = this.checkListing({ title: effTitle, type: product.type === 'physical' ? 'physical' : 'digital', classFrom: effFrom, classTo: effTo, requestedStatus: status, fields: { name: effTitle, description: effDescription } });
+      const quality = this.checkListing({ title: effTitle, type: product.type === 'physical' ? 'physical' : 'digital', classFrom: effFrom, classTo: effTo, coverStyle: productUpdate.coverStyle !== undefined ? productUpdate.coverStyle : product.coverStyle, requestedStatus: status, fields: { name: effTitle, description: effDescription } });
       editWarnings = quality.warnings;
       if (name !== undefined || description !== undefined) {
         editScan = quality.scan;

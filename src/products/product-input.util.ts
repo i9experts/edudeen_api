@@ -11,8 +11,8 @@ export function licenseFromVariant(variant: any): string | null {
 
 /** Board/syllabus list and age range shared by every product type. Only keys
  *  present in the request are returned, so an edit leaves the rest alone. */
-export function cleanLearningMeta(body: Record<string, unknown>): { curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null } {
-  const out: { curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null } = {};
+export function cleanLearningMeta(body: Record<string, unknown>): { curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null; coverStyle?: 'book' | 'flat' | null } {
+  const out: { curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null; coverStyle?: 'book' | 'flat' | null } = {};
   if (body.curricula !== undefined) {
     if (!Array.isArray(body.curricula) || body.curricula.length > CURRICULA.length) {
       throw new BadRequestException('curricula must be a list of boards');
@@ -41,6 +41,12 @@ export function cleanLearningMeta(body: Record<string, unknown>): { curricula?: 
   if (body.classFrom !== undefined && body.classTo !== undefined) {
     if (out.classFrom && !out.classTo) out.classTo = out.classFrom;
     if (out.classTo && !out.classFrom) out.classFrom = out.classTo;
+  }
+  if (body.coverStyle !== undefined) {
+    if (body.coverStyle !== null && body.coverStyle !== 'book' && body.coverStyle !== 'flat') {
+      throw new BadRequestException('coverStyle must be "book" or "flat"');
+    }
+    out.coverStyle = body.coverStyle as 'book' | 'flat' | null;
   }
   return out;
 }

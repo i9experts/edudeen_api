@@ -229,6 +229,11 @@ export class Product {
   @Prop({ type: String, default: null })
   classTo: string | null;
 
+  // How the product card is drawn: 'book' (book-cover shape) or 'flat' (plain photo, e.g. toys, stationery).
+  // null = legacy listing, shown as a book like before. Required to publish new listings.
+  @Prop({ type: String, enum: ['book', 'flat'], default: null })
+  coverStyle: 'book' | 'flat' | null;
+
   // How a digital product reaches the buyer: files to download, an online
   // course built in the course builder, or a scheduled live class.
   @Prop({ type: String, enum: DELIVERY_FORMATS, default: 'download' })
