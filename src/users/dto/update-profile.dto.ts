@@ -42,4 +42,16 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsIn(SUPPORTED_CURRENCIES)
   currencyPreference?: string;
+
+  // Display-only (never charged): any ISO-4217 code, e.g. AED. Charge currency stays currencyPreference.
+  @ApiProperty({ required: false, example: 'AED' })
+  @IsOptional()
+  @Matches(/^[A-Z]{3}$/, { message: 'displayCurrency must be a 3-letter currency code' })
+  displayCurrency?: string;
+
+  // Country the web detected (CDN header / browser) when the account was created or first signed in.
+  @ApiProperty({ required: false, example: 'AE' })
+  @IsOptional()
+  @Matches(/^[A-Z]{2}$/, { message: 'detectedCountry must be a 2-letter country code' })
+  detectedCountry?: string;
 }

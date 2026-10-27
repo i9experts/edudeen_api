@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Param, Post, Query, Req, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req, Res, UseGuards, UseInterceptors } from '@nestjs/common';
+import { DisplayRateService } from './display-rate.service';
+import { countryFromHeaders, currencyForCountry, normalizeCountry } from './country-currency.util';
 import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { AdminReauthGuard, RequireReauth } from '../admin-reauth/admin-reauth.guard';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -11,7 +13,31 @@ import { AdminOverrideFxRateDto } from './dto/admin-override-fx-rate.dto';
 
 @Controller('api/exchange-rate')
 export class ExchangeRateController {
-  constructor(private readonly exchangeRateService: ExchangeRateService) {}
+  constructor(
+    private readonly exchangeRateService: ExchangeRateService,
+    private readonly displayRates: DisplayRateService,
+  ) {}
+
+  // Public. Detected country (CDN header, else the browser's own guess in ?country=) -> its
+  // display currency + live rate. DISPLAY ONLY: never used for charging. ratePerUSD is null when
+  // no valid rate exists at all (the web then shows native prices); stale=true = last-known-good.
+  @Get('display')
+  async getDisplay(@Req() req: any, @Res({ passthrough: true }) res: any, @Query('country') hint?: string) {
+    res.setHeader('Cache-Control', 'no-store');
+    const country = countryFromHeaders(req.headers) ?? normalizeCountry(hint);
+    const currency = currencyForCountry(country);
+    const table = currency && currency !== 'USD' ? await this.displayRates.getRates() : null;
+    return {
+      success: true,
+      data: {
+        country,
+        currency,
+        ratePerUSD: currency === 'USD' ? 1 : (currency ? table?.rates[currency] ?? null : null),
+        asOf: table?.asOf ?? null,
+        stale: table?.stale ?? false,
+      },
+    };
+  }
 
   // Public, read-only — the frontend uses this to convert prices for
   // display before checkout. No auth needed: exposing a currency's rate is

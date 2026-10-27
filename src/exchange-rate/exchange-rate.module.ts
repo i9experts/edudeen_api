@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ExchangeRateService } from './exchange-rate.service';
+import { DisplayRateService } from './display-rate.service';
 import { ExchangeRateController, AdminFxController } from './exchange-rate.controller';
 import { AdminConfigModule } from '../admin-config/admin-config.module';
 import { AdminReauthModule } from '../admin-reauth/admin-reauth.module';
@@ -14,7 +15,7 @@ import { RedisModule } from '../redis/redis.module';
   // no dependencies and every admin FX request 500s.
   imports: [AdminReauthModule, AdminConfigModule, AuthModule, RedisModule],
   controllers: [ExchangeRateController, AdminFxController],
-  providers: [ExchangeRateService],
-  exports: [ExchangeRateService],
+  providers: [ExchangeRateService, DisplayRateService],
+  exports: [ExchangeRateService, DisplayRateService],
 })
 export class ExchangeRateModule {}

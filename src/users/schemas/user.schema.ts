@@ -76,6 +76,14 @@ export class User {
     @Prop({ type: String, default: null })
     currencyPreference: string | null;
 
+    // DISPLAY-ONLY currency (any ISO code, e.g. AED) chosen in the navbar, and the country detected
+    // at signup/login. Charging never reads these: checkout/cart use currencyPreference (USD|PKR).
+    @Prop({ type: String, default: null })
+    displayCurrency: string | null;
+
+    @Prop({ type: String, default: null })
+    detectedCountry: string | null;
+
     // Bumped whenever this account is suspended/deactivated so any
     // already-issued JWT is invalidated on its next request — see
     // JwtAuthGuard, which rejects a token whose tokenVersion claim doesn't

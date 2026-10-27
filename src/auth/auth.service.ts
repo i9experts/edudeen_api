@@ -957,6 +957,12 @@ export class AuthService {
         }
       }
 
+      if (update.detectedCountry !== undefined) {
+        // The country seen at signup / first sign-in is kept: later calls (travel, VPN) never overwrite it.
+        const existing: any = role === 'user' ? await userModel.findById(userId).select('detectedCountry').lean() : null;
+        if (role !== 'user' || existing?.detectedCountry) delete update.detectedCountry;
+      }
+
       const user = await userModel
         .findByIdAndUpdate(
           userId,

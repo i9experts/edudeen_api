@@ -48,6 +48,8 @@ export class UsersService {
     user.profileImage = dto.profileImage ?? user.profileImage;
     user.address = dto.address ?? user.address;
     user.currencyPreference = dto.currencyPreference ?? user.currencyPreference;
+    user.displayCurrency = dto.displayCurrency ?? user.displayCurrency;
+    user.detectedCountry = dto.detectedCountry ?? user.detectedCountry;
 
     // The login email cannot be swapped by a signed-in session alone: it would hand the account to whoever holds a
     // stolen token (and leave the real owner unverified with no OTP). Needs a verified change-email flow.
