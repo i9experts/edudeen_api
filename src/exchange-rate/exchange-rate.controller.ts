@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Post, Query, Req, Res, UseGuards, UseInterceptors } from '@nestjs/common';
 import { DisplayRateService } from './display-rate.service';
+import { clientIpOf, countryFromIp } from './geo-ip.util';
 import { countryFromHeaders, currencyForCountry, normalizeCountry } from './country-currency.util';
 import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { AdminReauthGuard, RequireReauth } from '../admin-reauth/admin-reauth.guard';
@@ -24,7 +25,8 @@ export class ExchangeRateController {
   @Get('display')
   async getDisplay(@Req() req: any, @Res({ passthrough: true }) res: any, @Query('country') hint?: string) {
     res.setHeader('Cache-Control', 'no-store');
-    const country = countryFromHeaders(req.headers) ?? normalizeCountry(hint);
+    // CDN header -> the visitor's real IP -> the browser's own guess (weakest: language/timezone, not location).
+    const country = countryFromHeaders(req.headers) ?? (await countryFromIp(clientIpOf(req))) ?? normalizeCountry(hint);
     const currency = currencyForCountry(country);
     const table = currency && currency !== 'USD' ? await this.displayRates.getRates() : null;
     return {
