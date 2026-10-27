@@ -144,8 +144,10 @@ export class UploadService {
         throw new BadRequestException('Private upload failed (could not reach file storage - check R2_ENDPOINT)');
       }
       if (!res.ok) {
-        console.error('R2 upload rejected:', res.status, (await res.text().catch(() => '')).slice(0, 300));
-        throw new BadRequestException(`Private upload failed (storage ${res.status} - check R2_BUCKET, keys and R2_REGION)`);
+        const body = (await res.text().catch(() => '')).slice(0, 600);
+        console.error('R2 upload rejected:', res.status, body);
+        const code = /<Code>([^<]{1,60})<\/Code>/i.exec(body)?.[1] ?? /"code"\s*:\s*"([^"]{1,60})"/i.exec(body)?.[1];
+        throw new BadRequestException(`Private upload failed (storage ${res.status}${code ? ` ${code}` : ''} - check R2_BUCKET, keys and R2_REGION)`);
       }
       return { publicId: R2_ID_PREFIX + key, resourceType, fileName: file.originalname, fileSize: file.size, mimeType };
     }
