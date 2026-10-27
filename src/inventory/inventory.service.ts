@@ -130,6 +130,7 @@ export class InventoryService {
         images: product.images ?? [],
         type: product.type,
         productType: product.productType,
+        deliveryFormat: (product as any).deliveryFormat ?? 'download',
         stock: stockDisplay,
         stockStatus,
         status: product.status,
