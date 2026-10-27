@@ -353,6 +353,43 @@ export class OrdersService {
     };
   }
 
+  /** Who availed (claimed) this store's free products — one row per product per buyer, newest first.
+   *  Free claims are not orders for the seller, so this is the only place they show up. */
+  async getSellerFreeClaims(sellerId: string, storeId: string, query: any) {
+    const { orderModel, storeModel, userModel } = this.databaseService.repositories;
+    const store = await storeModel.findOne({ _id: storeId, sellerId, isDelete: false }).select('_id').lean();
+    if (!store) throw new ForbiddenException('Store not found or unauthorized');
+
+    const page = clampInt(query.page, 1, 1, 100000);
+    const limit = Math.min(50, clampInt(query.limit, 20, 1, 100));
+    const filter = { 'sellerOrders.storeId': storeId, isFreeClaim: true, isDelete: false };
+    const [total, orders] = await Promise.all([
+      orderModel.countDocuments(filter),
+      orderModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).select('userId createdAt sellerOrders').lean(),
+    ]);
+    const buyers = await userModel
+      .find({ _id: { $in: [...new Set((orders as any[]).map((o: any) => String(o.userId)))].filter((id) => isValidObjectId(id)) } })
+      .select('name email')
+      .lean();
+    const buyerById = new Map<string, any>((buyers as any[]).map((b: any) => [String(b._id), b]));
+
+    const claims = (orders as any[]).flatMap((o: any) =>
+      (o.sellerOrders ?? [])
+        .filter((s: any) => String(s.storeId) === String(storeId))
+        .flatMap((s: any) =>
+          (s.items ?? []).map((i: any) => ({
+            orderId: String(o._id),
+            productId: i.productId ? String(i.productId) : null,
+            productName: i.name,
+            buyerName: buyerById.get(String(o.userId))?.name ?? 'Buyer',
+            buyerEmail: buyerById.get(String(o.userId))?.email ?? null,
+            claimedAt: o.createdAt,
+          })),
+        ),
+    );
+    return { success: true, data: { claims, total, page, totalPages: Math.ceil(total / limit) } };
+  }
+
   /** `storeId` omitted (null) means "every store this seller owns" — used by the
    *  seller-wide dashboard, as opposed to a single store's own orders page. */
   async getSellerOrders(sellerId: string, storeId: string | null, query: any) {
@@ -385,6 +422,7 @@ export class OrdersService {
     const matchFilter: any = {
       'sellerOrders.storeId': { $in: storeIds },
       isDelete: false,
+      isFreeClaim: { $ne: true },
     };
 
     if (query.type && query.type !== 'all') {
@@ -450,7 +488,7 @@ export class OrdersService {
 
     // stats — all orders across the scoped store(s) (no pagination)
     const allOrders = await orderModel
-      .find({ 'sellerOrders.storeId': { $in: storeIds }, isDelete: false })
+      .find({ 'sellerOrders.storeId': { $in: storeIds }, isDelete: false, isFreeClaim: { $ne: true } })
       .lean();
 
     // Definitions (shared with Customers/Analytics): ORDER VALUE = every non-cancelled order;

@@ -506,6 +506,11 @@ export class Order {
   @Prop({ default: false })
   isPaid: boolean;
 
+  // A buyer "availed" a free (list price 0) product. Kept as an order so library/downloads work, but
+  // it is NOT shown to the seller as an order — they only see who claimed what (seller-free-claims).
+  @Prop({ type: Boolean, default: false })
+  isFreeClaim: boolean;
+
   @Prop({ type: Date, default: null })
   paidAt: Date | null;
 

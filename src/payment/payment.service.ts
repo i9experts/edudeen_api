@@ -1362,6 +1362,12 @@ export class PaymentService {
     }
     await this.cancelPendingCardIntents(checkoutId);
 
+    // Every line free at LIST price (not just covered by a coupon) = an "avail", not a sale for the seller.
+    const allListFree = (checkout.items as any[]).every((i: any) => i.type === 'digital' && (i.originalPrice ?? i.price ?? 0) <= 0);
+    if (allListFree) {
+      await orderModel.updateMany({ _id: { $in: orders.map((o: any) => o._id) } }, { $set: { isFreeClaim: true } });
+    }
+
     await paymentTransactionModel.create({
       userId,
       checkoutId: checkout._id.toString(),

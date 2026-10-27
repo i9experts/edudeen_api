@@ -105,6 +105,17 @@ export class OrdersController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller', 'admin')
+  @Get('seller-free-claims/:storeId')
+  async getSellerFreeClaims(
+    @Req() req: any,
+    @Param('storeId', ParseObjectIdPipe) storeId: string,
+    @Query() query: any,
+  ) {
+    return this.ordersService.getSellerFreeClaims(req.user.userId, storeId, query);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller', 'admin')
   @Get('seller-orders/:storeId')
   async getSellerOrders(
     @Req() req: any,
