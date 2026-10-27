@@ -2,6 +2,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { DatabaseService } from 'src/database/databaseservice';
 import type { UploadedAssetKind } from './schemas/uploaded-asset.schema';
+import { stripStorageId } from './r2.util';
 
 /** Folders that must NEVER be referenced as a product file, whatever the client claims. */
 const NEVER_A_PRODUCT_FILE = [
@@ -73,15 +74,16 @@ export class UploadedAssetsService {
     if (typeof publicId !== 'string' || !publicId.trim())
       throw new BadRequestException('A file reference (publicId) is required');
     // A product file may never live in another purpose's folder; a KYC document must live in the KYC folder.
+    const folderId = stripStorageId(publicId); // R2 ids carry an `r2/` prefix
     if (
       kind === 'digital_product' &&
-      NEVER_A_PRODUCT_FILE.some((prefix) => publicId.startsWith(prefix))
+      NEVER_A_PRODUCT_FILE.some((prefix) => folderId.startsWith(prefix))
     ) {
       throw new BadRequestException('This file cannot be used here');
     }
     if (
       kind === 'kyc_document' &&
-      !publicId.startsWith('private/kyc-documents')
+      !folderId.startsWith('private/kyc-documents')
     ) {
       throw new BadRequestException(
         'This is not a verification document upload',

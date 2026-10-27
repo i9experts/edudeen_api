@@ -13,6 +13,8 @@ import {
   PREVIEW_SOURCE_FOLDER,
 } from '../products/constants/preview.constants';
 import { assertFileContent } from '../common/file-signature.util';
+import { randomUUID } from 'crypto';
+import { R2Config, R2_ID_PREFIX, isR2Id, presignR2Url, stripStorageId } from './r2.util';
 
 // Public uploads are served inline from Cloudinary, so anything that a
 // browser would execute or render as active content (SVG, HTML, JS) is
@@ -111,6 +113,16 @@ export class UploadService {
   // ── PRIVATE upload (digital products, and other sensitive files e.g. KYC
   // documents — `folder` defaults to the original digital-products path so
   // every existing caller is unaffected) ──
+  /** R2 settings from env; null (=> Cloudinary for private files) until all four are set. */
+  private r2Config(): R2Config | null {
+    const accountId = this.configService.get<string>('R2_ACCOUNT_ID');
+    const accessKeyId = this.configService.get<string>('R2_ACCESS_KEY_ID');
+    const secretAccessKey = this.configService.get<string>('R2_SECRET_ACCESS_KEY');
+    const bucket = this.configService.get<string>('R2_BUCKET');
+    if (!accountId || !accessKeyId || !secretAccessKey || !bucket) return null;
+    return { accountId, accessKeyId, secretAccessKey, bucket, endpoint: this.configService.get<string>('R2_ENDPOINT') || undefined, region: this.configService.get<string>('R2_REGION') || undefined };
+  }
+
   async uploadPrivateFile(
     file: Express.Multer.File,
     folder: string = 'private/digital-products',
@@ -119,6 +131,20 @@ export class UploadService {
     assertFileContent(file, { allowMarkup: file.originalname?.toLowerCase().endsWith('.svg') });
     const mimeType = this.getMimeTypeFromExtension(file.originalname) || file.mimetype;
     const resourceType = this.getResourceType(mimeType);
+    const r2 = this.r2Config();
+    if (r2) {
+      // Sold files live on R2 (no 10 MB raw cap). Stored id = `r2/<key>`; every reader dispatches on that prefix.
+      const safeName = (file.originalname || 'file').replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
+      const key = `${folder}/${randomUUID()}-${safeName}`;
+      let res: Response;
+      try {
+        res = await fetch(presignR2Url(r2, 'PUT', key, 900), { method: 'PUT', body: file.buffer as any });
+      } catch {
+        throw new BadRequestException('Private upload failed');
+      }
+      if (!res.ok) throw new BadRequestException(`Private upload failed (storage ${res.status})`);
+      return { publicId: R2_ID_PREFIX + key, resourceType, fileName: file.originalname, fileSize: file.size, mimeType };
+    }
     return new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
@@ -153,6 +179,13 @@ export class UploadService {
     const safeFileName = fileName
       ? fileName.replace(/[^a-zA-Z0-9._-]/g, '_')
       : undefined;
+    if (isR2Id(publicId)) {
+      const r2 = this.r2Config();
+      if (!r2) throw new BadRequestException('File storage is not configured');
+      // Unlike Cloudinary's plain signed URL this one really expires (SigV4 X-Amz-Expires).
+      const disp = inline ? 'inline' : safeFileName ? `attachment; filename="${safeFileName}"` : 'attachment';
+      return presignR2Url(r2, 'GET', stripStorageId(publicId), expirySeconds, { 'response-content-disposition': disp });
+    }
     return cloudinary.url(publicId, {
       sign_url: true,
       secure: true,
@@ -260,7 +293,19 @@ export class UploadService {
     targetResourceType: 'image' | 'video',
   ): Promise<string> {
     if (originalResourceType === targetResourceType) return publicId;
-    const buffer = await this.downloadPrivateFileBuffer(publicId, originalResourceType);
+    let buffer = await this.downloadPrivateFileBuffer(publicId, originalResourceType);
+    // Cloudinary (free) takes <= 10 MB images. Previews only show the first pages, so a big PDF is cut down to those.
+    if (targetResourceType === 'image' && buffer.length > 9 * 1024 * 1024) {
+      try {
+        const src = await PDFDocument.load(buffer, { ignoreEncryption: true });
+        const out = await PDFDocument.create();
+        const idx = Array.from({ length: Math.min(PREVIEW_PDF_PAGE_COUNT, src.getPageCount()) }, (_, i) => i);
+        (await out.copyPages(src, idx)).forEach((p) => out.addPage(p));
+        buffer = Buffer.from(await out.save());
+      } catch {
+        throw new BadRequestException('Could not prepare the preview from this file. Please upload a smaller free sample.');
+      }
+    }
     return new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         { folder: PREVIEW_SOURCE_FOLDER, resource_type: targetResourceType, type: 'private' },
