@@ -39,7 +39,10 @@ export function presignR2Url(
   extraQuery: Record<string, string> = {},
   now: Date = new Date(),
 ): string {
-  const host = cfg.endpoint ? new URL(cfg.endpoint).host : `${cfg.accountId}.r2.cloudflarestorage.com`;
+  // Tolerate `s3.region.host/bucket` or a missing scheme in the env value: only the host matters (path-style bucket comes from cfg.bucket).
+  const host = cfg.endpoint
+    ? new URL(/^https?:\/\//i.test(cfg.endpoint.trim()) ? cfg.endpoint.trim() : `https://${cfg.endpoint.trim()}`).host
+    : `${cfg.accountId}.r2.cloudflarestorage.com`;
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, ''); // 20260101T000000Z
   const date = amzDate.slice(0, 8);
   const region = cfg.region || 'auto';

@@ -139,10 +139,14 @@ export class UploadService {
       let res: Response;
       try {
         res = await fetch(presignR2Url(r2, 'PUT', key, 900), { method: 'PUT', body: file.buffer as any });
-      } catch {
-        throw new BadRequestException('Private upload failed');
+      } catch (e: any) {
+        console.error('R2 upload failed:', e?.message, e?.cause?.message ?? '');
+        throw new BadRequestException('Private upload failed (could not reach file storage - check R2_ENDPOINT)');
       }
-      if (!res.ok) throw new BadRequestException(`Private upload failed (storage ${res.status})`);
+      if (!res.ok) {
+        console.error('R2 upload rejected:', res.status, (await res.text().catch(() => '')).slice(0, 300));
+        throw new BadRequestException(`Private upload failed (storage ${res.status} - check R2_BUCKET, keys and R2_REGION)`);
+      }
       return { publicId: R2_ID_PREFIX + key, resourceType, fileName: file.originalname, fileSize: file.size, mimeType };
     }
     return new Promise((resolve, reject) => {
