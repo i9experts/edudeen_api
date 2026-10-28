@@ -10,6 +10,7 @@ import { AiCreditsService } from './ai-credits.service';
 import { PlatformAddonsService } from './platform-addons.service';
 import { PlatformPlanNotificationsService } from './platform-plan-notifications.service';
 import { AuthModule } from '../auth/auth.module';
+import { AdminReauthModule } from '../admin-reauth/admin-reauth.module';
 import { RedisModule } from '../redis/redis.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { EmailService } from '../otp/services/email.service';
@@ -21,7 +22,7 @@ import { EmailService } from '../otp/services/email.service';
 // reasoning to why SubscriptionsModule/ActivityLogModule are global.
 @Global()
 @Module({
-  imports: [AuthModule, RedisModule, SubscriptionsModule],
+  imports: [AdminReauthModule, AuthModule, RedisModule, SubscriptionsModule],
   // Controller order matters here — Express/Nest routing is first-match, in
   // controller-then-method declaration order (same "static-before-dynamic"
   // convention used throughout this codebase's other controllers):
