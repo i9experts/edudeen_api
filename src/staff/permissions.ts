@@ -82,7 +82,8 @@ type Rule = { re: RegExp; read?: string | null; write?: string | null };
 const RULES: Rule[] = [
   { re: /^\/api\/admin\/staff\/(me|tasks|notes|approvals)(\/|$)/i, read: null, write: null }, // checked again inside the controller
   { re: /^\/api\/admin\/reauth(\/|$)/i, read: null, write: null },
-  { re: /^\/api\/admin\/pending-counts$/i, read: null, write: DENY }, // numbers only; the controller trims queues to the staff member's rights
+  { re: /^\/api\/admin\/pending-counts$/i, read: null, write: DENY },
+  { re: /^\/api\/admin\/store-lookup$/i, read: null, write: DENY }, // names/slugs for the store picker, any staff member // numbers only; the controller trims queues to the staff member's rights
   { re: /^\/api\/admin\/staff(\/|$)/i, read: 'staff.view', write: 'staff.manage' },
   { re: /^\/api\/auth\/admin\/create-admin/i, write: 'staff.manage', read: 'staff.manage' },
   // CSV exports are GETs, so the module's *.view right would let any viewer bulk-download personal data: they need their own right.
