@@ -177,18 +177,15 @@ export function premiumLinePrice(price: number, compareAtPrice: number | null | 
 }
 
 /**
- * The 'Premium members save up to X%' teaser, measured against what the buyer would pay NOW (normalUnit: the price after
- * any running sale / subscriber price), not against the list price - so a product already 16% off whose member price is 33%
- * below list advertises the extra 17%, never a figure that double-counts the sale. null = Premium would not beat the price
- * a normal buyer pays, so no teaser. Seller / Edudeen parts are scaled to the advertised percent.
+ * The 'Premium members save X%' teaser: the member's full discount off the LIST price (seller % + Edudeen %, the Edudeen part
+ * is whatever the admin set). `normalUnit` (the price after any running sale / subscriber price) is only a guard: null =
+ * Premium would not beat the price a normal buyer pays, so no teaser.
  */
 export function premiumTeaser(price: number, compareAtPrice: number | null | undefined, normalUnit: number | null | undefined, sellerPercent: number, platformPercent: number): { premiumPercent: number; premiumSellerPercent: number; premiumPlatformPercent: number } | null {
   const calc = premiumLinePrice(price, compareAtPrice, sellerPercent, platformPercent);
   const vs = Math.min(typeof normalUnit === 'number' ? normalUnit : price, price);
   if (!calc.applies || !(vs > 0) || !(calc.unit < vs)) return null;
-  const pct = round2((1 - calc.unit / vs) * 100);
-  const seller = round2(pct * (calc.totalPercent > 0 ? calc.sellerPercent / calc.totalPercent : 1));
-  return { premiumPercent: pct, premiumSellerPercent: seller, premiumPlatformPercent: round2(pct - seller) };
+  return { premiumPercent: calc.totalPercent, premiumSellerPercent: calc.sellerPercent, premiumPlatformPercent: calc.platformPercent };
 }
 
 /**

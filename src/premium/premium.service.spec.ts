@@ -176,9 +176,10 @@ describe('PremiumEntitlementsService', () => {
     expect(g.premiumPercent).toBe(25);
     expect(g.premiumSellerPercent).toBe(20);
     expect((g.variants[0] as any).premiumPrice).toBeUndefined();
-    // p4 is already 10% off (90 vs 100): the teaser advertises what Premium adds on top of that price (80 vs 90 = 11.11%), never 20% off list.
-    expect(gd.premiumPercent).toBe(11.11);
-    expect(gd.premiumSellerPercent! + gd.premiumPlatformPercent!).toBeCloseTo(11.11, 2);
+    // p4 is already 10% off (90 vs 100): the teaser advertises the member's full discount off list (seller 15 + platform 5 = 20).
+    expect(gd.premiumPercent).toBe(20);
+    expect(gd.premiumSellerPercent).toBe(15);
+    expect(gd.premiumPlatformPercent).toBe(5);
     expect((gd.variants[0] as any).compareAtPrice).toBe(100); // a guest keeps seeing the seller's normal sale
   });
   it('decorateProducts: a percentage campaign that beats premium keeps the campaign badge and offers no premium price; one that loses is replaced by premium', async () => {
