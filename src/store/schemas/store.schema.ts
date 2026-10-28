@@ -341,6 +341,15 @@ export class Store {
   @Prop({ type: Object, default: null })
   returnPolicy: { returnsAccepted: boolean; windowDays: number; note?: string | null } | null;
 
+  // Seller's own delivery charge (store currency). enabled=false/null -> the platform shipping-zone fee is used.
+  // freeOverAmount: the store's items subtotal at or above which delivery is free (null = never).
+  @Prop({ type: Object, default: null })
+  deliverySettings: { enabled: boolean; fee: number; freeOverAmount: number | null } | null;
+
+  // Gift wrap the seller offers on physical orders (store currency). null = offered for free (the original behaviour).
+  @Prop({ type: Object, default: null })
+  giftWrap: { enabled: boolean; fee: number } | null;
+
   // Computed hourly from buyer<->seller messages (ResponseStatsService). Null = not enough data.
   @Prop({ type: Object, default: null })
   responseStats: { medianReplyMinutes: number; sampleSize: number; updatedAt: Date } | null;

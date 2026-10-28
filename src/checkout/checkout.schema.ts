@@ -222,10 +222,11 @@ export class Checkout {
   // shipping subscriber benefit; `discountPercent` the benefit applied (0 = none).
   // Empty on checkouts created before per-store shipping existed.
   @Prop({
-    type: [{ _id: false, storeId: String, fee: Number, baseFee: Number, discountPercent: Number }],
+    type: [{ _id: false, storeId: String, fee: Number, baseFee: Number, discountPercent: Number, giftWrapFee: Number }],
     default: [],
   })
-  shippingByStore: { storeId: string; fee: number; baseFee: number; discountPercent: number }[];
+  // `giftWrapFee` = that seller's gift-wrap charge (already inside `fee`), 0 when the buyer didn't ask for wrapping.
+  shippingByStore: { storeId: string; fee: number; baseFee: number; discountPercent: number; giftWrapFee?: number }[];
 
   @Prop({ default: 0 })
   taxAmount: number;

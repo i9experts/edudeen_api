@@ -740,6 +740,34 @@ export class StoreService {
       }
     }
 
+    // Seller delivery charge + gift wrap charge (store currency).
+    const money = (v: unknown, label: string): number => {
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 10_000_000) throw new BadRequestException(`${label} must be a number from 0 to 10,000,000`);
+      return Math.round(v * 100) / 100;
+    };
+    if (body.deliverySettings !== undefined) {
+      const ds = body.deliverySettings;
+      if (ds === null) updateData.deliverySettings = null;
+      else {
+        if (typeof ds !== 'object' || Array.isArray(ds)) throw new BadRequestException('deliverySettings must be an object');
+        if (typeof ds.enabled !== 'boolean') throw new BadRequestException('deliverySettings.enabled must be true or false');
+        updateData.deliverySettings = {
+          enabled: ds.enabled,
+          fee: money(ds.fee ?? 0, 'Delivery charge'),
+          freeOverAmount: ds.freeOverAmount == null || ds.freeOverAmount === '' ? null : money(ds.freeOverAmount, 'Free delivery amount'),
+        };
+      }
+    }
+    if (body.giftWrap !== undefined) {
+      const gw = body.giftWrap;
+      if (gw === null) updateData.giftWrap = null;
+      else {
+        if (typeof gw !== 'object' || Array.isArray(gw)) throw new BadRequestException('giftWrap must be an object');
+        if (typeof gw.enabled !== 'boolean') throw new BadRequestException('giftWrap.enabled must be true or false');
+        updateData.giftWrap = { enabled: gw.enabled, fee: money(gw.fee ?? 0, 'Gift wrap charge') };
+      }
+    }
+
     // productTypes change ho to enabledTools bhi refresh
     if (productTypes !== undefined) {
       updateData.productTypes = productTypes;

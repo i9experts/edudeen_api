@@ -97,6 +97,7 @@ import {
   UseGuards,
   Get,
   Body,
+  Query,
   UseInterceptors,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -171,6 +172,13 @@ return this.checkoutService.adminSeedDefaultShippingZones();
   @Delete('admin/shipping-zones/:id')
   async adminDeleteShippingZone(@Param('id') id: string) {
     return this.checkoutService.adminDeleteShippingZone(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('user')
+  @Get('gift-options')
+  async getGiftOptions(@Req() req: any, @Query('checkoutId') checkoutId: string) {
+    return this.checkoutService.getGiftOptions(req.user.userId, checkoutId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

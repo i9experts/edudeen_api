@@ -908,8 +908,27 @@ export class CheckoutService {
     // with no physical items (digital only) has no shipping at all.
     const items = checkout.items as any[];
     const physicalStoreIds = [...new Set(items.filter((i) => i.type === 'physical').map((i) => i.storeId))];
-    const shippingByStore: { storeId: string; fee: number; baseFee: number; discountPercent: number }[] = [];
+    const shippingByStore: { storeId: string; fee: number; baseFee: number; discountPercent: number; giftWrapFee?: number }[] = [];
+    const sellerStores: any[] = physicalStoreIds.length
+      ? await this.databaseService.repositories.storeModel.find({ _id: { $in: physicalStoreIds } }).select('deliverySettings giftWrap baseCurrency').lean()
+      : [];
+    const snaps = (checkout.fxSnapshots as any) ?? [];
     for (const storeId of physicalStoreIds) {
+      const sellerStore = sellerStores.find((s) => String(s._id) === String(storeId));
+      const storeCcy = sellerStore?.baseCurrency ?? checkout.currency;
+      // The seller's own delivery charge replaces the platform zone fee (the zone still decides WHERE we deliver).
+      let storeBaseFee = baseFee;
+      const ds = sellerStore?.deliverySettings;
+      if (ds?.enabled) {
+        const storeSubtotal = this.convertedSubtotal(items.filter((i) => i.storeId === storeId), checkout.currency, snaps);
+        const freeOver = ds.freeOverAmount != null ? this.exchangeRateService.convertWithSnapshots(ds.freeOverAmount, storeCcy, checkout.currency, snaps) : null;
+        storeBaseFee = freeOver != null && freeOver > 0 && storeSubtotal >= freeOver
+          ? 0
+          : this.round(this.exchangeRateService.convertWithSnapshots(ds.fee || 0, storeCcy, checkout.currency, snaps));
+      }
+      const giftWrapFee = checkout.giftWrap && sellerStore?.giftWrap?.enabled !== false && (sellerStore?.giftWrap?.fee ?? 0) > 0
+        ? this.round(this.exchangeRateService.convertWithSnapshots(sellerStore.giftWrap.fee, storeCcy, checkout.currency, snaps))
+        : 0;
       let discountPercent = 0;
       const benefitsEntry = preloaded?.benefitsByStore?.has(storeId)
         ? preloaded.benefitsByStore.get(storeId)
@@ -931,9 +950,10 @@ export class CheckoutService {
       }
       shippingByStore.push({
         storeId,
-        baseFee,
+        baseFee: storeBaseFee,
         discountPercent,
-        fee: this.round(baseFee * (1 - discountPercent / 100)),
+        fee: this.round(storeBaseFee * (1 - discountPercent / 100) + giftWrapFee),
+        giftWrapFee,
       });
     }
     const shippingFee = this.round(shippingByStore.reduce((sum, l) => sum + l.fee, 0));
@@ -1039,12 +1059,59 @@ export class CheckoutService {
       throw new BadRequestException(e?.message ?? 'Invalid gift options');
     }
     const { checkoutModel } = this.databaseService.repositories;
-    const checkout: any = await checkoutModel.findOne({ _id: checkoutId, userId, isDelete: false }).select('status items').lean();
+    const checkout: any = await checkoutModel.findOne({ _id: checkoutId, userId, isDelete: false }).lean();
     if (!checkout) throw new NotFoundException('Checkout not found');
     if (!['pending', 'payment_pending'].includes(checkout.status)) throw new BadRequestException('This checkout can no longer be changed');
     if (!(checkout.items ?? []).some((i: any) => i.type === 'physical')) throw new BadRequestException('Gift options are only for physical items');
-    await checkoutModel.updateOne({ _id: checkoutId, userId }, { $set: opts });
-    return { success: true, message: 'Gift options saved', data: opts };
+
+    // Gift wrap is the seller's charge: re-price every store's shipping line (delivery + wrap) and the total.
+    const lines: any[] = (checkout.shippingByStore ?? []).map((l: any) => ({ ...l }));
+    const stores: any[] = lines.length
+      ? await this.databaseService.repositories.storeModel.find({ _id: { $in: lines.map((l) => l.storeId) } }).select('giftWrap baseCurrency').lean()
+      : [];
+    const snaps = checkout.fxSnapshots ?? [];
+    let delta = 0;
+    for (const line of lines) {
+      const st = stores.find((s) => String(s._id) === String(line.storeId));
+      const fee = opts.giftWrap && st?.giftWrap?.enabled !== false && (st?.giftWrap?.fee ?? 0) > 0
+        ? this.round(this.exchangeRateService.convertWithSnapshots(st.giftWrap.fee, st.baseCurrency ?? checkout.currency, checkout.currency, snaps))
+        : 0;
+      const old = line.giftWrapFee ?? 0;
+      delta += fee - old;
+      line.giftWrapFee = fee;
+      line.fee = this.round((line.fee ?? 0) - old + fee);
+    }
+    delta = this.round(delta);
+    if (delta !== 0 && checkout.status === 'payment_pending') {
+      throw new BadRequestException('Payment has already been started for this checkout — start a new checkout to change it');
+    }
+    const $set: any = { ...opts };
+    if (lines.length && delta !== 0) {
+      $set.shippingByStore = lines;
+      $set.shippingFee = this.round((checkout.shippingFee ?? 0) + delta);
+      $set.totalAmount = this.round((checkout.totalAmount ?? 0) + delta);
+    }
+    await checkoutModel.updateOne({ _id: checkoutId, userId }, { $set });
+    return {
+      success: true,
+      message: 'Gift options saved',
+      data: { ...opts, shippingFee: $set.shippingFee ?? checkout.shippingFee ?? 0, totalAmount: $set.totalAmount ?? checkout.totalAmount, shippingByStore: lines },
+    };
+  }
+
+  /** Buyer: what gift wrap costs on this checkout (sum of the sellers' own charges) so the box can show it up front. */
+  async getGiftOptions(userId: string, checkoutId: string) {
+    if (!checkoutId || !isValidObjectId(checkoutId)) throw new BadRequestException('checkoutId is required');
+    const checkout: any = await this.databaseService.repositories.checkoutModel.findOne({ _id: checkoutId, userId, isDelete: false }).select('items currency fxSnapshots giftWrap giftMessage').lean();
+    if (!checkout) throw new NotFoundException('Checkout not found');
+    const storeIds = [...new Set<string>((checkout.items ?? []).filter((i: any) => i.type === 'physical').map((i: any) => String(i.storeId)))];
+    const stores: any[] = storeIds.length ? await this.databaseService.repositories.storeModel.find({ _id: { $in: storeIds } }).select('giftWrap baseCurrency').lean() : [];
+    const offering = stores.filter((s) => s.giftWrap?.enabled !== false);
+    let fee = 0;
+    for (const s of offering) {
+      if ((s.giftWrap?.fee ?? 0) > 0) fee += this.exchangeRateService.convertWithSnapshots(s.giftWrap.fee, s.baseCurrency ?? checkout.currency, checkout.currency, checkout.fxSnapshots ?? []);
+    }
+    return { success: true, data: { available: offering.length > 0, fee: this.round(fee), currency: checkout.currency, giftWrap: !!checkout.giftWrap, giftMessage: checkout.giftMessage ?? '' } };
   }
 
   /** Admin action: adds the starter Pakistani zones that do not exist yet. Idempotent; never edits or deletes existing zones. */
