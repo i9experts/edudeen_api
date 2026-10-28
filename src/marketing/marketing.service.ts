@@ -369,7 +369,7 @@ export class MarketingService {
   // participating store of that type — used by EducationMarketplace so a
   // physical/digital-only seller's campaign never shows there. Platform-
   // sponsored campaigns are unaffected: they apply store-wide regardless.
-  async getPublicActiveCampaigns(storeType?: string, opts: { earlyAccessHours?: number } = {}) {
+  async getPublicActiveCampaigns(storeType?: string, opts: { earlyAccessHours?: number; includeUpcoming?: boolean } = {}) {
     const realNow = new Date();
     // Premium early access (see getActiveCampaignsForStores): non-premium callers pass nothing and see no change.
     const now = opts.earlyAccessHours && opts.earlyAccessHours > 0 ? new Date(realNow.getTime() + opts.earlyAccessHours * 3_600_000) : realNow;
@@ -439,6 +439,39 @@ export class MarketingService {
         storeCount: c.sponsorType === 'platform' ? activeStoreCount : (c.participatingStoreIds ?? []).length,
         ...(new Date(c.startDate) > realNow ? { earlyAccess: true, startDate: c.startDate } : {}),
       });
+    }
+    // "Coming soon": platform campaigns the admin has published that have not started yet (the deals banner shows
+    // them after the live ones). Only when asked for, so every other consumer of this list still gets live sales only.
+    if (opts.includeUpcoming) {
+      const upcoming = await this.r.campaignModel
+        .find({
+          isDelete: false,
+          status: 'active',
+          startDate: { $gt: now },
+          endDate: { $gte: realNow },
+          ...CAMPAIGN_WITHIN_CAP,
+        })
+        .sort({ startDate: 1, order: 1 })
+        .limit(5)
+        .lean();
+      for (const c of upcoming) {
+        data.push({
+          _id: c._id,
+          slug: c.slug ?? null,
+          name: c.name,
+          description: c.description,
+          bannerImage: c.bannerImage,
+          backgroundImage: c.backgroundImage ?? null,
+          endDate: c.endDate,
+          startDate: c.startDate,
+          comingSoon: true,
+          discountType: c.discountType,
+          discountValue: c.discountValue,
+          currency: c.currency ?? 'USD',
+          sponsorType: c.sponsorType ?? 'seller',
+          storeCount: 0,
+        });
+      }
     }
     return { success: true, data };
   }

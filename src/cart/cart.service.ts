@@ -362,19 +362,23 @@ export class CartService {
         }
       }
       // Cart summary: one total; the label is the campaign that contributes the most.
+      // `campaignAdjust` = what the cart total really drops by (negative when the seller's own deeper sale is suspended and
+      // the sale price is dearer); `campaignAmount` = the saving off the LIST price shown to the buyer.
       const campaignTotals = new Map<string, number>();
       let campaignAmount = 0;
+      let campaignAdjust = 0;
       for (const i of items) {
         const r = campaignLines.get(lineKey(i));
         if (!r) continue;
-        const amt = Math.round(r.discount * i.quantity * 100) / 100;
+        const amt = Math.round(r.sponsored * i.quantity * 100) / 100;
         campaignAmount = Math.round((campaignAmount + amt) * 100) / 100;
+        campaignAdjust = Math.round((campaignAdjust + r.discount * i.quantity) * 100) / 100;
         campaignTotals.set(r.campaign.campaignId, Math.round(((campaignTotals.get(r.campaign.campaignId) ?? 0) + amt) * 100) / 100);
       }
       const topCampaignId = [...campaignTotals.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
       const topCampaign = topCampaignId ? campaignMeta.get(topCampaignId) : undefined;
       const campaignDiscount: CartCampaignDiscount | null = topCampaign && campaignAmount > 0
-        ? { campaignId: topCampaign.campaignId, name: topCampaign.name, amount: campaignAmount, currency: cartCurrency, discountType: topCampaign.discountType, discountValue: topCampaign.origValue, valueCurrency: topCampaign.valueCurrency }
+        ? { campaignId: topCampaign.campaignId, name: topCampaign.name, amount: campaignAmount, currency: cartCurrency, discountType: topCampaign.discountType, discountValue: topCampaign.origValue, valueCurrency: topCampaign.valueCurrency, adjust: campaignAdjust }
         : null;
       // Edudeen Premium: the seller's chosen member discount. Everyone gets the teaser `premiumPercent`; only an active
       // member gets `premiumUnitPrice` / `premiumDiscountPercent` (display only - checkout is the source of truth).
@@ -414,7 +418,7 @@ export class CartService {
           totalPrice,
           currency: cartCurrency,
           campaignDiscount,
-          totalAfterDiscount: Math.round((totalPrice - (campaignDiscount?.amount ?? 0)) * 100) / 100,
+          totalAfterDiscount: Math.round((totalPrice - campaignAdjust) * 100) / 100,
           ...(premiumEnt?.isPremium ? { isPremium: true, premiumSavings: Math.round(premiumSavings * 100) / 100, premiumPlatformFunded: Math.round(premiumPlatformFunded * 100) / 100 } : {}),
         },
       };

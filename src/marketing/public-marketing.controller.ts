@@ -20,8 +20,11 @@ export class PublicMarketingController {
   // (each such row carries earlyAccess: true). Everyone else gets exactly the previous response.
   @UseGuards(OptionalJwtAuthGuard)
   @Get('campaigns')
-  async getActiveCampaigns(@Req() req: any, @Query('storeType') storeType?: string) {
+  async getActiveCampaigns(@Req() req: any, @Query('storeType') storeType?: string, @Query('includeUpcoming') includeUpcoming?: string) {
     const ent = this.premium && req?.user?.userId ? await this.premium.getEntitlements(req.user.userId) : null;
-    return this.marketingService.getPublicActiveCampaigns(storeType, ent?.isPremium ? { earlyAccessHours: ent.earlyAccessHours } : {});
+    return this.marketingService.getPublicActiveCampaigns(storeType, {
+      ...(ent?.isPremium ? { earlyAccessHours: ent.earlyAccessHours } : {}),
+      ...(includeUpcoming === '1' ? { includeUpcoming: true } : {}),
+    });
   }
 }

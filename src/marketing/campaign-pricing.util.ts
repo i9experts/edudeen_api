@@ -76,8 +76,15 @@ export interface CampaignLinePrice {
   listUnit: number;
   /** what the buyer pays per unit under the campaign */
   unit: number;
-  /** normal price - unit (> 0) */
+  /** normal price - unit. Positive normally; NEGATIVE when the seller's own sale was suspended and the sale price is
+   *  higher than the seller's deeper own sale (the buyer then pays more than before, by design). */
   discount: number;
+  /** What the sale takes off the LIST price (list - unit, always > 0): the amount the platform reimburses for a
+   *  platform-sponsored sale (the seller is credited the list price) and the part a seller gives up for a seller-sponsored one.
+   *  Equals `discount` when the seller had no sale of their own on the line. */
+  sponsored: number;
+  /** true when the line carried the seller's own sale (compare-at above the price) that is suspended while this sale runs. */
+  replacesSellerSale: boolean;
 }
 
 /** The list price: compare-at when it is above the selling price, else the price (same base as Edudeen Premium). */
@@ -95,8 +102,13 @@ export function campaignLinePrice(
     ? round(listUnit * (Math.min(campaign.discountValue, 100) / 100))
     : Math.min(campaign.discountValue, listUnit);
   const unit = round(Math.max(0, listUnit - off));
-  if (!(unit < normalUnit)) return null;
-  return { campaign, listUnit, unit, discount: round(normalUnit - unit) };
+  // The seller's OWN sale (compare-at above the price) is suspended while an Edudeen sale runs on the product: the sale
+  // price replaces it even when it is dearer than the seller's own sale. Only when the buyer would otherwise pay exactly
+  // the selling price (no store-subscriber price on top) - otherwise the old "only if cheaper" rule stays.
+  const replacesSellerSale = listUnit > price && round(normalUnit) === round(price);
+  if (!replacesSellerSale && !(unit < normalUnit)) return null;
+  if (!(unit < listUnit)) return null;
+  return { campaign, listUnit, unit, discount: round(normalUnit - unit), sponsored: replacesSellerSale ? round(listUnit - unit) : round(normalUnit - unit), replacesSellerSale };
 }
 
 /** Best campaign for a line: the lowest resulting unit price; ties break on soonest-ending. null when none applies. */
@@ -165,6 +177,8 @@ export interface CartCampaignDiscount {
   discountValue: number | null;
   /** only for fixed sales: the currency `discountValue` is written in (a campaign is USD unless stated) */
   valueCurrency: string | null;
+  /** What the cart total really drops by, in `currency` (cart.service sets it; negative when the seller's own deeper sale was suspended). */
+  adjust?: number;
 }
 
 /**

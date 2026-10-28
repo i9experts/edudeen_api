@@ -365,14 +365,14 @@ describe('Platform campaign priced from the LIST price + strict per-product opt-
   const noPremium = { ent: NON_PREMIUM, storePremium: null };
   const seeds = [{ storeId: 'A', productId: 'pa', price: 500, compareAt: 550 }];
 
-  it('10% mega sale on price 500 / compare 550 => buyer pays 495; platform-sponsored discount recorded = 5 (seller is credited 500)', async () => {
+  it('10% mega sale on price 500 / compare 550 => buyer pays 495; platform covers 55 off the LIST price (seller is credited 550, their own sale is suspended)', async () => {
     const { data } = await create(world(seeds, { ...noPremium, campaignPct: 10, campaignSponsor: 'platform' }));
     const i = data.checkout.items[0];
-    expect(i).toMatchObject({ price: 495, totalPrice: 495, campaignDiscountUSD: 5, campaignSponsorType: 'platform', campaignId: 'c1', originalPrice: 500 });
+    expect(i).toMatchObject({ price: 495, totalPrice: 495, campaignDiscountUSD: 55, campaignSponsorType: 'platform', campaignId: 'c1', originalPrice: 500 });
     expect(data.checkout.subtotal).toBe(495);
-    expect(data.checkout.campaignDiscountTotalUSD).toBe(5);
+    expect(data.checkout.campaignDiscountTotalUSD).toBe(55);
     // PaymentService credits subtotal + platform-sponsored discount to the seller
-    expect(i.totalPrice + i.campaignDiscountUSD).toBe(500);
+    expect(i.totalPrice + i.campaignDiscountUSD).toBe(550);
   });
 
   it('seller-sponsored: buyer pays 495 and the seller receives 495 (no reimbursement)', async () => {
@@ -382,13 +382,18 @@ describe('Platform campaign priced from the LIST price + strict per-product opt-
     expect(feeItemsFor({ items: [i] }).length).toBe(1);
   });
 
-  it('5% mega sale => 522.5 is not cheaper than the seller price 500: NO campaign applies, line stays normal', async () => {
-    const { data } = await create(world(seeds, { ...noPremium, campaignPct: 5 }));
+  it('5% mega sale => 522.5: the sale price REPLACES the seller\'s own deeper sale (buyer pays 522.5, platform-sponsored 27.5 off list)', async () => {
+    const { data } = await create(world(seeds, { ...noPremium, campaignPct: 5, campaignSponsor: 'platform' }));
     const i = data.checkout.items[0];
-    expect(i.totalPrice).toBe(500);
-    expect(i.campaignDiscountUSD ?? 0).toBe(0);
-    expect(i.campaignId ?? null).toBeNull();
-    expect(data.checkout.campaignDiscountTotalUSD).toBe(0);
+    expect(i.totalPrice).toBe(522.5);
+    expect(i.campaignDiscountUSD).toBe(27.5);
+    expect(i.campaignId).toBe('c1');
+    expect(data.checkout.campaignDiscountTotalUSD).toBe(27.5);
+    expect(i.totalPrice + i.campaignDiscountUSD).toBe(550); // seller credited the list price
+  });
+  it('5% mega sale, seller-sponsored: buyer pays 522.5 and the seller receives 522.5', async () => {
+    const { data } = await create(world(seeds, { ...noPremium, campaignPct: 5, campaignSponsor: 'seller' }));
+    expect(data.checkout.items[0]).toMatchObject({ totalPrice: 522.5, campaignSponsorType: 'seller' });
   });
 
   it('regression (bug report): a product the seller never ticked gets NO campaign price even though the store is a participant', async () => {

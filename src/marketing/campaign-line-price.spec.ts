@@ -20,14 +20,29 @@ describe('campaign price is computed from the LIST price (owner rule R1)', () =>
     expect(r.unit).toBe(495);
     expect(r.discount).toBe(5);
   });
-  it('price 500 / compare 550, 5% => 522.5 is not cheaper than 500: NO campaign applies', () => {
-    expect(campaignLinePrice(camp('X', { discountValue: 5 }), 500, 550)).toBeNull();
+  it('price 500 / compare 550, 5% => 522.5: the seller\'s own sale is SUSPENDED, the sale price applies even though it is dearer', () => {
+    const r = campaignLinePrice(camp('X', { discountValue: 5 }), 500, 550)!;
+    expect(r.unit).toBe(522.5);
+    expect(r.discount).toBe(-22.5);   // vs the seller's own price
+    expect(r.sponsored).toBe(27.5);   // off the list price: what the platform reimburses / the seller gives up
+    expect(r.replacesSellerSale).toBe(true);
   });
-  it('a tie stays normal (the campaign price equal to the seller price does not apply)', () => {
+  it('without a seller sale a tie stays normal (the campaign price equal to the price does not apply)', () => {
     // list 500 (no compare-at), fixed 0 => unit 500, equal to the price
     expect(campaignLinePrice(camp('X', { discountType: 'fixed', discountValue: 0 }), 500, null)).toBeNull();
-    // list 550, fixed 50 => 500, a tie with the normal price
-    expect(campaignLinePrice(camp('X', { discountType: 'fixed', discountValue: 50 }), 500, 550)).toBeNull();
+  });
+  it('seller sale + fixed 50 => 500: applies (suspends the sale), buyer pays the same, platform covers 50 off list', () => {
+    const r = campaignLinePrice(camp('X', { discountType: 'fixed', discountValue: 50 }), 500, 550)!;
+    expect(r.unit).toBe(500);
+    expect(r.discount).toBe(0);
+    expect(r.sponsored).toBe(50);
+  });
+  it('a store-subscriber price keeps the old "only if cheaper" rule even when the seller has a sale', () => {
+    expect(campaignLinePrice(camp('X', { discountValue: 5 }), 500, 550, 480)).toBeNull(); // 522.5 > 480
+    const r = campaignLinePrice(camp('X', { discountValue: 20 }), 500, 550, 480)!;        // 440 < 480
+    expect(r.replacesSellerSale).toBe(false);
+    expect(r.discount).toBe(40);
+    expect(r.sponsored).toBe(40);
   });
   it('fixed amount: list - amount, same rule', () => {
     const r = campaignLinePrice(camp('X', { discountType: 'fixed', discountValue: 60 }), 500, 550)!;
@@ -64,6 +79,11 @@ describe('seller credit under a campaign (R1): discount recorded = normal price 
     expect(r.unit + r.discount).toBe(500);
     expect(r.unit).toBe(495);
   });
+  it('seller sale suspended: platform-sponsored seller is credited the LIST price (buyer unit + sponsored), seller-sponsored gets the buyer unit', () => {
+    const r = campaignLinePrice(camp('X', { discountValue: 5 }), 500, 550)!;
+    expect(r.unit + r.sponsored).toBe(550);
+    expect(r.unit).toBe(522.5);
+  });
 });
 
 describe('applyCampaignsToVariants (list / detail display)', () => {
@@ -75,11 +95,11 @@ describe('applyCampaignsToVariants (list / detail display)', () => {
     expect(r.primary?.campaignId).toBe('X');
     expect(r.appliedPrice).toBe(360);
   });
-  it('5% on 500/550 is not cheaper: variant untouched, markdown kept, no primary', () => {
+  it('5% on 500/550: the sale price 522.5 replaces the seller\'s own sale (markdown hidden)', () => {
     const r = applyCampaignsToVariants([camp('X', { discountValue: 5 })], [variants[0]]);
-    expect(r.variants[0]).toEqual(variants[0]);
-    expect(r.primary).toBeNull();
-    expect(r.appliedPrice).toBeNull();
+    expect(r.variants[0]).toMatchObject({ campaignPrice: 522.5, compareAtPrice: null, originalCompareAtPrice: 550 });
+    expect(r.primary?.campaignId).toBe('X');
+    expect(r.appliedPrice).toBe(522.5);
   });
   it('no campaigns -> nothing changes', () => {
     const r = applyCampaignsToVariants([], variants);

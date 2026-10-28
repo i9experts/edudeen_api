@@ -71,14 +71,16 @@ describe('cart campaign price: LIST-price base + strict per-product opt-in (owne
   it('10% mega sale on price 500 / compare 550 => 495 per unit (not 450), discount 5 each', async () => {
     const { data } = await cartSvc({ member: false, platformOn: false, price: 500, compareAt: 550, campaignPct: 10 }).getCart('u1', STORE) as any;
     expect(data.items[0]).toMatchObject({ onCampaign: true, campaignUnitPrice: 495, campaignItemTotal: 990, listPrice: 550 });
-    expect(data.campaignDiscount.amount).toBe(10); // (500 - 495) x 2
+    expect(data.campaignDiscount.amount).toBe(110); // saving off the LIST price: (550 - 495) x 2 - the seller's own sale is suspended
+    expect(data.campaignDiscount.adjust).toBe(10);  // what the total really drops by: (500 - 495) x 2
     expect(data.totalAfterDiscount).toBe(990);
   });
-  it('5% on 500 / 550 => 522.5 is not cheaper than 500: no campaign on the line', async () => {
+  it('5% on 500 / 550 => 522.5: the sale price REPLACES the seller\'s own (deeper) sale, so the buyer pays more than 500', async () => {
     const { data } = await cartSvc({ member: false, platformOn: false, price: 500, compareAt: 550, campaignPct: 5 }).getCart('u1', STORE) as any;
-    expect(data.items[0].onCampaign).toBe(false);
-    expect(data.campaignDiscount).toBeNull();
-    expect(data.totalAfterDiscount).toBe(1000);
+    expect(data.items[0]).toMatchObject({ onCampaign: true, campaignUnitPrice: 522.5 });
+    expect(data.campaignDiscount.amount).toBe(55);   // (550 - 522.5) x 2
+    expect(data.campaignDiscount.adjust).toBe(-45);  // (500 - 522.5) x 2
+    expect(data.totalAfterDiscount).toBe(1045);
   });
   it('regression: a product the seller never ticked gets NO campaign price in a participating store', async () => {
     const { data } = await cartSvc({ member: false, platformOn: false, price: 100, campaignPct: 30, unticked: true }).getCart('u1', STORE) as any;

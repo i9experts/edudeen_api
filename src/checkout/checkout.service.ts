@@ -482,18 +482,22 @@ export class CheckoutService {
         const normalUnit = item.quantity > 0 ? this.round(item.totalPrice / item.quantity) : item.price;
         const line = pickBestCampaignForLine(mine, variantDoc.price, variantDoc.compareAtPrice ?? null, normalUnit);
         if (!line) continue;
+        // `lineDiscount` = what the buyer's line total drops by (NEGATIVE when the seller's own deeper sale is suspended and
+        // the sale price is dearer); `lineSponsored` = what the sale takes off the LIST price, i.e. what the platform
+        // reimburses (seller credited list) or the seller gives up (seller credited what the buyer pays).
         const lineDiscount = this.round(line.discount * item.quantity);
-        if (lineDiscount <= 0) continue;
+        const lineSponsored = this.round(line.sponsored * item.quantity);
+        if (lineSponsored <= 0 || (!line.replacesSellerSale && lineDiscount <= 0)) continue;
         if (item.originalPrice == null) item.originalPrice = item.price;
         item.campaignId = line.campaign.campaignId;
-        item.campaignDiscountUSD = lineDiscount;
+        item.campaignDiscountUSD = lineSponsored;
         item.campaignSponsorType = line.campaign.sponsorType;
         item.totalPrice = this.round(item.totalPrice - lineDiscount);
         item.price = item.quantity > 0 ? this.round(item.totalPrice / item.quantity) : item.totalPrice;
         const agg = byCampaign.get(line.campaign.campaignId) ?? { sponsorType: line.campaign.sponsorType, name: line.campaign.name, discount: 0 };
-        agg.discount = this.round(agg.discount + lineDiscount);
+        agg.discount = this.round(agg.discount + lineSponsored);
         byCampaign.set(line.campaign.campaignId, agg);
-        campaignSavingsUSD = this.round(campaignSavingsUSD + lineDiscount);
+        campaignSavingsUSD = this.round(campaignSavingsUSD + lineSponsored);
       }
       for (const [campaignId, agg] of byCampaign) {
         appliedCampaigns.push({ campaignId, name: agg.name, storeId, discountUSD: agg.discount, sponsorType: agg.sponsorType });
