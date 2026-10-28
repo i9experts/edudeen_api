@@ -826,7 +826,7 @@ export class CheckoutService {
         // 'stripe' and 'cash_on_delivery' as before — unless COD isn't
         // eligible (see codEligible above), in which case 'stripe' (pay
         // everything online) is always the safe fallback.
-        allowedPaymentMethods: totalAmount === 0
+        allowedPaymentMethods: finalTotal === 0
           ? ['free'] // nothing to pay: confirm via POST /api/payment/free-checkout
           : [
               ...(hasDigital
@@ -1227,6 +1227,11 @@ export class CheckoutService {
 
     // Revert any previously-applied coupon first so re-applying (or
     // switching codes) always computes from a clean, undiscounted baseline.
+    // Replacing a coupon while a gift card is also applied can drop the gift card's price reduction (its "before"
+    // snapshot sits on top of the coupon's) while the card is still debited at placement — ask for a clean removal.
+    if (checkout.couponCode && checkout.giftCardCode) {
+      throw new BadRequestException('Remove your gift card first, then change the coupon, then re-apply the gift card.');
+    }
     this.revertCouponFromItems(items);
 
     const isPlatformCoupon = coupon.scope === 'platform';
@@ -1473,6 +1478,10 @@ export class CheckoutService {
       throw new BadRequestException('This gift card code is invalid, inactive, or not applicable to items in your cart');
     }
 
+    // Same reasoning as applyCoupon: replacing a gift card under an active coupon can lose the coupon reduction.
+    if (checkout.giftCardCode && checkout.couponCode) {
+      throw new BadRequestException('Remove your coupon first, then change the gift card, then re-apply the coupon.');
+    }
     this.revertGiftCardFromItems(items);
     const storeItems = items.filter((i) => i.storeId === giftCard.storeId);
     const storeSubtotal = this.round(storeItems.reduce((s, i) => s + i.totalPrice, 0));

@@ -1327,7 +1327,8 @@ export class PaymentService {
     for (const item of checkout.items as any[]) {
       const variant = await productVariantModel.findOne({ _id: item.variantId, isDelete: false });
       if (!variant) throw new BadRequestException(`Item not available: ${item.name}`);
-      const listPrice = item.originalPrice ?? item.price;
+      // Coupons / gift cards lower `price` to 0 but keep the pre-discount price in priceBefore*; the baseline is the highest one.
+      const listPrice = Math.max(item.originalPrice ?? item.price ?? 0, item.priceBeforeCoupon ?? 0, item.priceBeforeGiftCard ?? 0);
       if (variant.price > listPrice) {
         throw new BadRequestException(`The price of "${item.name}" has changed — please start a new checkout.`);
       }
