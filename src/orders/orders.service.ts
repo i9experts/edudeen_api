@@ -115,6 +115,7 @@ export class OrdersService {
       paymentType: order.paymentType,
       paymentStatus: order.paymentStatus,
       isPaid: order.isPaid,
+      isFreeClaim: !!order.isFreeClaim,
       subtotal: order.subtotal,
       shippingFee: order.shippingFee,
       taxAmount: order.taxAmount,
@@ -550,6 +551,7 @@ export class OrdersService {
           // seller's stores don't all share one currency.
           currency: order.currency ?? 'USD',
           status: so.status,
+          cancelReason: so.cancelReason ?? null,
           isPaid: order.isPaid,
           paymentType: order.paymentType,
         };
@@ -629,6 +631,8 @@ export class OrdersService {
         },
         shippingAddress: order.shippingAddress ?? null,
         status: so.status,
+        cancelReason: so.cancelReason ?? null,
+        cancelledAt: so.cancelledAt ?? null,
         type: so.fulfillmentType,
         subtotal: so.subtotal,
         tracking: so.tracking ?? null,
@@ -652,6 +656,7 @@ export class OrdersService {
           price: it.price,
           totalPrice: it.totalPrice,
           status: it.status ?? null,
+          cancelReason: it.cancelReason ?? null,
         })),
       },
     };
