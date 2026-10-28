@@ -261,6 +261,17 @@ export class SchedulerService {
     });
   }
 
+  // Runs daily — admin-granted free plans that ran out go back to the free plan.
+  @Cron('50 2 * * *')
+  async expireAdminGrantedPlans() {
+    await this.runLocked('platform-plan-grant-expiry', 10 * 60_000, async () => {
+      const result = await this.sellerPlatformSubscriptionsService.expireComplimentary();
+      if (result.expired > 0) {
+        this.logger.log(`Admin-granted plans expired: ${result.expired} store(s)`);
+      }
+    });
+  }
+
   // Runs daily — "your trial ends in ≤3 days" reminder emails.
   @Cron('0 9 * * *')
   async sendPlatformPlanTrialReminders() {

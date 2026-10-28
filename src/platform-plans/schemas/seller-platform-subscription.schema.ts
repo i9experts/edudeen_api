@@ -59,6 +59,11 @@ export class SellerPlatformSubscription {
     providerSubscriptionId: string; historyEntry: Record<string, unknown>; requestedAt: Date;
   } | null;
   @Prop({ type: String, default: null }) stripeCustomerId: string | null;
+  // Free time-limited access given by an admin (no charge). Expires via expireComplimentary();
+  // any plan change by the seller clears it.
+  @Prop({ type: Object, default: null }) complimentary: {
+    until: Date; grantedBy: string; reason: string | null; grantedAt: Date; days: number;
+  } | null;
 
   @Prop({ default: false }) isDelete: boolean;
 }

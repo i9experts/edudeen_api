@@ -571,6 +571,7 @@ export class SellerPlatformSubscriptionsService {
     sub.cancelReason = null;
     sub.status = 'active';
     sub.trialEndsAt = null;
+    sub.complimentary = null;
     sub.planHistory = [...(sub.planHistory ?? []), historyEntry];
     await sub.save();
     await this.syncFeaturedBadge(storeId, newPlan);
@@ -815,6 +816,96 @@ export class SellerPlatformSubscriptionsService {
     }
 
     return { processed: due.length, succeeded, failed };
+  }
+
+  /**
+   * Admin gives a store free access to any active plan for 1-31 days. No charge, no renewal
+   * (amountUSD 0); expireComplimentary() moves the store to the free plan when it ends.
+   * Refused while the store is billed by a live Stripe subscription (would double-bill / drop it).
+   */
+  async adminGrantPlan(adminId: string, storeId: string, planId: string, days: number, reason?: string) {
+    const d = Number(days);
+    if (!Number.isInteger(d) || d < 1 || d > 31) throw new BadRequestException('Days must be a whole number from 1 to 31');
+    const plan: any = await this.planModel.findOne({ _id: planId, status: 'active', isDelete: false });
+    if (!plan) throw new NotFoundException('Plan not found or not active');
+    const store: any = await this.storeModel.findById(storeId).lean();
+    if (!store) throw new NotFoundException('Store not found');
+    const sellerId = String(store.sellerId ?? store.seller ?? '');
+    let sub: any = await this.subModel.findOne({ storeId, isDelete: false });
+    if (!sub) sub = await this.ensureDefaultSubscription(storeId, sellerId);
+    if (!sub) throw new BadRequestException('This store has no platform subscription record yet');
+    if (sub.providerSubscriptionId) {
+      throw new BadRequestException('This store has a live paid subscription. Ask the seller to cancel it first, or wait until it ends.');
+    }
+
+    const now = new Date();
+    const until = new Date(now.getTime() + d * 24 * 60 * 60 * 1000);
+    const fromPlan: any = await this.planModel.findById(sub.platformPlanId).lean();
+    sub.planHistory = [...(sub.planHistory ?? []), {
+      fromPlanId: String(sub.platformPlanId), fromPlanName: fromPlan?.name ?? '', toPlanId: String(plan._id), toPlanName: plan.name,
+      proratedAmountUSD: 0, changedAt: now,
+    }];
+    sub.platformPlanId = String(plan._id);
+    sub.billingInterval = 'monthly';
+    sub.amountUSD = 0;
+    sub.status = 'active';
+    sub.paymentProvider = 'manual';
+    sub.trialEndsAt = null;
+    sub.currentPeriodStart = now;
+    sub.currentPeriodEnd = until;
+    sub.nextBillingDate = until;
+    sub.cancelAtPeriodEnd = false;
+    sub.canceledAt = null;
+    sub.cancelReason = null;
+    sub.failedPaymentAttempts = 0;
+    sub.pendingPlanChange = null;
+    sub.complimentary = { until, grantedBy: adminId, reason: reason?.trim().slice(0, 300) || null, grantedAt: now, days: d };
+    await sub.save();
+    await this.syncFeaturedBadge(storeId, plan);
+
+    await this.activityLogService.log({
+      storeId, category: 'platform_plans', action: 'plan_granted_by_admin',
+      description: `Admin gave the "${plan.name}" plan free for ${d} day(s), until ${until.toDateString()}${reason ? ` (${reason})` : ''}`,
+      actorId: adminId, actorRole: 'admin', targetId: String(sub._id), targetType: 'seller_platform_subscription',
+    } as any);
+    this.notificationsService.notify({
+      recipientId: sub.sellerId, recipientRole: 'seller',
+      type: NOTIFICATION_TYPES.PLATFORM_PLAN_RENEWAL_REMINDER,
+      title: `You have free ${plan.name} access`,
+      body: `Edudeen gave ${store.name ?? 'your store'} the ${plan.name} plan for ${d} day(s), until ${until.toDateString()}.`,
+      data: { subscriptionId: String(sub._id), link: `/store/${storeId}/plan-billing` },
+    }).catch(() => {});
+    return { storeId, planId: String(plan._id), planName: plan.name, until, days: d };
+  }
+
+  /** Daily: an admin-granted plan that has run out drops back to the free plan. */
+  async expireComplimentary(): Promise<{ expired: number }> {
+    const now = new Date();
+    const due = await this.subModel.find({ 'complimentary.until': { $lte: now }, isDelete: false });
+    let expired = 0;
+    for (const sub of due) {
+      const freePlan = await this.downgradeToFree(sub);
+      if (!freePlan) continue;
+      sub.complimentary = null;
+      sub.currentPeriodStart = now;
+      sub.currentPeriodEnd = this.addPeriod(now, 'monthly');
+      sub.nextBillingDate = sub.currentPeriodEnd;
+      await sub.save();
+      expired++;
+      this.activityLogService.log({
+        storeId: sub.storeId, category: 'platform_plans', action: 'plan_grant_expired',
+        description: `Admin-granted plan ended — store moved to the ${freePlan.name} plan`,
+        actorRole: 'system', targetId: String(sub._id), targetType: 'seller_platform_subscription',
+      } as any);
+      this.notificationsService.notify({
+        recipientId: sub.sellerId, recipientRole: 'seller',
+        type: NOTIFICATION_TYPES.PLATFORM_PLAN_RENEWAL_REMINDER,
+        title: 'Your free plan access has ended',
+        body: 'Choose a plan to keep your plan features.',
+        data: { subscriptionId: String(sub._id), link: `/store/${sub.storeId}/plan-billing` },
+      }).catch(() => {});
+    }
+    return { expired };
   }
 
   /** Trials that have run out and were never converted to a paid card get moved to the free plan (not deleted/blocked). */

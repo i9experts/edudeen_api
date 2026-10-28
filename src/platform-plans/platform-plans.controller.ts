@@ -2,6 +2,10 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { PlatformPlansService } from './platform-plans.service';
+import { SellerPlatformSubscriptionsService } from './seller-platform-subscriptions.service';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
+import { GrantPlatformPlanDto } from './dto/grant-platform-plan.dto';
+import { AdminReauthGuard, RequireReauth } from '../admin-reauth/admin-reauth.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -11,7 +15,20 @@ import { UpdatePlatformPlanDto } from './dto/update-platform-plan.dto';
 @ApiTags('Platform Plans (Seller-to-Edudeen billing)')
 @Controller('api/platform-plans')
 export class PlatformPlansController {
-  constructor(private readonly platformPlansService: PlatformPlansService) {}
+  constructor(
+    private readonly platformPlansService: PlatformPlansService,
+    private readonly subscriptionsService: SellerPlatformSubscriptionsService,
+  ) {}
+
+  // Admin gives a store free access to any plan for 1-31 days (no charge).
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
+  @Roles('admin')
+  @RequireReauth()
+  @Post('admin/grant/:storeId')
+  grantPlan(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Body() dto: GrantPlatformPlanDto) {
+    return this.subscriptionsService.adminGrantPlan(req.user.userId, storeId, dto.planId, dto.days, dto.reason);
+  }
 
   // Signed-in account: can it still start the one-time free trial?
   @UseGuards(JwtAuthGuard)
