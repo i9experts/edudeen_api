@@ -13,6 +13,7 @@ import { SetTestDto } from './dto/set-test.dto';
 import { SetTrustBadgesDto } from './dto/set-trust-badges.dto';
 import { SetStoreBadgeDto } from './dto/set-store-badge.dto';
 import { SetFulfillmentModeDto } from './dto/set-fulfillment-mode.dto';
+import { SetFeaturedRankDto } from './dto/set-featured-rank.dto';
 import { LeadsQueryDto } from './dto/leads-query.dto';
 import { RejectLeadDto } from './dto/reject-lead.dto';
 import { ApproveListingDto, RejectListingDto } from './dto/review-listing.dto';
@@ -90,6 +91,17 @@ export class AdminMarketplaceController {
   @Patch('stores/:id/fulfillment-mode')
   setFulfillmentMode(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: SetFulfillmentModeDto) {
     return this.adminMarketplaceService.setFulfillmentMode(id, dto.fulfillmentMode, this.meta(req));
+  }
+
+  /** Every active store with its Featured score + pin, best first (pinned stores on top). */
+  @Get('stores/featured')
+  getFeaturedStores() {
+    return this.adminMarketplaceService.getFeaturedStores();
+  }
+
+  @Patch('stores/:id/featured')
+  setFeaturedRank(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: SetFeaturedRankDto) {
+    return this.adminMarketplaceService.setFeaturedRank(id, dto.rank, this.meta(req));
   }
 
   @Get('leads')

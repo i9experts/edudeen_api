@@ -32,7 +32,7 @@ import { AdminConfigService } from 'src/admin-config/admin-config.service';
 import { StoreThemeService } from '../store-theme/store-theme.service';
 import { StorePagesService } from '../store-pages/store-pages.service';
 import { CollectionsService } from '../collections/collections.service';
-import { featuredStoreFilter, isFeaturedStoreEligible } from './featured-stores.util';
+import { featuredStoreFilter, featuredScore, selectFeatured } from './featured-stores.util';
 
 // Store slugs render at the site root (`edudeen.com/:slug`) — these are the
 // frontend's top-level static route segments (router/index.tsx), reserved so
@@ -1037,44 +1037,72 @@ export class StoreService {
 
   // ── 3c. Top stores — cached for the home-screen row ───────────────────────
   async getTopStores(limit: number) {
-    const cacheKey = `top-stores:v4:${limit}`;
+    const cacheKey = `top-stores:v5:${limit}`;
     const cached = await this.redisService.get(cacheKey);
     if (cached) {
       return { success: true, data: { stores: JSON.parse(cached) } };
     }
 
-    const { storeModel, productModel } = this.databaseService.repositories;
-    // Every approved (active) store with at least one published, non-test listing is featured (see featured-stores.util.ts).
-    const candidates = await storeModel
-      .find(featuredStoreFilter())
-      .sort({ averageRating: -1, followersCount: -1 })
-      .limit(Math.min(100, limit * 5))
-      .lean();
-
-    const candidateIds = candidates.map((s: any) => s._id.toString());
-    const productCounts = candidateIds.length
-      ? await productModel.aggregate([
-          { $match: { storeId: { $in: candidateIds }, isDelete: false, status: 'active', isTest: { $ne: true } } },
-          { $group: { _id: '$storeId', count: { $sum: 1 } } },
-        ])
-      : [];
-    const productCountByStore = new Map<string, number>(productCounts.map((r: any) => [r._id, r.count]));
-    const stores = candidates
-      .filter((s: any) => isFeaturedStoreEligible(s, productCountByStore.get(s._id.toString()) ?? 0))
-      .slice(0, limit);
-    const storeIds = stores.map((s: any) => s._id.toString());
+    const { storeModel, categoryModel } = this.databaseService.repositories;
+    const scored = await this.scoreFeaturedCandidates(
+      await storeModel.find(featuredStoreFilter()).sort({ averageRating: -1, followersCount: -1 }).limit(300).lean(),
+    );
+    const stores = selectFeatured(scored, limit);
+    const storeIds = stores.map((r) => r.storeId);
     const campaignsByStore = await this.marketingService.getActiveCampaignsForStores(storeIds);
 
-    const shaped = stores.map((s: any) =>
-      this.shapeStoreListItem(
-        s,
-        productCountByStore.get(s._id.toString()) ?? 0,
-        pickPrimaryCampaignForBadge(campaignsByStore.get(s._id.toString()) ?? []),
-      ),
-    );
+    const catIds = [...new Set(stores.map((r) => r.categoryId).filter((c): c is string => !!c))];
+    const cats = catIds.length ? await categoryModel.find({ _id: { $in: catIds } }).select('name').lean() : [];
+    const catName = new Map<string, string>(cats.map((c: any) => [String(c._id), c.name]));
+
+    const shaped = stores.map((r) => ({
+      ...this.shapeStoreListItem(r.store, r.publishedProducts, pickPrimaryCampaignForBadge(campaignsByStore.get(r.storeId) ?? [])),
+      topProducts: r.topProducts,
+      soldCount: r.soldCount,
+      categoryName: r.categoryId ? catName.get(r.categoryId) ?? null : null,
+      featuredRank: r.featuredRank ?? null,
+    }));
     await this.redisService.set(cacheKey, JSON.stringify(shaped), 600);
 
     return { success: true, data: { stores: shaped } };
+  }
+
+  /** Per-store signals (published products, sales, newest activity, best-selling covers) + featuredScore. Shared with the admin list. */
+  async scoreFeaturedCandidates(candidates: any[]) {
+    const { productModel } = this.databaseService.repositories;
+    const ids = candidates.map((s: any) => String(s._id));
+    const rows: any[] = ids.length
+      ? await productModel.aggregate([
+          { $match: { storeId: { $in: ids }, isDelete: false, status: 'active', isTest: { $ne: true } } },
+          { $sort: { purchaseCount: -1, _id: -1 } },
+          {
+            $group: {
+              _id: '$storeId',
+              count: { $sum: 1 },
+              sold: { $sum: { $ifNull: ['$purchaseCount', 0] } },
+              last: { $max: '$createdAt' },
+              tops: { $push: { $cond: [{ $gt: [{ $size: { $ifNull: ['$images', []] } }, 0] }, { id: { $toString: '$_id' }, name: '$name', image: { $arrayElemAt: ['$images', 0] }, coverStyle: '$coverStyle' }, '$$REMOVE'] } },
+            },
+          },
+          { $project: { count: 1, sold: 1, last: 1, tops: { $slice: ['$tops', 3] } } },
+        ])
+      : [];
+    const byStore = new Map<string, any>(rows.map((r) => [String(r._id), r]));
+    return candidates.map((s: any) => {
+      const storeId = String(s._id);
+      const r = byStore.get(storeId);
+      const signals = {
+        averageRating: s.averageRating, reviewCount: s.reviewCount, followersCount: s.followersCount,
+        logo: s.logo, coverImage: s.coverImage, description: s.description, categoryId: s.categoryId ? String(s.categoryId) : null,
+        featuredRank: typeof s.featuredRank === 'number' ? s.featuredRank : null,
+        publishedProducts: r?.count ?? 0, soldCount: r?.sold ?? 0,
+        lastActivityAt: r?.last ? new Date(r.last).getTime() : null,
+      };
+      return {
+        ...signals, store: s, storeId, score: featuredScore(signals),
+        topProducts: (r?.tops ?? []) as Array<{ id: string; name: string; image: string; coverStyle: string | null }>,
+      };
+    });
   }
 
   // ── 3d. Platform-wide stats — homepage stat strip (real numbers, cached) ──

@@ -9,6 +9,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NOTIFICATION_TYPES } from '../notifications/notification.types';
 import { UploadService } from '../upload/upload.service';
 import { StoreService } from '../store/store.service';
+import { isQualityStore } from '../store/featured-stores.util';
+import { RedisService } from '../redis/redis.service';
 import { MarketplaceListingQueryDto } from './dto/marketplace-listing-query.dto';
 import { LeadsQueryDto } from './dto/leads-query.dto';
 import { mergeTrustBadges } from '../products/trust-badges.util';
@@ -28,6 +30,7 @@ export class AdminMarketplaceService {
     private readonly notificationsService: NotificationsService,
     private readonly uploadService: UploadService,
     private readonly storeService: StoreService,
+    private readonly redis: RedisService,
   ) {}
 
   private get r() {
@@ -431,6 +434,48 @@ export class AdminMarketplaceService {
       'store',
     );
     return { success: true, message: 'Fulfillment mode updated', data: { fulfillmentMode } };
+  }
+
+  /** Active stores ranked exactly like the home rail (pinned first, then Featured score) so the admin sees what buyers see. */
+  async getFeaturedStores() {
+    const stores = await this.r.storeModel.find({ status: 'active', isDelete: false }).sort({ averageRating: -1 }).limit(300).lean();
+    const scored = await this.storeService.scoreFeaturedCandidates(stores);
+    const ranked = [...scored].sort((a, b) => {
+      const ap = typeof a.featuredRank === 'number', bp = typeof b.featuredRank === 'number';
+      if (ap !== bp) return ap ? -1 : 1;
+      if (ap && bp) return (a.featuredRank! - b.featuredRank!) || (b.score - a.score);
+      return b.score - a.score;
+    });
+    return {
+      success: true,
+      data: {
+        stores: ranked.map((r) => ({
+          storeId: r.storeId, name: r.store.name, slug: r.store.slug, logo: r.store.logo ?? null,
+          score: r.score, featuredRank: r.featuredRank, publishedProducts: r.publishedProducts, soldCount: r.soldCount,
+          averageRating: r.store.averageRating ?? 0, reviewCount: r.store.reviewCount ?? 0, followersCount: r.store.followersCount ?? 0,
+          qualityOk: isQualityStore(r),
+        })),
+      },
+    };
+  }
+
+  /** Pin a store to the front of the home Featured sellers rail (rank 1 = first) or unpin it (null). */
+  async setFeaturedRank(storeId: string, rank: number | null, meta: AuditMeta) {
+    const updated = await this.r.storeModel.findOneAndUpdate(
+      { _id: storeId, isDelete: false, status: 'active' },
+      { $set: { featuredRank: rank } },
+      { returnDocument: 'after' },
+    );
+    if (!updated) throw new NotFoundException('Store not found or not active');
+    await Promise.all([6, 8, 10, 12, 16, 20, 24, 30, 40, 50].map((n) => this.redis.del(`top-stores:v5:${n}`).catch(() => undefined)));
+    this.log(
+      rank === null ? 'store_featured_unpinned' : 'store_featured_pinned',
+      rank === null ? `Store "${updated.name}" unpinned from Featured sellers` : `Store "${updated.name}" pinned to Featured sellers rank ${rank}`,
+      meta,
+      storeId,
+      'store',
+    );
+    return { success: true, message: rank === null ? 'Unpinned' : 'Pinned', data: { featuredRank: rank } };
   }
 
   /** Store approvals queue (legacy). New stores are live immediately now, so this only lists stores whose

@@ -20,6 +20,7 @@ function make(product: any, updated: any = product, storeLive = true) {
     notifications as any,
     {} as any,
     {} as any,
+    {} as any,
   );
   return { svc, productModel, notifications, storeModel };
 }
@@ -78,7 +79,7 @@ describe('Admin listing review', () => {
     const wishListModel = { deleteMany: jest.fn().mockResolvedValue({ deletedCount: 3 }) };
     const notifications = { notify: jest.fn().mockResolvedValue(undefined) };
     const activity = { log: jest.fn() };
-    const svc = new AdminMarketplaceService({ repositories: { productModel, cartModel, wishListModel } } as any, activity as any, notifications as any, {} as any, {} as any);
+    const svc = new AdminMarketplaceService({ repositories: { productModel, cartModel, wishListModel } } as any, activity as any, notifications as any, {} as any, {} as any, {} as any);
 
     await expect(svc.remove(ID, meta, '  ')).rejects.toThrow(/reason is required/);
     expect(productModel.findByIdAndUpdate).not.toHaveBeenCalled();

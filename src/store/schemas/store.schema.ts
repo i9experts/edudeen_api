@@ -437,6 +437,10 @@ export class Store {
   @Prop({ type: Number, default: 0 })
   followersCount: number;
 
+  /** Admin pin for the home Featured sellers rail: lower number = earlier; null = ranked by score only. */
+  @Prop({ type: Number, default: null })
+  featuredRank: number | null;
+
   // Persisted rollup from Rating docs (storeId-scoped) — recalculated by
   // RatingService.recalcStoreRating(), same pattern as Product.averageRating.
   @Prop({ type: Number, default: 0 })
