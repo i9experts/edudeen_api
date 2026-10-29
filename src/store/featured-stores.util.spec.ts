@@ -43,9 +43,9 @@ describe('featured ranking', () => {
     const out = selectFeatured(rows, 4) as any[];
     expect(out.map((r) => r.id)).toEqual(['1', '2', '4', '3']);
   });
-  it('falls back to loose stores when fewer than 4 qualify, never empty', () => {
-    const out = selectFeatured([row({ id: 'a', logo: null }), row({ id: 'b', publishedProducts: 1 })], 5);
-    expect(out).toHaveLength(2);
+  it('never shows non-quality stores (no fallback), but keeps pinned ones', () => {
+    expect(selectFeatured([row({ id: 'a', logo: null }), row({ id: 'b', publishedProducts: 1 })], 5)).toHaveLength(0);
+    expect(selectFeatured([row({ id: 'a', logo: null, featuredRank: 1 })], 5)).toHaveLength(1);
   });
 });
 

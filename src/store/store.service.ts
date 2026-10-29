@@ -1037,7 +1037,7 @@ export class StoreService {
 
   // ── 3c. Top stores — cached for the home-screen row ───────────────────────
   async getTopStores(limit: number) {
-    const cacheKey = `top-stores:v5:${limit}`;
+    const cacheKey = `top-stores:v6:${limit}`;
     const cached = await this.redisService.get(cacheKey);
     if (cached) {
       return { success: true, data: { stores: JSON.parse(cached) } };

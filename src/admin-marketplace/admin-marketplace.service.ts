@@ -467,7 +467,7 @@ export class AdminMarketplaceService {
       { returnDocument: 'after' },
     );
     if (!updated) throw new NotFoundException('Store not found or not active');
-    await Promise.all([6, 8, 10, 12, 16, 20, 24, 30, 40, 50].map((n) => this.redis.del(`top-stores:v5:${n}`).catch(() => undefined)));
+    await Promise.all([6, 8, 10, 12, 16, 20, 24, 30, 40, 50].map((n) => this.redis.del(`top-stores:v6:${n}`).catch(() => undefined)));
     this.log(
       rank === null ? 'store_featured_unpinned' : 'store_featured_pinned',
       rank === null ? `Store "${updated.name}" unpinned from Featured sellers` : `Store "${updated.name}" pinned to Featured sellers rank ${rank}`,

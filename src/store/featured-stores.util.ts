@@ -19,8 +19,6 @@ export function isFeaturedStoreEligible(store: { status?: string }, publishedPro
 
 // ── Quality gate + ranking for the rail (see getTopStores) ──
 export const FEATURED_QUALITY_MIN_PRODUCTS = 3;
-/** Fewer than this many quality stores -> the rail falls back to the loose rule so it is never empty/thin. */
-export const FEATURED_MIN_RAIL_SIZE = 4;
 export const FEATURED_MAX_PER_CATEGORY_RUN = 2;
 const BAYES_PRIOR_MEAN = 4;
 const BAYES_PRIOR_WEIGHT = 5;
@@ -92,11 +90,9 @@ export function rankFeatured<T extends FeaturedSignals & { score: number }>(rows
   return out.slice(0, Math.max(limit, 0));
 }
 
-/** Quality stores first; if fewer than the minimum rail size, top up from the loose-eligible rest (never empty). */
+/** Only quality stores (or admin-pinned ones with a published product). No "show everyone" fallback: a thin rail is hidden by the web instead. */
 export function selectFeatured<T extends FeaturedSignals & { score: number }>(all: T[], limit: number): T[] {
-  const loose = all.filter((s) => s.publishedProducts >= FEATURED_MIN_PRODUCTS);
-  const quality = loose.filter((s) => isQualityStore(s) || typeof s.featuredRank === 'number');
-  const pool = quality.length >= Math.min(FEATURED_MIN_RAIL_SIZE, limit) ? quality : loose;
+  const pool = all.filter((s) => s.publishedProducts >= FEATURED_MIN_PRODUCTS && (isQualityStore(s) || typeof s.featuredRank === 'number'));
   return rankFeatured(pool, limit);
 }
 
