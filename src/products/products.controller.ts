@@ -61,7 +61,7 @@ export class productController {
     normalizedCustomLevel = queryString(normalizedCustomLevel);
     campaignId = queryString(campaignId);
     const page = clampInt(pageQuery, 1, 1, 1000);
-    const limit = clampInt(limitQuery, 10, 1, 50);
+    const limit = clampInt(limitQuery, 10, 1, 100);
     const parseNum = (v?: string): number | undefined => {
       if (v === undefined) return undefined;
       const n = parseFloat(v);

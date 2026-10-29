@@ -155,6 +155,10 @@ export class OrdersService {
             originalPrice: item.originalPrice ?? null,
             subscriberDiscountUSD: item.subscriberDiscountUSD ?? 0,
             status: item.status,
+            returnStatus: item.returnStatus ?? 'none',
+            returnReason: item.returnReason ?? null,
+            returnRejectReason: item.returnRejectReason ?? null,
+            returnRequestedAt: item.returnRequestedAt ?? null,
             // Would a review of this line be accepted? Same rule as RatingService.addReview (paid +
             // delivered, or paid + not refunded for digital). Computed from the data already loaded here,
             // so it costs no extra query.
@@ -1487,6 +1491,26 @@ export class OrdersService {
     });
 
     await orderModel.findByIdAndUpdate(orderId, { $set: updateData });
+
+    // Tell each affected seller (one notification per seller order).
+    const notified = new Set<number>();
+    for (const { soIndex } of targetItems) {
+      if (notified.has(soIndex)) continue;
+      notified.add(soIndex);
+      const so: any = order.sellerOrders[soIndex];
+      if (!so?.sellerId) continue;
+      const count = targetItems.filter((t) => t.soIndex === soIndex).length;
+      this.notificationsService
+        .notify({
+          recipientId: String(so.sellerId),
+          recipientRole: 'seller',
+          type: NOTIFICATION_TYPES.RETURN_REQUESTED,
+          title: 'New return request',
+          body: `A buyer asked to return ${count} item(s) from order #${order.orderNumber ?? orderId} - ${reason}`,
+          data: { orderId, orderNumber: order.orderNumber, storeId: so.storeId, link: `/store/${so.storeId}/returns` },
+        })
+        .catch(() => {});
+    }
 
     return {
       success: true,
