@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -324,6 +325,13 @@ export class CoursesController {
   @Get('learn/:idOrSlug/lessons/:lessonId')
   lesson(@Req() req: any, @Param('idOrSlug') idOrSlug: string, @Param('lessonId') lessonId: string) {
     return this.courses.getLesson(req.user.userId, idOrSlug, lessonId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('learn/:idOrSlug/certificate-details')
+  certificateDetails(@Req() req: any, @Param('idOrSlug') idOrSlug: string, @Body() body: any) {
+    return this.courses.saveCertificateDetails(req.user.userId, idOrSlug, body);
   }
 
   @UseGuards(JwtAuthGuard)

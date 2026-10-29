@@ -1,7 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { BadRequestException } from '@nestjs/common';
 import { randomBytes } from 'crypto';
-import { COURSE_LIMITS, LESSON_TYPES, LessonType } from './schemas/course.schema';
+import { CertificateConfig, CertificateDetails, COURSE_LIMITS, LESSON_TYPES, LessonType } from './schemas/course.schema';
 
 const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const newId = () => randomBytes(6).toString('hex');
@@ -55,6 +55,67 @@ export function cleanCourseExtras(body: any): { outcomes: string[]; instructor: 
     if (!Number.isInteger(accessDays) || accessDays < 1 || accessDays > 3650) throw new BadRequestException('Access duration must be 1-3650 days (or lifetime)');
   }
   return { outcomes, instructor: { name, bio }, accessDays };
+}
+
+export const EMPTY_CERT_CONFIG: CertificateConfig = { watermarkText: null, watermarkImageUrl: null, stampImageUrl: null, signatureName: null, signatureTitle: null, issuerName: null };
+
+/** Hosts a public certificate image may come from (the Cloudinary public store + optional env `PUBLIC_ASSET_HOSTS`, comma list). */
+function allowedImageHosts(): string[] {
+  const extra = (process.env.PUBLIC_ASSET_HOSTS ?? '').split(',').map(h => h.trim().toLowerCase()).filter(Boolean);
+  return ['res.cloudinary.com', ...extra];
+}
+
+function certText(v: unknown, max: number, label: string): string | null {
+  if (v === undefined || v === null || v === '') return null;
+  if (typeof v !== 'string') throw new BadRequestException(`${label} must be text`);
+  const t = v.trim();
+  if (!t) return null;
+  if (t.length > max) throw new BadRequestException(`${label} can be up to ${max} characters`);
+  if (/[<>]/.test(t)) throw new BadRequestException(`${label} cannot contain < or >`);
+  return t;
+}
+
+function certImage(v: unknown, label: string): string | null {
+  if (v === undefined || v === null || v === '') return null;
+  if (typeof v !== 'string') throw new BadRequestException(`${label} must be a link`);
+  const raw = v.trim();
+  if (raw.length > 500) throw new BadRequestException(`${label} link is too long`);
+  let u: URL;
+  try { u = new URL(raw); } catch { throw new BadRequestException(`${label} must be a valid https link`); }
+  const host = u.hostname.toLowerCase();
+  if (u.protocol !== 'https:' || u.username || u.password || !allowedImageHosts().includes(host)) {
+    throw new BadRequestException(`${label} must be an image you uploaded through Edudeen`);
+  }
+  return u.toString();
+}
+
+/** Validates the seller's certificate look. `null` clears everything. Throws on bad input. */
+export function cleanCertificateConfig(raw: unknown): CertificateConfig {
+  if (raw === null) return { ...EMPTY_CERT_CONFIG };
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new BadRequestException('certificateConfig must be an object');
+  const c = raw as Record<string, unknown>;
+  return {
+    watermarkText: certText(c.watermarkText, 40, 'Watermark text'),
+    watermarkImageUrl: certImage(c.watermarkImageUrl, 'Watermark image'),
+    stampImageUrl: certImage(c.stampImageUrl, 'Stamp image'),
+    signatureName: certText(c.signatureName, 80, 'Signature name'),
+    signatureTitle: certText(c.signatureTitle, 80, 'Signature title'),
+    issuerName: certText(c.issuerName, 80, 'Issuer name'),
+  };
+}
+
+/** The learner's certificate form. fullName is required (2-80); the rest are optional. */
+export function cleanCertificateDetails(raw: any): CertificateDetails {
+  if (!raw || typeof raw !== 'object') throw new BadRequestException('Send your certificate details');
+  const fullName = certText(raw.fullName, 80, 'Full name');
+  if (!fullName || fullName.length < 2) throw new BadRequestException('Full name must be 2-80 characters');
+  return {
+    fullName,
+    guardianName: certText(raw.guardianName, 80, 'Parent / guardian name'),
+    institute: certText(raw.institute, 120, 'School / institute'),
+    city: certText(raw.city, 60, 'City'),
+    country: certText(raw.country, 60, 'Country'),
+  };
 }
 
 export function courseTotals(sections: { lessons: { durationMinutes?: number | null }[] }[] | undefined) {

@@ -9,6 +9,23 @@ export const LESSON_TYPES = ['video', 'pdf', 'text', 'quiz'] as const;
 export type LessonType = (typeof LESSON_TYPES)[number];
 export const COURSE_LIMITS = { sections: 30, lessonsPerSection: 50, quizQuestions: 30, options: 6 } as const;
 
+export interface CertificateConfig {
+  watermarkText: string | null;
+  watermarkImageUrl: string | null;
+  stampImageUrl: string | null;
+  signatureName: string | null;
+  signatureTitle: string | null;
+  issuerName: string | null;
+}
+
+export interface CertificateDetails {
+  fullName: string;
+  guardianName: string | null;
+  institute: string | null;
+  city: string | null;
+  country: string | null;
+}
+
 /**
  * The content of a "course" product: sections of lessons (video, PDF, text or
  * a quiz). Files are private uploads streamed to buyers through short signed
@@ -55,6 +72,10 @@ export class Course {
   // null = lifetime access.
   @Prop({ type: Number, default: null })
   accessDays: number | null;
+
+  // Seller's watermark / stamp / signature printed on every certificate of this course.
+  @Prop({ type: Object, default: null })
+  certificateConfig: CertificateConfig | null;
 }
 export const CourseSchema = SchemaFactory.createForClass(Course);
 
@@ -84,6 +105,10 @@ export class CourseProgress {
 
   @Prop({ type: String, default: '' })
   learnerName: string;
+
+  // What the learner typed in the "certificate details" form (printed on the certificate).
+  @Prop({ type: Object, default: null })
+  certificateDetails: CertificateDetails | null;
 }
 export const CourseProgressSchema = SchemaFactory.createForClass(CourseProgress);
 CourseProgressSchema.index({ userId: 1, productId: 1 }, { unique: true });

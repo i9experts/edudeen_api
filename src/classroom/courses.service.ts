@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NOTIFICATION_TYPES } from '../notifications/notification.types';
 import { ActivityLogService } from '../activity-log/activity-log.service';
@@ -12,7 +12,7 @@ import { UploadedAssetsService } from '../upload/uploaded-assets.service';
 import { verifyStoreOwnershipStrict } from '../common/store-ownership.util';
 import { CourseProgress, CourseProgressDocument } from './schemas/course.schema';
 import { JOIN_OPENS_MINUTES, joinWindowOpen, liveClassBuyerIds, liveClassEmail, liveEndsAt, liveStatusOf, registrationOpen } from './live-class.util';
-import { accessExpiry, certificateCode, cleanCourseInput, courseTotals, lessonIds, paidSeatFilter, scoreQuiz } from './course.util';
+import { accessExpiry, certificateCode, cleanCertificateConfig, cleanCertificateDetails, cleanCourseInput, EMPTY_CERT_CONFIG, courseTotals, lessonIds, paidSeatFilter, scoreQuiz } from './course.util';
 
 const LESSON_LINK_SECONDS = 3600;
 
@@ -87,6 +87,7 @@ export class CoursesService {
         outcomes: course?.outcomes ?? [],
         instructor: course?.instructor ?? { name: '', bio: '' },
         accessDays: course?.accessDays ?? null,
+        certificateConfig: { ...EMPTY_CERT_CONFIG, ...(course?.certificateConfig ?? {}) },
         learners: await this.progressModel.countDocuments({ productId }),
       },
     };
@@ -95,6 +96,8 @@ export class CoursesService {
   async saveForSeller(storeId: string, sellerId: string, productId: string, body: any) {
     const product = await this.sellerProduct(storeId, sellerId, productId);
     const { sections, certificateEnabled, fileRefs, outcomes, instructor, accessDays } = cleanCourseInput(body);
+    // Validated before anything is written; only touched when the request carries it (null clears).
+    const certificateConfig = body?.certificateConfig !== undefined ? cleanCertificateConfig(body.certificateConfig) : undefined;
     const existing: any = await this.r.courseModel.findOne({ productId }).lean();
     const knownFiles = new Map<string, any>();
     for (const s of existing?.sections ?? []) for (const l of s.lessons ?? []) if (l.file?.url) knownFiles.set(l.file.url, l.file);
@@ -115,11 +118,11 @@ export class CoursesService {
     await this.r.courseModel.findOneAndUpdate(
       { productId },
       // Outcomes / instructor / access length are only written when the request carries them (older clients keep what is stored).
-      { $set: { sections, certificateEnabled, storeId, sellerId, ...(body?.outcomes !== undefined ? { outcomes } : {}), ...(body?.instructor !== undefined ? { instructor } : {}), ...(body?.accessDays !== undefined ? { accessDays } : {}) } },
+      { $set: { sections, certificateEnabled, storeId, sellerId, ...(body?.outcomes !== undefined ? { outcomes } : {}), ...(body?.instructor !== undefined ? { instructor } : {}), ...(body?.accessDays !== undefined ? { accessDays } : {}), ...(certificateConfig ? { certificateConfig } : {}) } },
       { upsert: true, returnDocument: 'after' },
     );
     if (product.deliveryFormat !== 'course') await this.r.productModel.updateOne({ _id: productId }, { $set: { deliveryFormat: 'course', liveSession: null } });
-    return { success: true, message: 'Course saved', data: { sections, certificateEnabled, outcomes, instructor, accessDays } };
+    return { success: true, message: 'Course saved', data: { sections, certificateEnabled, outcomes, instructor, accessDays, certificateConfig: certificateConfig ?? { ...EMPTY_CERT_CONFIG, ...(existing?.certificateConfig ?? {}) } } };
   }
 
   // ── Public outline (product page "Course content") ─────────────────────────
@@ -196,6 +199,8 @@ export class CoursesService {
         product: { _id: productId, name: product.name, slug: product.slug, image: product.images?.[0] ?? null, storeName: store?.name ?? null, storeSlug: store?.slug ?? null },
         sections: course.sections.map((s: any) => ({ _id: s._id, title: s.title, lessons: s.lessons.map((l: any) => ({ _id: l._id, title: l.title, type: l.type, durationMinutes: l.durationMinutes })) })),
         certificateEnabled: course.certificateEnabled,
+        certificateDetails: progress?.certificateDetails ?? null,
+        certificateDetailsRequired: !!course.certificateEnabled && !progress?.certificateDetails && !progress?.certificateCode,
         outcomes: course.outcomes ?? [],
         instructor: course.instructor ?? { name: '', bio: '' },
         accessExpiresAt: String(product.sellerId) === userId ? null : accessExpiry(await this.lastPurchaseAt(userId, productId), course.accessDays),
@@ -229,15 +234,18 @@ export class CoursesService {
     const done = all.length > 0 && all.every(id => progress.completedLessonIds.includes(id));
     if (done && !progress.completedAt) {
       const set: any = { completedAt: new Date() };
-      if (course?.certificateEnabled) {
-        const user: any = await this.r.userModel.findById(userId).select('name').lean().catch(() => null);
+      // The certificate is only issued once the learner has filled the details form; until then it waits (saveCertificateDetails issues it).
+      if (course?.certificateEnabled && progress.certificateDetails?.fullName) {
         set.certificateCode = certificateCode();
-        set.learnerName = user?.name ?? 'Learner';
+        set.learnerName = progress.certificateDetails.fullName;
       }
-      await this.progressModel.updateOne({ _id: progress._id, completedAt: null }, { $set: set });
-      Object.assign(progress, set);
+      const claimed: any = await this.progressModel.updateOne({ _id: progress._id, completedAt: null }, { $set: set });
+      if (claimed?.modifiedCount !== 0) Object.assign(progress, set);
     }
-    return { completedLessonIds: progress.completedLessonIds, completedAt: progress.completedAt ?? null, certificateCode: progress.certificateCode ?? null };
+    return {
+      completedLessonIds: progress.completedLessonIds, completedAt: progress.completedAt ?? null, certificateCode: progress.certificateCode ?? null,
+      certificateDetailsRequired: !!course?.certificateEnabled && !progress.certificateDetails && !progress.certificateCode,
+    };
   }
 
   async markComplete(userId: string, idOrSlug: string, lessonId: string) {
@@ -262,15 +270,61 @@ export class CoursesService {
     };
   }
 
-  /** Public certificate check — anyone with the code (an employer, a school) can verify it. */
+  /**
+   * The learner's "certificate details" form. Allowed for enrolled learners only and only until the certificate exists
+   * (it is printed from these details, so it cannot change afterwards). If the course is already finished the certificate is issued now.
+   */
+  async saveCertificateDetails(userId: string, idOrSlug: string, body: unknown) {
+    const product = await this.findProduct(idOrSlug);
+    await this.assertLearner(userId, product);
+    const productId = String(product._id);
+    const course: any = await this.r.courseModel.findOne({ productId }).lean();
+    if (!course) throw new NotFoundException('The teacher is still preparing this course');
+    if (!course.certificateEnabled) throw new BadRequestException('This course does not issue certificates');
+    const details = cleanCertificateDetails(body);
+    // Atomic: only while no certificate has been issued (a missing/null code both match `null`).
+    const res: any = await this.progressModel.findOneAndUpdate(
+      { userId, productId, certificateCode: null },
+      { $set: { certificateDetails: details } },
+      { upsert: true, returnDocument: 'after' },
+    ).lean().catch((e: any) => {
+      if (e?.code === 11000) return null; // upsert collided with an existing row that already has a certificate
+      throw e;
+    });
+    if (!res) throw new ConflictException('Your certificate has already been issued, so these details can no longer be changed');
+    let code: string | null = null;
+    const all = lessonIds(course.sections ?? []);
+    const finished = all.length > 0 && all.every(id => (res.completedLessonIds ?? []).includes(id));
+    if (finished) {
+      const set: any = { certificateCode: certificateCode(), learnerName: details.fullName };
+      if (!res.completedAt) set.completedAt = new Date();
+      const issued: any = await this.progressModel.updateOne({ _id: res._id, certificateCode: null }, { $set: set });
+      if (issued?.modifiedCount !== 0) code = set.certificateCode;
+    }
+    return { success: true, message: code ? 'Certificate issued' : 'Details saved', data: { certificateDetails: details, certificateCode: code, certificateDetailsRequired: false } };
+  }
+
+  /** Public certificate check — anyone with the code (an employer, a school) can verify it. Only what the learner typed is shown, never e-mail or account ids. */
   async verifyCertificate(code: string) {
     const p: any = await this.progressModel.findOne({ certificateCode: String(code ?? '').toUpperCase() }).lean();
     if (!p) throw new NotFoundException('No certificate with that code');
     const product: any = await this.r.productModel.findById(p.productId).select('name slug storeId').lean();
     const store: any = product ? await this.r.storeModel.findById(product.storeId).select('name slug').lean() : null;
+    const course: any = await this.r.courseModel.findOne({ productId: p.productId }).select('instructor certificateConfig').lean();
+    const d = p.certificateDetails ?? null;
+    const cfg = { ...EMPTY_CERT_CONFIG, ...(course?.certificateConfig ?? {}) };
     return {
       success: true,
-      data: { code: p.certificateCode, learnerName: p.learnerName, courseName: product?.name ?? 'Course', courseSlug: product?.slug ?? null, teacher: store?.name ?? null, storeSlug: store?.slug ?? null, completedAt: p.completedAt },
+      data: {
+        code: p.certificateCode, learnerName: d?.fullName ?? p.learnerName, courseName: product?.name ?? 'Course', courseSlug: product?.slug ?? null, teacher: store?.name ?? null, storeSlug: store?.slug ?? null, completedAt: p.completedAt,
+        guardianName: d?.guardianName ?? null, institute: d?.institute ?? null, city: d?.city ?? null, country: d?.country ?? null,
+        courseTitle: product?.name ?? 'Course', issuedAt: p.completedAt ?? p.updatedAt ?? null, storeName: store?.name ?? null,
+        instructorName: course?.instructor?.name || null,
+        config: {
+          watermarkText: cfg.watermarkText, watermarkImageUrl: cfg.watermarkImageUrl, stampImageUrl: cfg.stampImageUrl,
+          signatureName: cfg.signatureName, signatureTitle: cfg.signatureTitle, issuerName: cfg.issuerName,
+        },
+      },
     };
   }
 
