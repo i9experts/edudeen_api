@@ -8,7 +8,8 @@
   "scripts": {
     "admin:reset-password": "node --env-file=.env --experimental-strip-types src/scripts/reset-admin-password.ts",
     "admin:change-email": "node --env-file=.env --experimental-strip-types src/scripts/change-admin-email.ts",
-    "seed:categories": "node --env-file=.env --experimental-strip-types src/scripts/seed-education-categories.ts",
+    "report:courses-category": "node --env-file=.env --experimental-strip-types src/scripts/report-courses-category.ts",
+    "seed:categories":"node --env-file=.env --experimental-strip-types src/scripts/seed-education-categories.ts",
     "fix:slugs": "node --env-file=.env --experimental-strip-types src/scripts/fix-product-slugs.ts",
     "fix:slugs:apply": "node --env-file=.env --experimental-strip-types src/scripts/fix-product-slugs.ts --apply",
     "seed:categories:apply": "node --env-file=.env --experimental-strip-types src/scripts/seed-education-categories.ts --apply",

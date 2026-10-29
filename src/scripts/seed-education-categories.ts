@@ -46,8 +46,6 @@ const EDUCATION_CATEGORIES: SeedCategory[] = [
     subs: ['Learning Toys', 'Puzzles', 'Board & Card Games', 'STEM Kits', 'Islamic Educational Toys'] },
   { name: 'Handwriting, Art & Creativity', description: 'Handwriting, calligraphy, drawing and creative projects.',
     subs: ['Handwriting Practice', 'Calligraphy (Khattati)', 'Drawing & Colouring', 'Craft & DIY Projects'] },
-  { name: 'Courses & Live Classes', description: 'Recorded courses, live classes and tutoring from verified educators.',
-    subs: ['Quran & Islamic Classes', 'Academic Tutoring', 'Skill Courses', 'Live Classes & Webinars', 'Teacher Training'] },
   { name: 'Homeschool & Parenting', description: 'Curriculum plans, study guides and parenting resources for learning at home.',
     subs: ['Homeschool Curriculum', 'Study Skills & Planners', 'Parenting Guides', 'Special Education Support'] },
   { name: 'Others', description: 'Educational resources that do not fit any other category.',
