@@ -347,6 +347,20 @@ export class CoursesController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
+  @Get('seller/:storeId/:productId/students')
+  students(@Req() req: any, @Param('storeId') storeId: string, @Param('productId') productId: string, @Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.courses.studentsForSeller(storeId, req.user.userId, productId, { page, limit });
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Post('seller/:storeId/:productId/live/cancel')
+  cancelLive(@Req() req: any, @Param('storeId') storeId: string, @Param('productId') productId: string, @Body('reason') reason?: string) {
+    return this.courses.cancelLive(storeId, req.user.userId, productId, reason);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
   @Put('seller/:storeId/:productId')
   saveBuilder(@Req() req: any, @Param('storeId') storeId: string, @Param('productId') productId: string, @Body() body: any) {
     return this.courses.saveForSeller(storeId, req.user.userId, productId, body);

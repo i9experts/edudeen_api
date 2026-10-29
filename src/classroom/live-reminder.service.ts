@@ -40,7 +40,7 @@ export class LiveReminderService {
     const { productModel, orderModel } = this.databaseService.repositories;
     const horizon = new Date(now.getTime() + (Math.max(...LIVE_REMINDER_OFFSETS) + 1) * 60000);
     const classes: any[] = await productModel
-      .find({ deliveryFormat: 'live_class', status: 'active', isDelete: false, removedByAdmin: { $ne: true }, 'liveSession.startsAt': { $gt: now, $lte: horizon } })
+      .find({ deliveryFormat: 'live_class', status: 'active', isDelete: false, removedByAdmin: { $ne: true }, 'liveSession.status': { $ne: 'cancelled' }, 'liveSession.startsAt': { $gt: now, $lte: horizon } })
       .select('_id name slug sellerId storeId liveSession')
       .limit(500)
       .lean();

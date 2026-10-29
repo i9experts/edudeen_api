@@ -17,6 +17,8 @@
     "fix:premium-conflicts": "node --env-file=.env --experimental-strip-types src/scripts/fix-premium-offer-conflicts.ts",
     "fix:premium-conflicts:apply": "node --env-file=.env --experimental-strip-types src/scripts/fix-premium-offer-conflicts.ts --apply",
     "fix:skus": "node --env-file=.env --experimental-strip-types src/scripts/fix-variant-skus.ts",
+    "fix:live-seats": "node --env-file=.env --experimental-strip-types src/scripts/backfill-live-seats.ts",
+    "fix:live-seats:apply": "node --env-file=.env --experimental-strip-types src/scripts/backfill-live-seats.ts --apply",
     "fix:skus:apply": "node --env-file=.env --experimental-strip-types src/scripts/fix-variant-skus.ts --apply",
     "backfill:pdf-pages": "node --env-file=.env --experimental-strip-types src/scripts/backfill-pdf-page-counts.ts",
     "backfill:pdf-pages:apply": "node --env-file=.env --experimental-strip-types src/scripts/backfill-pdf-page-counts.ts --apply",

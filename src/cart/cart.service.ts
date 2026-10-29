@@ -51,6 +51,16 @@ export class CartService {
       const storeLive = await this.databaseService.repositories.storeModel.exists({ _id: storeId, status: 'active', isDelete: false });
       if (!storeLive) throw new BadRequestException('Product not found');
 
+      // A cancelled live class, one past its registration deadline, or one that has ended can't be bought (checkout refuses it too).
+      if ((product as any).deliveryFormat === 'live_class') {
+        const ls: any = (product as any).liveSession;
+        if (ls?.status === 'cancelled') throw new BadRequestException('This live class has been cancelled');
+        const startsAt = ls?.startsAt ? new Date(ls.startsAt).getTime() : null;
+        const endsAt = startsAt != null ? startsAt + (Number(ls.durationMinutes) || 0) * 60_000 : null;
+        const closesAt = ls?.registrationDeadline ? new Date(ls.registrationDeadline).getTime() : endsAt;
+        if (closesAt != null && Date.now() >= closesAt) throw new BadRequestException('Registration for this live class is closed');
+      }
+
       // 2️⃣ Get variant
       const variant = await variantModel.findById(dto.productVariantId).lean();
       if (!variant || variant.isDelete || variant.status !== 'active' || variant.productId !== dto.productId) {
@@ -231,7 +241,7 @@ export class CartService {
       const products = productIds.length
         ? await this.databaseService.repositories.productModel
             .find({ _id: { $in: productIds } })
-            .select('images sellerId status isDelete storeId type premiumDiscountPercent premiumOptOut campaignIds')
+            .select('images sellerId status isDelete storeId type deliveryFormat premiumDiscountPercent premiumOptOut campaignIds')
             .lean()
         : [];
       const productById = new Map(
@@ -310,6 +320,7 @@ export class CartService {
           // physical | digital, from the product itself: checkout skips the address steps for an all-digital cart, so
           // this must not depend on what this browser remembers.
           type: product?.type === 'physical' || product?.type === 'digital' ? product.type : undefined,
+          deliveryFormat: (product as any)?.deliveryFormat ?? 'download',
           unitPrice, // single product price (live)
           quantity: item.quantity, // quantity
           itemTotal: itemTotal, // quantity × price

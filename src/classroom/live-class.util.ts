@@ -35,16 +35,40 @@ export function minutesText(m: number): string {
 
 export interface LiveClassMessageInput { name: string; startsAt: Date | string; meetingUrl?: string | null; platform?: string | null; }
 
+/** True once buyers may see the meeting link (JOIN_OPENS_MINUTES before the start). */
+export function joinWindowOpen(startsAt: Date | string, now = new Date()): boolean {
+  return now.getTime() >= new Date(startsAt).getTime() - JOIN_OPENS_MINUTES * 60000;
+}
+
+export const liveEndsAt = (startsAt: Date | string, durationMinutes: number) => new Date(new Date(startsAt).getTime() + (durationMinutes ?? 0) * 60000);
+
+/** upcoming | completed | cancelled, for library and seller views. */
+export function liveStatusOf(live: { startsAt: Date | string; durationMinutes: number; status?: string | null } | null | undefined, now = new Date()): 'upcoming' | 'completed' | 'cancelled' | null {
+  if (!live?.startsAt) return null;
+  if (live.status === 'cancelled') return 'cancelled';
+  return liveEndsAt(live.startsAt, live.durationMinutes).getTime() < now.getTime() ? 'completed' : 'upcoming';
+}
+
+/** Registration is open until the deadline (or until the class ends when there is none) and never for a cancelled class. */
+export function registrationOpen(live: { startsAt: Date | string; durationMinutes: number; status?: string | null; registrationDeadline?: Date | string | null } | null | undefined, now = new Date()): boolean {
+  if (!live?.startsAt || live.status === 'cancelled') return false;
+  const close = live.registrationDeadline ? new Date(live.registrationDeadline).getTime() : liveEndsAt(live.startsAt, live.durationMinutes).getTime();
+  return now.getTime() <= close;
+}
+
 export function reminderCopy(kind: 'seller' | 'buyer', c: LiveClassMessageInput, minutesLeft: number) {
   const when = pktLabel(c.startsAt);
   const title = `"${c.name}" starts in ${minutesText(minutesLeft)}`;
   const body = kind === 'seller'
     ? `Your live class starts at ${when}. Be ready to host: open your meeting link a few minutes early.`
-    : `Your live class starts at ${when}. Join with the link in your order or on the class page.`;
+    : joinWindowOpen(c.startsAt)
+      ? `Your live class starts at ${when}. Join with the link in your email, in My Library or on the class page.`
+      : `Your live class starts at ${when}. The meeting link appears in My Library ${JOIN_OPENS_MINUTES} minutes before the start.`;
   return { title, body };
 }
 
 export function liveClassEmail(title: string, body: string, c: LiveClassMessageInput, link: { label: string; path: string }) {
-  const joinLine = c.meetingUrl ? `<p>Meeting link: <a href="${escapeHtml(c.meetingUrl)}">${escapeHtml(c.meetingUrl)}</a></p>` : '';
+  // The link goes into an e-mail only once the join window is open, so mail cannot bypass it.
+  const joinLine = c.meetingUrl && joinWindowOpen(c.startsAt) ?`<p>Meeting link: <a href="${escapeHtml(c.meetingUrl)}">${escapeHtml(c.meetingUrl)}</a></p>` : '';
   return { subject: title, html: notificationEmailShell(escapeHtml(title), `<p>${escapeHtml(body)}</p>${joinLine}`, { label: link.label, url: `${webUrl()}${link.path}` }) };
 }

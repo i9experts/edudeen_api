@@ -3,7 +3,8 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
-} from '@nestjs/common';
+} from '@nestjs/common';
+import { releaseLiveSeats } from '../classroom/live-seats.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { FinanceService } from 'src/finance/finance.service';
 import { PaymentService } from 'src/payment/payment.service';
@@ -345,6 +346,9 @@ export class RefundRequestService {
           { _id: item.variantId, unlimitedStock: { $ne: true } },
           { $inc: { stock: item.quantity } },
         );
+      }
+      if (item.type === 'digital' && item.productId) {
+        await releaseLiveSeats(this.databaseService.repositories.productModel as any, [{ productId: String(item.productId), quantity: item.quantity, type: 'digital' }]).catch(() => undefined);
       }
     }
 

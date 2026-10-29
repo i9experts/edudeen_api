@@ -1,5 +1,7 @@
 import { bundleSavings } from '../classroom/bundle.util';
 import { paidSeatFilter } from '../classroom/course.util';
+import { capacityUsed } from '../classroom/live-seats.util';
+import { registrationOpen } from '../classroom/live-class.util';
 import {
   Injectable,
   BadRequestException,
@@ -396,9 +398,11 @@ export class CheckoutService {
       if (product.deliveryFormat === 'live_class' && product.liveSession) {
         const live = product.liveSession;
         const endsAt = new Date(live.startsAt).getTime() + (live.durationMinutes ?? 0) * 60000;
+        if (live.status === 'cancelled') throw new BadRequestException(`"${product.name}" was cancelled`);
         if (endsAt < Date.now()) throw new BadRequestException(`"${product.name}" has already taken place`);
+        if (!registrationOpen(live)) throw new BadRequestException(`Registration for "${product.name}" has closed`);
         if (live.capacity) {
-          const taken = await this.databaseService.repositories.orderModel.countDocuments(paidSeatFilter(product._id.toString()));
+          const taken = capacityUsed(live.seatsTaken, await this.databaseService.repositories.orderModel.countDocuments(paidSeatFilter(product._id.toString())));
           if (taken + cartItem.quantity > live.capacity) throw new BadRequestException(`"${product.name}" is full — no seats left`);
         }
       }

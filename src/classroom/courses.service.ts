@@ -1,5 +1,9 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NOTIFICATION_TYPES } from '../notifications/notification.types';
+import { ActivityLogService } from '../activity-log/activity-log.service';
+import { capacityUsed } from './live-seats.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model } from 'mongoose';
 import { DatabaseService } from '../database/databaseservice';
@@ -7,8 +11,8 @@ import { UploadService } from '../upload/upload.service';
 import { UploadedAssetsService } from '../upload/uploaded-assets.service';
 import { verifyStoreOwnershipStrict } from '../common/store-ownership.util';
 import { CourseProgress, CourseProgressDocument } from './schemas/course.schema';
-import { JOIN_OPENS_MINUTES } from './live-class.util';
-import { certificateCode, cleanCourseInput, lessonIds, paidSeatFilter, scoreQuiz } from './course.util';
+import { JOIN_OPENS_MINUTES, joinWindowOpen, liveClassBuyerIds, liveClassEmail, liveEndsAt, liveStatusOf, registrationOpen } from './live-class.util';
+import { accessExpiry, certificateCode, cleanCourseInput, courseTotals, lessonIds, paidSeatFilter, scoreQuiz } from './course.util';
 
 const LESSON_LINK_SECONDS = 3600;
 
@@ -19,6 +23,8 @@ export class CoursesService {
     private readonly databaseService: DatabaseService,
     private readonly uploadService: UploadService,
     private readonly uploadedAssets: UploadedAssetsService,
+    @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly activityLog?: ActivityLogService,
   ) {}
 
   private get r() {
@@ -39,10 +45,23 @@ export class CoursesService {
     return !!order;
   }
 
+  /** Latest paid, non-refunded purchase date of this product by this user (null = never bought). */
+  private async lastPurchaseAt(userId: string, productId: string): Promise<Date | null> {
+    const orders: any[] = await this.r.orderModel.find({ ...paidSeatFilter(productId), userId }).select('paidAt createdAt').lean();
+    if (!orders.length) return null;
+    return new Date(Math.max(...orders.map(o => new Date(o.paidAt ?? o.createdAt).getTime())));
+  }
+
   private async assertLearner(userId: string, product: any) {
     if (product.removedByAdmin) throw new NotFoundException('This course is no longer available');
     if (String(product.sellerId) === userId) return; // the teacher can always view their own course
-    if (!(await this.hasPurchased(userId, String(product._id)))) throw new ForbiddenException('Buy this course to start learning');
+    const boughtAt = await this.lastPurchaseAt(userId, String(product._id));
+    if (!boughtAt) throw new ForbiddenException('Buy this course to start learning');
+    if (product.deliveryFormat === 'course') {
+      const course: any = await this.r.courseModel.findOne({ productId: String(product._id) }).select('accessDays').lean();
+      const until = accessExpiry(boughtAt, course?.accessDays);
+      if (until && until.getTime() < Date.now()) throw new ForbiddenException('Your access to this course has ended');
+    }
   }
 
   // ── Seller: course builder ────────────────────────────────────────────────
@@ -65,6 +84,9 @@ export class CoursesService {
         product: { _id: String(product._id), name: product.name, slug: product.slug, status: product.status, deliveryFormat: product.deliveryFormat ?? 'download' },
         sections: course?.sections ?? [],
         certificateEnabled: course?.certificateEnabled ?? true,
+        outcomes: course?.outcomes ?? [],
+        instructor: course?.instructor ?? { name: '', bio: '' },
+        accessDays: course?.accessDays ?? null,
         learners: await this.progressModel.countDocuments({ productId }),
       },
     };
@@ -72,7 +94,7 @@ export class CoursesService {
 
   async saveForSeller(storeId: string, sellerId: string, productId: string, body: any) {
     const product = await this.sellerProduct(storeId, sellerId, productId);
-    const { sections, certificateEnabled, fileRefs } = cleanCourseInput(body);
+    const { sections, certificateEnabled, fileRefs, outcomes, instructor, accessDays } = cleanCourseInput(body);
     const existing: any = await this.r.courseModel.findOne({ productId }).lean();
     const knownFiles = new Map<string, any>();
     for (const s of existing?.sections ?? []) for (const l of s.lessons ?? []) if (l.file?.url) knownFiles.set(l.file.url, l.file);
@@ -92,11 +114,12 @@ export class CoursesService {
     }
     await this.r.courseModel.findOneAndUpdate(
       { productId },
-      { $set: { sections, certificateEnabled, storeId, sellerId } },
+      // Outcomes / instructor / access length are only written when the request carries them (older clients keep what is stored).
+      { $set: { sections, certificateEnabled, storeId, sellerId, ...(body?.outcomes !== undefined ? { outcomes } : {}), ...(body?.instructor !== undefined ? { instructor } : {}), ...(body?.accessDays !== undefined ? { accessDays } : {}) } },
       { upsert: true, returnDocument: 'after' },
     );
     if (product.deliveryFormat !== 'course') await this.r.productModel.updateOne({ _id: productId }, { $set: { deliveryFormat: 'course', liveSession: null } });
-    return { success: true, message: 'Course saved', data: { sections, certificateEnabled } };
+    return { success: true, message: 'Course saved', data: { sections, certificateEnabled, outcomes, instructor, accessDays } };
   }
 
   // ── Public outline (product page "Course content") ─────────────────────────
@@ -109,15 +132,24 @@ export class CoursesService {
       _id: s._id, title: s.title,
       lessons: s.lessons.map((l: any) => ({ _id: l._id, title: l.title, type: l.type, durationMinutes: l.durationMinutes, isPreview: l.isPreview })),
     }));
-    const lessons = sections.reduce((n: number, s: any) => n + s.lessons.length, 0);
-    const minutes = sections.reduce((n: number, s: any) => n + s.lessons.reduce((m: number, l: any) => m + (l.durationMinutes ?? 0), 0), 0);
-    return { success: true, data: { sections, lessons, minutes, certificateEnabled: course?.certificateEnabled ?? false } };
+    const { lessonCount, totalMinutes } = courseTotals(sections);
+    return {
+      success: true,
+      data: {
+        sections, lessons: lessonCount, minutes: totalMinutes, lessonCount, totalMinutes,
+        certificateEnabled: course?.certificateEnabled ?? false,
+        outcomes: course?.outcomes ?? [],
+        instructor: course?.instructor ?? { name: '', bio: '' },
+        accessDays: course?.accessDays ?? null,
+      },
+    };
   }
 
   /** A lesson marked "free preview" — playable by anyone, no purchase needed. */
   async previewLesson(idOrSlug: string, lessonId: string) {
     const product = await this.findProduct(idOrSlug);
     if (product.status !== 'active') throw new NotFoundException('Course not found');
+    if (product.removedByAdmin) throw new NotFoundException('Course not found');
     const lesson = await this.findLesson(String(product._id), lessonId);
     if (!lesson.isPreview) throw new ForbiddenException('Buy this course to watch this lesson');
     return { success: true, data: this.shapeLesson(lesson) };
@@ -133,10 +165,15 @@ export class CoursesService {
 
   private shapeLesson(l: any) {
     const base = { _id: l._id, title: l.title, type: l.type, text: l.text ?? '', durationMinutes: l.durationMinutes };
+    if (l.type === 'video' && l.videoUrl && !l.file?.url) {
+      // External (YouTube / Vimeo) video: no file of ours to sign.
+      return { ...base, videoUrl: l.videoUrl, media: { kind: 'external', url: l.videoUrl } };
+    }
     if ((l.type === 'video' || l.type === 'pdf') && l.file?.url) {
       const mime = this.uploadService.resolveMimeType(l.file.name ?? '', l.file.mimeType ?? (l.type === 'pdf' ? 'application/pdf' : 'video/mp4'));
       const resourceType = mime.startsWith('video/') ? 'video' : mime.startsWith('image/') ? 'image' : 'raw';
-      return { ...base, file: { name: l.file.name, mimeType: mime, url: this.uploadService.generateSignedUrl(l.file.url, resourceType, LESSON_LINK_SECONDS, l.file.name, true) } };
+      const url = this.uploadService.generateSignedUrl(l.file.url, resourceType, LESSON_LINK_SECONDS, l.file.name, true);
+      return { ...base, file: { name: l.file.name, mimeType: mime, url }, media: { kind: 'file', url } };
     }
     if (l.type === 'quiz' && l.quiz) {
       // Never send the answers before an attempt.
@@ -159,6 +196,9 @@ export class CoursesService {
         product: { _id: productId, name: product.name, slug: product.slug, image: product.images?.[0] ?? null, storeName: store?.name ?? null, storeSlug: store?.slug ?? null },
         sections: course.sections.map((s: any) => ({ _id: s._id, title: s.title, lessons: s.lessons.map((l: any) => ({ _id: l._id, title: l.title, type: l.type, durationMinutes: l.durationMinutes })) })),
         certificateEnabled: course.certificateEnabled,
+        outcomes: course.outcomes ?? [],
+        instructor: course.instructor ?? { name: '', bio: '' },
+        accessExpiresAt: String(product.sellerId) === userId ? null : accessExpiry(await this.lastPurchaseAt(userId, productId), course.accessDays),
         progress: {
           completedLessonIds: progress?.completedLessonIds ?? [],
           quizScores: progress?.quizScores ?? {},
@@ -234,54 +274,177 @@ export class CoursesService {
     };
   }
 
-  /** My courses — every course product the buyer owns, with progress. */
+  /** My courses — every course / live-class product the buyer owns, with progress. */
   async myCourses(userId: string) {
-    const orders: any[] = await this.r.orderModel.find({ userId, isDelete: false, isPaid: true }).select('sellerOrders.items').lean();
+    const orders: any[] = await this.r.orderModel.find({ userId, isDelete: false, isPaid: true }).select('paidAt createdAt sellerOrders.items').lean();
     const ids = new Set<string>();
-    for (const o of orders) for (const so of o.sellerOrders ?? []) for (const it of so.items ?? []) if (!['cancelled', 'refunded'].includes(it.status)) ids.add(String(it.productId));
+    const boughtAt = new Map<string, number>();
+    for (const o of orders) {
+      const at = new Date(o.paidAt ?? o.createdAt).getTime();
+      for (const so of o.sellerOrders ?? []) for (const it of so.items ?? []) {
+        if (['cancelled', 'refunded'].includes(it.status)) continue;
+        const id = String(it.productId);
+        ids.add(id);
+        boughtAt.set(id, Math.max(boughtAt.get(id) ?? 0, at));
+      }
+    }
     const valid = [...ids].filter(id => isValidObjectId(id));
-    const products: any[] = await this.r.productModel.find({ _id: { $in: valid }, deliveryFormat: { $in: ['course', 'live_class'] }, removedByAdmin: { $ne: true } }).select('_id name slug images deliveryFormat liveSession storeId').lean();
+    const products: any[] = await this.r.productModel.find({ _id: { $in: valid }, deliveryFormat: { $in: ['course', 'live_class'] }, removedByAdmin: { $ne: true } }).select('_id name slug images deliveryFormat liveSession.startsAt liveSession.durationMinutes liveSession.platform liveSession.status storeId').lean();
     const courseIds = products.filter(p => p.deliveryFormat === 'course').map(p => String(p._id));
     const [courses, progress] = await Promise.all([
-      this.r.courseModel.find({ productId: { $in: courseIds } }).select('productId sections').lean(),
+      this.r.courseModel.find({ productId: { $in: courseIds } }).select('productId sections accessDays').lean(),
       this.progressModel.find({ userId, productId: { $in: courseIds } }).lean(),
     ]);
     const total = new Map(courses.map((c: any) => [c.productId, lessonIds(c.sections).length]));
+    const accessDays = new Map(courses.map((c: any) => [c.productId, c.accessDays ?? null]));
     const prog = new Map(progress.map((p: any) => [p.productId, p]));
     return {
       success: true,
       data: products.map(p => {
         const id = String(p._id);
         const pr: any = prog.get(id);
+        const lessons = total.get(id) ?? 0;
+        const completed = pr?.completedLessonIds?.length ?? 0;
+        const expires = p.deliveryFormat === 'course' ? accessExpiry(boughtAt.get(id) ? new Date(boughtAt.get(id)!) : null, accessDays.get(id)) : null;
+        const live = p.deliveryFormat === 'live_class' && p.liveSession ? p.liveSession : null;
         return {
           productId: id, name: p.name, slug: p.slug, image: p.images?.[0] ?? null, deliveryFormat: p.deliveryFormat,
-          lessons: total.get(id) ?? 0, completed: pr?.completedLessonIds?.length ?? 0, completedAt: pr?.completedAt ?? null, certificateCode: pr?.certificateCode ?? null,
-          liveSession: p.deliveryFormat === 'live_class' && p.liveSession ? { startsAt: p.liveSession.startsAt, durationMinutes: p.liveSession.durationMinutes, platform: p.liveSession.platform } : null,
+          lessons, completed, completedAt: pr?.completedAt ?? null, certificateCode: pr?.certificateCode ?? null,
+          percent: lessons ? Math.min(100, Math.round((completed / lessons) * 100)) : 0,
+          lastLessonId: pr?.lastLessonId ?? null,
+          accessExpiresAt: expires,
+          accessExpired: !!expires && expires.getTime() < Date.now(),
+          liveSession: live ? { startsAt: live.startsAt, durationMinutes: live.durationMinutes, platform: live.platform } : null,
+          liveStatus: liveStatusOf(live),
         };
       }),
     };
   }
 
-  /** The meeting link of a live class — buyers (and the teacher) only. */
+  /** The meeting link of a live class — buyers (and the teacher) only, inside the join window, never after the class ended or was cancelled. */
   async liveAccess(userId: string, idOrSlug: string) {
     const product = await this.findProduct(idOrSlug);
     if (product.deliveryFormat !== 'live_class' || !product.liveSession) throw new NotFoundException('This is not a live class');
     await this.assertLearner(userId, product);
-    const { startsAt, durationMinutes, platform, meetingUrl, notes } = product.liveSession;
-    const endsAt = new Date(new Date(startsAt).getTime() + durationMinutes * 60000);
-    // Buyers get the link from JOIN_OPENS_MINUTES before the start; the teacher always has it. Before that only the opening time is returned.
+    const live = product.liveSession;
+    const { startsAt, durationMinutes, platform, meetingUrl, notes } = live;
+    const endsAt = liveEndsAt(startsAt, durationMinutes);
+    const status = live.status === 'cancelled' ? 'cancelled' : 'scheduled';
     const opensAt = new Date(new Date(startsAt).getTime() - JOIN_OPENS_MINUTES * 60000);
     const isTeacher = String(product.sellerId) === userId;
-    const open = isTeacher || Date.now() >= opensAt.getTime();
-    return { success: true, data: { name: product.name, startsAt, endsAt, durationMinutes, platform, meetingUrl: open ? meetingUrl : null, notes, ended: endsAt.getTime() < Date.now(), opensAt, joinOpen: open } };
+    const ended = endsAt.getTime() < Date.now();
+    // Buyers get the link from JOIN_OPENS_MINUTES before the start; the teacher is always allowed until the class is over.
+    const open = status !== 'cancelled' && !ended && (isTeacher || joinWindowOpen(startsAt));
+    return {
+      success: true,
+      data: {
+        name: product.name, startsAt, endsAt, durationMinutes, platform, notes, status,
+        meetingUrl: open ? meetingUrl : null,
+        ended, opensAt, joinOpen: open,
+        recordingUrl: ended && status !== 'cancelled' ? (live.recordingUrl ?? null) : null,
+      },
+    };
   }
 
   /** Seats left in a live class, for the product page. */
   async seats(idOrSlug: string) {
     const product = await this.findProduct(idOrSlug);
-    const capacity = product.liveSession?.capacity ?? null;
-    if (product.deliveryFormat !== 'live_class' || !capacity) return { success: true, data: { capacity: null, left: null } };
-    const taken = await this.r.orderModel.countDocuments(paidSeatFilter(String(product._id)));
-    return { success: true, data: { capacity, left: Math.max(0, capacity - taken) } };
+    const live = product.liveSession;
+    if (product.deliveryFormat !== 'live_class' || !live) return { success: true, data: { capacity: null, left: null, registrationOpen: true, deadline: null, status: null } };
+    const capacity = live.capacity ?? null;
+    let left: number | null = null;
+    if (capacity) {
+      const paid = await this.r.orderModel.countDocuments(paidSeatFilter(String(product._id)));
+      left = Math.max(0, capacity - capacityUsed(live.seatsTaken, paid));
+    }
+    const status = live.status === 'cancelled' ? 'cancelled' : 'scheduled';
+    return { success: true, data: { capacity, left, registrationOpen: registrationOpen(live) && (left === null || left > 0), deadline: live.registrationDeadline ?? null, status } };
+  }
+
+  // ── Seller: roster and live-class cancel ───────────────────────────────────
+
+  /** Everyone who holds a paid, non-refunded seat, with course progress. Derived from orders, so buyers who never opened a lesson appear too. */
+  async studentsForSeller(storeId: string, sellerId: string, productId: string, query: { page?: unknown; limit?: unknown } = {}) {
+    await this.sellerProduct(storeId, sellerId, productId);
+    const page = Math.max(1, Math.floor(Number(query.page) || 1));
+    const limit = Math.min(100, Math.max(1, Math.floor(Number(query.limit) || 20)));
+    const orders: any[] = await this.r.orderModel.find(paidSeatFilter(productId)).select('userId paidAt createdAt').sort({ createdAt: -1 }).limit(5000).lean();
+    const enrolled = new Map<string, Date>();
+    for (const o of orders) {
+      const uid = String(o.userId);
+      const at = new Date(o.paidAt ?? o.createdAt);
+      const prev = enrolled.get(uid);
+      if (!prev || at < prev) enrolled.set(uid, at);
+    }
+    const all = [...enrolled.entries()].sort((a, b) => b[1].getTime() - a[1].getTime());
+    const slice = all.slice((page - 1) * limit, page * limit);
+    const ids = slice.map(([id]) => id);
+    const validIds = ids.filter(id => isValidObjectId(id));
+    const [users, progress, course]: any[] = await Promise.all([
+      this.r.userModel.find({ _id: { $in: validIds } }).select('name email').lean(),
+      this.progressModel.find({ productId, userId: { $in: ids } }).lean(),
+      this.r.courseModel.findOne({ productId }).select('sections').lean(),
+    ]);
+    const userById = new Map(users.map((u: any) => [String(u._id), u]));
+    const progById = new Map(progress.map((p: any) => [String(p.userId), p]));
+    const totalLessons = lessonIds(course?.sections ?? []).length;
+    return {
+      success: true,
+      data: {
+        total: all.length,
+        students: slice.map(([userId, enrolledAt]) => {
+          const u: any = userById.get(userId);
+          const p: any = progById.get(userId);
+          const done = p?.completedLessonIds?.length ?? 0;
+          return {
+            userId, name: u?.name ?? 'Learner', email: u?.email ?? null, enrolledAt,
+            completedLessons: done, totalLessons,
+            percent: totalLessons ? Math.min(100, Math.round((done / totalLessons) * 100)) : 0,
+            lastActiveAt: p?.updatedAt ?? null, completedAt: p?.completedAt ?? null, certificateCode: p?.certificateCode ?? null,
+          };
+        }),
+      },
+    };
+  }
+
+  /**
+   * Seller cancels a live class: it stops selling, the join link is withdrawn and every buyer is told.
+   * Refunds are NOT automatic - the notice tells buyers Edudeen support handles them and the admin activity log gets an entry.
+   * Idempotent: a second call changes nothing and notifies nobody.
+   */
+  async cancelLive(storeId: string, sellerId: string, productId: string, reason?: unknown) {
+    const product = await this.sellerProduct(storeId, sellerId, productId);
+    if (product.deliveryFormat !== 'live_class' || !product.liveSession) throw new BadRequestException('This product is not a live class');
+    if (reason !== undefined && reason !== null && typeof reason !== 'string') throw new BadRequestException('Reason must be text');
+    const cleanReason = (typeof reason === 'string' ? reason.trim() : '');
+    if (cleanReason.length > 300) throw new BadRequestException('Reason can be up to 300 characters');
+    const res: any = await this.r.productModel.updateOne(
+      { _id: productId, 'liveSession.status': { $ne: 'cancelled' } },
+      { $set: { 'liveSession.status': 'cancelled', 'liveSession.cancelledAt': new Date(), 'liveSession.cancelReason': cleanReason } },
+    );
+    if (!res?.modifiedCount) return { success: true, message: 'This class was already cancelled', data: { status: 'cancelled', notified: 0 } };
+
+    const buyers = (await liveClassBuyerIds(this.r.orderModel as any, productId)).filter(b => b !== String(sellerId));
+    const title = `"${product.name}" was cancelled`;
+    const body = `The teacher cancelled this live class.${cleanReason ? ` Reason: ${cleanReason}.` : ''} If you already paid, Edudeen support will arrange your refund - contact support if you do not hear from us.`;
+    const path = `/product/${product.slug ?? productId}`;
+    let notified = 0;
+    for (const id of buyers) {
+      try {
+        await this.notifications?.notify({
+          recipientId: id, recipientRole: 'user', type: NOTIFICATION_TYPES.LIVE_CLASS_CANCELLED, title, body,
+          data: { productId, link: path },
+          email: liveClassEmail(title, body, { name: product.name, startsAt: product.liveSession.startsAt }, { label: 'Open class page', path }),
+        });
+        notified++;
+      } catch { /* best effort per buyer */ }
+    }
+    await this.activityLog?.log({
+      storeId, category: 'products', action: 'live_class_cancelled',
+      description: `Live class "${product.name}" was cancelled by the seller; ${buyers.length} paid buyer(s) notified. Refunds need manual handling.`,
+      actorId: sellerId, actorRole: 'seller', targetId: productId, targetType: 'product',
+      metadata: { buyers: buyers.length, reason: cleanReason },
+    });
+    return { success: true, message: 'Live class cancelled', data: { status: 'cancelled', notified } };
   }
 }

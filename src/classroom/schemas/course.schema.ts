@@ -35,6 +35,7 @@ export class Course {
       title: string;
       type: LessonType;
       file: { url: string; name: string; size: number | null; mimeType: string | null } | null;
+      videoUrl?: string | null;
       text: string;
       durationMinutes: number | null;
       isPreview: boolean;
@@ -44,6 +45,16 @@ export class Course {
 
   @Prop({ type: Boolean, default: true })
   certificateEnabled: boolean;
+
+  @Prop({ type: [String], default: [] })
+  outcomes: string[];
+
+  @Prop({ type: Object, default: { name: '', bio: '' } })
+  instructor: { name: string; bio: string };
+
+  // null = lifetime access.
+  @Prop({ type: Number, default: null })
+  accessDays: number | null;
 }
 export const CourseSchema = SchemaFactory.createForClass(Course);
 

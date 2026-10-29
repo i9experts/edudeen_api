@@ -1,4 +1,5 @@
-/* eslint-disable prettier/prettier */
+/* eslint-disable prettier/prettier */
+import { courseTotals } from '../classroom/course.util';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { isValidObjectId } from 'mongoose';
 import { escapeRegex } from '../common/query-safety.util';
@@ -248,6 +249,18 @@ export class AdminMarketplaceService {
       ch.categoryId ? this.r.categoryModel.findById(ch.categoryId).select('name').lean() : null,
       ch.subCategoryId ? this.r.categoryModel.findById(ch.subCategoryId).select('name').lean() : null,
     ]);
+    // Course reviewers see what is actually being sold: curriculum outline (never lesson files), outcomes, instructor.
+    const courseDoc: any = product.deliveryFormat === 'course' ? await (this.r as any).courseModel.findOne({ productId: String(product._id) }).lean() : null;
+    const course = product.deliveryFormat === 'course'
+      ? {
+          ...courseTotals(courseDoc?.sections),
+          sections: (courseDoc?.sections ?? []).map((s: any) => ({ title: s.title, lessons: (s.lessons ?? []).map((l: any) => ({ title: l.title, type: l.type, minutes: l.durationMinutes ?? null, isPreview: !!l.isPreview })) })),
+          outcomes: courseDoc?.outcomes ?? [],
+          instructor: courseDoc?.instructor ?? { name: '', bio: '' },
+          accessDays: courseDoc?.accessDays ?? null,
+          certificateEnabled: courseDoc?.certificateEnabled ?? false,
+        }
+      : null;
     const editCategory: string | undefined = editCat?.name;
     const editSubCategory: string | undefined = editSub?.name;
     const files = (product.digital?.files ?? []).map((f: any) => {
@@ -266,6 +279,9 @@ export class AdminMarketplaceService {
         tags: product.tags ?? [],
         type: product.type,
         productType: product.productType,
+        deliveryFormat: product.deliveryFormat ?? 'download',
+        liveSession: product.deliveryFormat === 'live_class' ? (product.liveSession ?? null) : null,
+        course,
         educationLevel: product.educationLevel,
         customLevel: product.customLevel,
         classFrom: product.classFrom ?? null,

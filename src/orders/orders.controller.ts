@@ -33,7 +33,7 @@ export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('user')
+  @Roles('user', 'seller')
   @Get('my-orders')
   async getOrdersByUserId(@Req() req: any, @Query() query: any) {
     const { userId } = req.user;
@@ -42,7 +42,7 @@ export class OrdersController {
 
   // Every digital resource the buyer owns (My Library).
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('user')
+  @Roles('user', 'seller')
   @Get('my-library')
   async getMyLibrary(@Req() req: any) {
     return this.ordersService.getMyLibrary(req.user.userId);
@@ -50,7 +50,7 @@ export class OrdersController {
 
   // Every Order (digital + physical) a checkout produced — same shape as my-orders. Static prefix, declared before the catch-all `:orderId` route.
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('user')
+  @Roles('user', 'seller')
   @Get('by-checkout/:checkoutId')
   async getOrdersByCheckout(@Req() req: any, @Param('checkoutId', ParseObjectIdPipe) checkoutId: string) {
     const { userId } = req.user;
@@ -59,7 +59,7 @@ export class OrdersController {
 
   // signed URLs (non-stamped) + stamped stream URLs list
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('user')
+  @Roles('user', 'seller')
   @Get('download-url')
   async getDownloadUrls(
     @Req() req: any,
@@ -191,7 +191,7 @@ export class OrdersController {
 
   // Lost link? Re-send the "your download is ready" email (My Library link) to the buyer's own account email.
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('user')
+  @Roles('user', 'seller')
   @Throttle({ default: { limit: 5, ttl: 600_000 } })
   @Post('resend-download-link')
   async resendDownloadLink(@Req() req: any, @Body() body: { orderId?: string; productId?: string }) {
@@ -200,7 +200,7 @@ export class OrdersController {
 
   // Step 1: JWT se download link lo (10 min valid)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('user')
+  @Roles('user', 'seller')
   @Get('get-download-link')
   async getDownloadLink(
     @Req() req: any,
@@ -235,7 +235,7 @@ export class OrdersController {
 
   // Download every file of a purchased product as one streamed zip (JWT header; same access rules as single files).
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('user')
+  @Roles('user', 'seller')
   @Throttle({ default: { limit: 10, ttl: 600_000 } })
   @Get('download-zip/:orderId/:productId')
   async downloadZip(
@@ -250,7 +250,7 @@ export class OrdersController {
 
   // Browser-direct variant for <a href>: step 1 (JWT) issues a 10-minute token, step 2 redeems it.
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('user')
+  @Roles('user', 'seller')
   @Get('download-zip-link/:orderId/:productId')
   async getZipLink(@Req() req: any, @Param('orderId') orderId: string, @Param('productId') productId: string) {
     return this.ordersService.getZipLink(req.user.userId, orderId, productId);
@@ -288,7 +288,7 @@ export class OrdersController {
 
   // stamped PDF stream — browser direct download
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('user')
+  @Roles('user', 'seller')
   @Get('stream-pdf')
   async streamPdf(
     @Req() req: any,
@@ -318,7 +318,7 @@ export class OrdersController {
 
   // must be last — catches any GET /:orderId after all static routes
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('user')
+  @Roles('user', 'seller')
   @Get(':orderId')
   async getOrderById(@Req() req: any, @Param('orderId') orderId: string) {
     const { userId } = req.user;

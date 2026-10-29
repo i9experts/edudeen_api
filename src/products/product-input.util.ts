@@ -328,6 +328,31 @@ export function cleanDeliveryFormat(
     if (!Number.isInteger(capacity) || capacity < 1 || capacity > 10000) throw new BadRequestException('Seats should be between 1 and 10,000 (or leave empty for no limit)');
   }
   const notes = typeof raw.notes === 'string' ? raw.notes.trim().slice(0, 1000) : '';
-  out.liveSession = { startsAt, durationMinutes, platform, meetingUrl, capacity, notes };
+  const prev = existing?.liveSession ?? null;
+  if (prev?.status === 'cancelled') throw new BadRequestException('This live class was cancelled and cannot be changed');
+  let registrationDeadline: Date | null = null;
+  if (raw.registrationDeadline !== undefined && raw.registrationDeadline !== null && raw.registrationDeadline !== '') {
+    registrationDeadline = new Date(raw.registrationDeadline as string);
+    if (Number.isNaN(registrationDeadline.getTime())) throw new BadRequestException('Registration deadline is not a valid date');
+    if (registrationDeadline.getTime() >= startsAt.getTime()) throw new BadRequestException('Registration must close before the class starts');
+  }
+  let recordingUrl: string | null = null;
+  if (typeof raw.recordingUrl === 'string' && raw.recordingUrl.trim()) {
+    recordingUrl = raw.recordingUrl.trim();
+    let ru: URL | null = null;
+    try { ru = new URL(recordingUrl); } catch { ru = null; }
+    if (!ru || ru.protocol !== 'https:' || recordingUrl.length > 500) throw new BadRequestException('The recording link must be an https:// link');
+  }
+  // Server-owned fields survive an edit: seats already sold, status, reschedule stamp.
+  const moved = prevStart !== null && prevStart !== startsAt.getTime();
+  out.liveSession = {
+    startsAt, durationMinutes, platform, meetingUrl, capacity, notes, registrationDeadline, recordingUrl,
+    status: 'scheduled',
+    cancelledAt: null,
+    cancelReason: '',
+    rescheduledAt: moved ? new Date() : (prev?.rescheduledAt ?? null),
+    seatsTaken: Number(prev?.seatsTaken) > 0 ? Number(prev.seatsTaken) : 0,
+  };
+  if (capacity !== null && out.liveSession.seatsTaken > capacity) throw new BadRequestException('Seats cannot be lower than the seats already sold (' + out.liveSession.seatsTaken + ')');
   return out;
 }

@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { checkVerifiedPurchase } from 'src/rating/verified-purchase.util';
 import { isValidObjectId } from 'mongoose';
+import { courseTotals } from '../classroom/course.util';
 
 import { DatabaseService } from 'src/database/databaseservice';
 import { ProductType as StoreProductType } from 'src/store/schemas/store.schema';
@@ -963,7 +964,7 @@ export class ProductsService {
     );
 
     const productsWithVariants = await this.withPremium(await this.attachCampaignBadges(
-      products.map((p) => {
+      (await this.attachCourseSummary(products)).map((p) => {
         const seller = sellerMap.get(p.sellerId?.toString());
         return this.sanitizeDigitalForPublicView({
           ...p,
@@ -991,6 +992,22 @@ export class ProductsService {
         products: productsWithVariants,
       },
     };
+  }
+
+  /**
+   * `courseSummary {lessonCount, totalMinutes}` on every online-course product of a page (ONE query for the whole page).
+   * Other products are returned untouched.
+   */
+  async attachCourseSummary<T extends Record<string, any>>(products: T[]): Promise<T[]> {
+    try {
+      const ids = products.filter((p) => p?.deliveryFormat === 'course').map((p) => String(p._id));
+      if (!ids.length) return products;
+      const courses: any[] = await (this.databaseService.repositories as any).courseModel.find({ productId: { $in: ids } }).select('productId sections').lean();
+      const byProduct = new Map(courses.map((c) => [String(c.productId), courseTotals(c.sections)]));
+      return products.map((p) => (p?.deliveryFormat === 'course' ? { ...p, courseSummary: byProduct.get(String(p._id)) ?? { lessonCount: 0, totalMinutes: 0 } } : p));
+    } catch {
+      return products; // the summary is decoration; never fail a listing for it
+    }
   }
 
   /** Variants + subscriber pricing for a page of lean product docs — the same
@@ -1044,7 +1061,7 @@ export class ProductsService {
     );
 
     return this.withPremium(await this.attachCampaignBadges(
-      products.map((p) => {
+      (await this.attachCourseSummary(products)).map((p) => {
         const seller = sellerMap.get(p.sellerId?.toString());
         return this.sanitizeDigitalForPublicView({
           ...p,
@@ -1496,6 +1513,10 @@ export class ProductsService {
     const { variants: campaignVariants, ...productWithSeller } = withCampaign as any;
     let variants: any[] = campaignVariants ?? pricedVariants;
     // Canonical URL slug; slugRedirect = the request used an OLD slug, so the web should replace the URL.
+    if ((product as any).deliveryFormat === 'course') {
+      const [withSummary] = await this.attachCourseSummary([productWithSeller as any]);
+      (productWithSeller as any).courseSummary = (withSummary as any).courseSummary;
+    }
     (productWithSeller as any).canonicalSlug = product.slug;
     (productWithSeller as any).slugRedirect = viaPreviousSlug;
 
@@ -1870,7 +1891,8 @@ export class ProductsService {
       customLevel: null,
       normalizedCustomLevel: null,
     };
-    if (finalProductType === 'educational') {
+    const skipLevel = (body.deliveryFormat === 'course' || body.deliveryFormat === 'live_class') && !educationLevel;
+    if (finalProductType === 'educational' && !skipLevel) {
       if (!educationLevel || !EDUCATION_LEVEL_VALUES.includes(educationLevel)) {
         throw new BadRequestException(
           `educationLevel is required and must be one of: ${EDUCATION_LEVEL_VALUES.join(', ')}`,
@@ -1913,7 +1935,7 @@ export class ProductsService {
     assertOfferExclusive(store as any, { ...premiumFieldsFromBody(body), campaignIds });
     const slug = await generateProductSlug(productModel, title);
     const learnMeta = cleanLearningMeta(body);
-    const quality = this.checkListing({ title, type: 'digital', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, requestedStatus: status });
+    const quality = this.checkListing({ title, type: 'digital', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, deliveryFormat: delivery.deliveryFormat ?? 'download', requestedStatus: status });
     const requestedStatus = status ? resolveSellerPublishStatus(status, null, paidPlan) : 'draft';
     // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
     const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
@@ -1983,10 +2005,14 @@ export class ProductsService {
    * Quality checks shared by every create/edit: class range (needed to go live for digital/educational), the non-blocking
    * title warnings, and the off-platform contact scan of the seller-written text.
    */
-  private checkListing(opts: { title: string; type: 'physical' | 'digital'; description?: unknown; classFrom?: string | null; classTo?: string | null; requestedStatus?: string | null; fields?: Record<string, unknown>; coverStyle?: string | null }) {
-    const goingLive = opts.requestedStatus === 'active' || opts.requestedStatus === 'scheduled';
+  private checkListing(opts: { title: string; type: 'physical' | 'digital'; description?: unknown; classFrom?: string | null; classTo?: string | null; requestedStatus?: string | null; fields?: Record<string, unknown>; coverStyle?: string | null; deliveryFormat?: string | null; currentStatus?: string | null }) {
+    // Re-saving an already-live product with the same status is not a new publish, so legacy products are not blocked by newer required fields.
+    const republish = !!opts.currentStatus && opts.requestedStatus === opts.currentStatus;
+    const goingLive = (opts.requestedStatus === 'active' || opts.requestedStatus === 'scheduled') && !republish;
     assertClassRangeRule({ type: opts.type, classFrom: opts.classFrom, classTo: opts.classTo, goingLive });
-    if (goingLive && opts.coverStyle !== 'book' && opts.coverStyle !== 'flat') {
+    // The product card style (Book / Flat) is a download-product choice; courses and live classes do not need it.
+    const needsCoverStyle = !opts.deliveryFormat || opts.deliveryFormat === 'download';
+    if (goingLive && needsCoverStyle && opts.coverStyle !== 'book' && opts.coverStyle !== 'flat') {
       throw new BadRequestException('Choose how your product card looks: Book or Flat photo.');
     }
     return {
@@ -2037,11 +2063,19 @@ export class ProductsService {
       defaultVariant = { ...defaultVariant, ...('__price' in pendingChanges ? { price: pendingChanges.__price } : {}), ...('__compareAtPrice' in pendingChanges ? { compareAtPrice: pendingChanges.__compareAtPrice } : {}) };
     }
 
+    // Category names for the detail page (the product stores only ids).
+    const catIds = [(product as any).categoryId, (product as any).subCategoryId].filter((id) => id && isValidObjectId(String(id))).map(String);
+    const cats: any[] = catIds.length ? await this.databaseService.repositories.categoryModel.find({ _id: { $in: catIds } }).select('name').lean() : [];
+    const catName = (id: unknown) => (id ? (cats.find((c) => String(c._id) === String(id))?.name ?? null) : null);
+
     return {
       success: true,
       message: 'Product fetched successfully',
       // The seller sees their own pending edit in the form; buyers still see the live version.
-      data: { product: (product as any).pendingEdit?.changes ? overlayPendingEdit(product as any) : product, variants, defaultVariant },
+      data: {
+        product: (product as any).pendingEdit?.changes ? overlayPendingEdit(product as any) : product, variants, defaultVariant,
+        categoryName: catName((product as any).categoryId), subCategoryName: catName((product as any).subCategoryId),
+      },
     };
   }
 
@@ -2219,7 +2253,7 @@ export class ProductsService {
       const effFrom = productUpdate.classFrom !== undefined ? productUpdate.classFrom : product.classFrom;
       const effTo = productUpdate.classTo !== undefined ? productUpdate.classTo : product.classTo;
       const effDescription = description !== undefined ? description : product.description;
-      const quality = this.checkListing({ title: effTitle, type: product.type === 'physical' ? 'physical' : 'digital', classFrom: effFrom, classTo: effTo, coverStyle: productUpdate.coverStyle !== undefined ? productUpdate.coverStyle : product.coverStyle, requestedStatus: status, fields: { name: effTitle, description: effDescription } });
+      const quality = this.checkListing({ title: effTitle, type: product.type === 'physical' ? 'physical' : 'digital', classFrom: effFrom, classTo: effTo, coverStyle: productUpdate.coverStyle !== undefined ? productUpdate.coverStyle : product.coverStyle, deliveryFormat: productUpdate.deliveryFormat ?? (product as any).deliveryFormat ?? 'download', currentStatus: product.status, requestedStatus: status, fields: { name: effTitle, description: effDescription } });
       editWarnings = quality.warnings;
       if (name !== undefined || description !== undefined) {
         editScan = quality.scan;

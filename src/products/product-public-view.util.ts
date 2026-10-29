@@ -74,7 +74,8 @@ function hideLiveLink<T>(product: T): T {
   const live = (product as { liveSession?: { meetingUrl?: unknown } | null } | null)?.liveSession;
   if (!live) return product;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { meetingUrl, ...rest } = live as Record<string, unknown>;
+  const { meetingUrl, recordingUrl, ...rest } = live as Record<string, unknown>;
+  void meetingUrl; void recordingUrl;
   return { ...product, liveSession: rest } as T;
 }
 

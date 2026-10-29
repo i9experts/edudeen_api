@@ -161,6 +161,30 @@ export class LiveSession {
 
   @Prop({ type: String, default: '' })
   notes: string;
+
+  // null = registration stays open until the class ends.
+  @Prop({ type: Date, default: null })
+  registrationDeadline: Date | null;
+
+  // Replay link for entitled buyers, shown only after the class ended.
+  @Prop({ type: String, default: null })
+  recordingUrl: string | null;
+
+  @Prop({ type: String, enum: ['scheduled', 'cancelled'], default: 'scheduled' })
+  status: string;
+
+  @Prop({ type: Date, default: null })
+  cancelledAt: Date | null;
+
+  @Prop({ type: String, default: '' })
+  cancelReason: string;
+
+  @Prop({ type: Date, default: null })
+  rescheduledAt: Date | null;
+
+  // Seats claimed atomically when an order is created (see LiveSeatsService).
+  @Prop({ type: Number, default: 0 })
+  seatsTaken: number;
 }
 export const LiveSessionSchema = SchemaFactory.createForClass(LiveSession);
 
