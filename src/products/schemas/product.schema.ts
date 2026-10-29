@@ -425,6 +425,7 @@ ProductSchema.index({ isTest: 1 });
 ProductSchema.index({ previousSlugs: 1 });
 ProductSchema.index({ categoryId: 1, status: 1, isDelete: 1 });
 ProductSchema.index({ scheduledAt: 1 });
+ProductSchema.index({ deliveryFormat: 1, 'liveSession.startsAt': 1 });
 // Public browse (products-by-category): the filter prefix + the default / popularity / rating sorts.
 ProductSchema.index({ status: 1, isDelete: 1, isFeatured: -1, createdAt: -1 });
 ProductSchema.index({ status: 1, isDelete: 1, purchaseCount: -1 });

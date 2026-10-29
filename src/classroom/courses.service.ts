@@ -7,6 +7,7 @@ import { UploadService } from '../upload/upload.service';
 import { UploadedAssetsService } from '../upload/uploaded-assets.service';
 import { verifyStoreOwnershipStrict } from '../common/store-ownership.util';
 import { CourseProgress, CourseProgressDocument } from './schemas/course.schema';
+import { JOIN_OPENS_MINUTES } from './live-class.util';
 import { certificateCode, cleanCourseInput, lessonIds, paidSeatFilter, scoreQuiz } from './course.util';
 
 const LESSON_LINK_SECONDS = 3600;
@@ -268,7 +269,11 @@ export class CoursesService {
     await this.assertLearner(userId, product);
     const { startsAt, durationMinutes, platform, meetingUrl, notes } = product.liveSession;
     const endsAt = new Date(new Date(startsAt).getTime() + durationMinutes * 60000);
-    return { success: true, data: { name: product.name, startsAt, endsAt, durationMinutes, platform, meetingUrl, notes, ended: endsAt.getTime() < Date.now() } };
+    // Buyers get the link from JOIN_OPENS_MINUTES before the start; the teacher always has it. Before that only the opening time is returned.
+    const opensAt = new Date(new Date(startsAt).getTime() - JOIN_OPENS_MINUTES * 60000);
+    const isTeacher = String(product.sellerId) === userId;
+    const open = isTeacher || Date.now() >= opensAt.getTime();
+    return { success: true, data: { name: product.name, startsAt, endsAt, durationMinutes, platform, meetingUrl: open ? meetingUrl : null, notes, ended: endsAt.getTime() < Date.now(), opensAt, joinOpen: open } };
   }
 
   /** Seats left in a live class, for the product page. */

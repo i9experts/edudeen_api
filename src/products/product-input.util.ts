@@ -91,6 +91,16 @@ export function listingApprovalRequired(): boolean {
 }
 
 /**
+ * Owner rule: free and free-trial stores need admin approval for new listings; stores with a PAID plan that is
+ * currently active publish directly. Anything else (no plan, trialing, expired, canceled, past due) is reviewed.
+ */
+export function sellerSkipsListingReview(
+  active: { subscription?: { status?: string | null } | null; plan?: { isFree?: boolean | null } | null } | null | undefined,
+): boolean {
+  return !!active?.plan && active.plan.isFree !== true && active.subscription?.status === 'active';
+}
+
+/**
  * The status a seller's publish request actually gets. Asking to publish
  * (active/scheduled) a listing that was never approved sends it to review
  * instead. A listing that is already live counts as approved, so existing
@@ -99,9 +109,11 @@ export function listingApprovalRequired(): boolean {
 export function resolveSellerPublishStatus(
   requested: (typeof SELLER_PRODUCT_STATUSES)[number],
   current?: { status?: string | null; approvedAt?: Date | null } | null,
+  /** The store is on a paid platform plan: its listings go live without admin review (see sellerSkipsListingReview). */
+  paidPlan = false,
 ): string {
   const wantsLive = requested === 'active' || requested === 'scheduled';
-  if (!wantsLive || !listingApprovalRequired()) return requested;
+  if (!wantsLive || !listingApprovalRequired() || paidPlan) return requested;
   const approved = !!current?.approvedAt || current?.status === 'active' || current?.status === 'scheduled';
   return approved ? requested : 'pending_review';
 }

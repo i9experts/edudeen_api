@@ -18,6 +18,8 @@ import { UploadModule } from '../upload/upload.module';
 import { CuratedCollection, CuratedCollectionSchema } from './schemas/curated-collection.schema';
 import { LearningPath, LearningPathSchema } from './schemas/learning-path.schema';
 import { LearningPathsService } from './learning-paths.service';
+import { LiveReminderService } from './live-reminder.service';
+import { LiveReminderLog, LiveReminderLogSchema } from './schemas/live-reminder-log.schema';
 import { AdminLearningPathsController, LearningPathsController } from './learning-paths.controller';
 import { AdminCuratedCollectionsController, BundlesController, CoursesController, CuratedCollectionsController, ProductQuestionsController, QuoteRequestsController, SavedListsController } from './classroom.controllers';
 
@@ -38,9 +40,10 @@ import { AdminCuratedCollectionsController, BundlesController, CoursesController
       { name: CuratedCollection.name, schema: CuratedCollectionSchema },
       { name: CourseProgress.name, schema: CourseProgressSchema },
       { name: LearningPath.name, schema: LearningPathSchema },
+      { name: LiveReminderLog.name, schema: LiveReminderLogSchema },
     ]),
   ],
   controllers: [SavedListsController, ProductQuestionsController, QuoteRequestsController, BundlesController, CuratedCollectionsController, AdminCuratedCollectionsController, CoursesController, LearningPathsController, AdminLearningPathsController],
-  providers: [SavedListsService, ProductQuestionsService, QuoteRequestsService, BundlesService, CuratedCollectionsService, CoursesService, LearningPathsService],
+  providers: [SavedListsService, ProductQuestionsService, QuoteRequestsService, BundlesService, CuratedCollectionsService, CoursesService, LearningPathsService, LiveReminderService],
 })
 export class ClassroomModule {}

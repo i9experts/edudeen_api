@@ -8,6 +8,7 @@ import {
   cleanDigitalSettings,
   assertStringArray,
   resolveSellerPublishStatus,
+  sellerSkipsListingReview,
 } from './product-input.util';
 
 describe('product-input.util', () => {
@@ -37,11 +38,26 @@ describe('product-input.util', () => {
       expect(resolveSellerPublishStatus('draft', null)).toBe('draft');
       expect(resolveSellerPublishStatus('active', { status: 'active' })).toBe('active'); // existing live products
       expect(resolveSellerPublishStatus('active', { status: 'inactive', approvedAt: new Date() })).toBe('active');
+      // A store on an active PAID plan publishes (and schedules) directly; drafts stay drafts.
+      expect(resolveSellerPublishStatus('active', null, true)).toBe('active');
+      expect(resolveSellerPublishStatus('scheduled', { status: 'rejected' }, true)).toBe('scheduled');
+      expect(resolveSellerPublishStatus('draft', null, true)).toBe('draft');
       process.env.LISTING_APPROVAL_REQUIRED = 'false';
       expect(resolveSellerPublishStatus('active', null)).toBe('active');
     } finally {
       if (prev === undefined) delete process.env.LISTING_APPROVAL_REQUIRED; else process.env.LISTING_APPROVAL_REQUIRED = prev;
     }
+  });
+
+  it('sellerSkipsListingReview: only an ACTIVE subscription on a non-free plan skips review', () => {
+    const paid = { isFree: false };
+    expect(sellerSkipsListingReview({ plan: paid, subscription: { status: 'active' } })).toBe(true);
+    expect(sellerSkipsListingReview({ plan: paid, subscription: { status: 'trialing' } })).toBe(false);
+    expect(sellerSkipsListingReview({ plan: paid, subscription: { status: 'past_due' } })).toBe(false);
+    expect(sellerSkipsListingReview({ plan: paid, subscription: { status: 'canceled' } })).toBe(false);
+    expect(sellerSkipsListingReview({ plan: paid, subscription: { status: 'expired' } })).toBe(false);
+    expect(sellerSkipsListingReview({ plan: { isFree: true }, subscription: { status: 'active' } })).toBe(false);
+    expect(sellerSkipsListingReview(null)).toBe(false);
   });
 
   it('assertSellerStatus only allows the schema statuses', () => {

@@ -56,6 +56,13 @@ export const NOTIFICATION_TYPES = {
   PREMIUM_EXPIRED: 'premium_expired',
   PREMIUM_COUPON: 'premium_coupon',
   SUPPORT_REPLY: 'support_reply',
+  // Not in NOTIFICATION_CATEGORY on purpose: these are transactional, so muting "promotions" must not hide them.
+  PRODUCT_SCHEDULED: 'product_scheduled',
+  PRODUCT_PUBLISHED: 'product_published',
+  LISTING_IN_REVIEW: 'listing_in_review',
+  LIVE_CLASS_REMINDER: 'live_class_reminder',
+  LIVE_CLASS_CHANGED: 'live_class_changed',
+  LIVE_CLASS_CANCELLED: 'live_class_cancelled',
 } as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[keyof typeof NOTIFICATION_TYPES];

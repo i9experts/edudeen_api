@@ -29,7 +29,11 @@ import { sanitizeDigitalForPublicView } from './product-public-view.util';
 import { classFilter, classIndex } from './class-levels';
 import { assertPriceRules, assertDescriptionRule, assertStockRule, cleanShippingWeight } from './price-rules.util';
 import { splitEditForReview, overlayPendingEdit } from './product-edit-review.util';
-import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, cleanLearningMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
+import { NotificationsService } from '../notifications/notifications.service';
+import { notifyPublishRequest, pktLabel } from './product-schedule-notify.util';
+import { NOTIFICATION_TYPES } from '../notifications/notification.types';
+import { liveClassBuyerIds, liveClassEmail } from '../classroom/live-class.util';
+import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, sellerSkipsListingReview, cleanLearningMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
 import { allocateSkus, cleanSku } from './sku.util';
 import { generateProductSlug, nextPreviousSlugs } from 'src/common/slug.util';
 import { assertClassRangeRule, assertTitleRule, normalizeTitle, productWarnings } from './product-quality.util';
@@ -78,7 +82,49 @@ export class ProductsService {
     private attributesService: AttributesService,
     private uploadedAssets: UploadedAssetsService,
     @Optional() private premiumService?: PremiumEntitlementsService,
+    @Optional() private notifications?: NotificationsService,
   ) {}
+
+  /** Paid, active platform plan = new listings skip admin review; free / trial / expired stores are reviewed. Fails closed (review) on any lookup error. */
+  private async paidPlanSkipsReview(storeId: string): Promise<boolean> {
+    try {
+      return sellerSkipsListingReview(await this.entitlementsService.getActivePlanForStore(storeId));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * A live class that was moved or got a new meeting link: tell every buyer holding a seat (and the seller, as a receipt).
+   * Reminders re-arm on their own because the reminder log is keyed by the start time. Never throws.
+   */
+  private async notifyLiveClassChange(before: any, after: any): Promise<void> {
+    try {
+      if (!this.notifications || !after || after.deliveryFormat !== 'live_class') return;
+      const a = before?.liveSession; const b = after.liveSession;
+      if (!a?.startsAt || !b?.startsAt) return;
+      const moved = new Date(a.startsAt).getTime() !== new Date(b.startsAt).getTime();
+      const relinked = (a.meetingUrl ?? '') !== (b.meetingUrl ?? '');
+      if (!moved && !relinked) return;
+      if (new Date(b.startsAt).getTime() <= Date.now()) return;
+      const title = moved ? `"${after.name}" was rescheduled` : `"${after.name}" has a new meeting link`;
+      const body = moved
+        ? `New start: ${pktLabel(b.startsAt)}. You will get reminders again before the new time.`
+        : 'The teacher updated the meeting link. Open the class page before it starts to see it.';
+      const buyers = await liveClassBuyerIds(this.databaseService.repositories.orderModel as any, String(after._id));
+      const path = `/product/${after.slug ?? after._id}`;
+      const input = { name: after.name, startsAt: b.startsAt, meetingUrl: b.meetingUrl };
+      for (const id of buyers) {
+        await this.notifications.notify({
+          recipientId: id, recipientRole: 'user', type: NOTIFICATION_TYPES.LIVE_CLASS_CHANGED, title, body,
+          data: { productId: String(after._id), link: path },
+          email: liveClassEmail(title, body, input, { label: 'Open class page', path }),
+        });
+      }
+    } catch {
+      /* best effort */
+    }
+  }
 
   /** Attaches an `activeCampaign` badge summary (or null) to each product,
    *  based on whether its store currently has an active platform-sale
@@ -1672,7 +1718,7 @@ export class ProductsService {
     const slug = await generateProductSlug(productModel, title);
     const learnMeta = cleanLearningMeta(body);
     const quality = this.checkListing({ title, type: 'physical', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, requestedStatus: status });
-    const requestedStatus = status ? resolveSellerPublishStatus(status, null) : 'draft';
+    const requestedStatus = status ? resolveSellerPublishStatus(status, null, await this.paidPlanSkipsReview(String(store._id))) : 'draft';
     // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
     const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
 
@@ -1726,6 +1772,7 @@ export class ProductsService {
     );
 
     void scanImagesForContactInfo(String(product._id), cleanImages); // TODO(OCR) no-op hook - see contact-info.util.ts
+    notifyPublishRequest(this.notifications, product, status, finalStatus);
     return {
       success: true,
       message: 'Physical product created successfully' + this.contactNote(quality.scan),
@@ -1852,7 +1899,8 @@ export class ProductsService {
     const validSubCategoryId = await this.resolveSubCategoryId(categoryId, subCategoryId);
     const digitalConfig = digital ? await this.buildDigitalConfig(sellerId, digital, null) : null;
     const delivery = cleanDeliveryFormat(body, null);
-    await this.assertCourseReady(null, delivery.deliveryFormat, status ? resolveSellerPublishStatus(status, null) : 'draft');
+    const paidPlan = await this.paidPlanSkipsReview(String(store._id));
+    await this.assertCourseReady(null, delivery.deliveryFormat, status ? resolveSellerPublishStatus(status, null, paidPlan) : 'draft');
 
     // Owner rule R3 (normal sale vs Premium discount), on the base price and every license tier.
     await assertPremiumGap(this.premiumService, store as any, premiumFieldsFromBody(body).premiumDiscountPercent, [
@@ -1866,7 +1914,7 @@ export class ProductsService {
     const slug = await generateProductSlug(productModel, title);
     const learnMeta = cleanLearningMeta(body);
     const quality = this.checkListing({ title, type: 'digital', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, requestedStatus: status });
-    const requestedStatus = status ? resolveSellerPublishStatus(status, null) : 'draft';
+    const requestedStatus = status ? resolveSellerPublishStatus(status, null, paidPlan) : 'draft';
     // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
     const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
 
@@ -1923,6 +1971,7 @@ export class ProductsService {
     void this.fillPdfPageCounts(String(product._id));
 
     void scanImagesForContactInfo(String(product._id), cleanImages); // TODO(OCR) no-op hook - see contact-info.util.ts
+    notifyPublishRequest(this.notifications, product, status, finalStatus);
     return {
       success: true,
       message: 'Digital product created successfully' + this.contactNote(quality.scan),
@@ -2135,7 +2184,7 @@ export class ProductsService {
     }
     if (status !== undefined) {
       assertSellerStatus(status);
-      productUpdate.status = resolveSellerPublishStatus(status, product);
+      productUpdate.status = resolveSellerPublishStatus(status, product, await this.paidPlanSkipsReview(String(product.storeId)));
       productUpdate.scheduledAt = status === 'scheduled' ? parseScheduledAt(scheduledAt) : null;
     }
     if (digital !== undefined && product.type === 'digital') {
@@ -2322,6 +2371,15 @@ export class ProductsService {
     }
 
     void scanImagesForContactInfo(productId, Array.isArray(images) ? images : (product as any).images ?? []); // TODO(OCR) no-op hook
+    void this.notifyLiveClassChange(product as any, updatedProduct as any);
+    // Tell the seller what their publish/schedule request really became (only when it changed, not on every save).
+    if (updatedProduct && status !== undefined) {
+      const nextStatus = (updatedProduct as any).status;
+      const dateChanged = String((updatedProduct as any).scheduledAt ?? '') !== String((product as any).scheduledAt ?? '');
+      if (nextStatus !== (product as any).status || (nextStatus === 'scheduled' && dateChanged)) {
+        notifyPublishRequest(this.notifications, updatedProduct, status, nextStatus);
+      }
+    }
     const pendingNow = !!(updatedProduct as any)?.pendingEdit?.changes;
     const outProduct = pendingNow ? overlayPendingEdit(typeof (updatedProduct as any)?.toObject === 'function' ? (updatedProduct as any).toObject() : updatedProduct) : updatedProduct;
     return {

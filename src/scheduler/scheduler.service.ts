@@ -19,6 +19,8 @@ import { BannersService } from 'src/banner/banner.service';
 import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { AdminFinanceService } from 'src/admin-finance/admin-finance.service';
+import { NotificationsService } from 'src/notifications/notifications.service';
+import { notifyProductPublished } from 'src/products/product-schedule-notify.util';
 
 @Injectable()
 export class SchedulerService {
@@ -43,6 +45,7 @@ export class SchedulerService {
     private readonly exchangeRateService: ExchangeRateService,
     private readonly activityLogService: ActivityLogService,
     private readonly adminFinanceService: AdminFinanceService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   /**
@@ -93,11 +96,34 @@ export class SchedulerService {
   @Cron('* * * * *')
   async activateScheduledProducts() {
     await this.runLocked('activate-scheduled-products', 50_000, async () => {
-      const { productModel } = this.databaseService.repositories;
-      await productModel.updateMany(
-        { status: 'scheduled', scheduledAt: { $lte: new Date() }, isDelete: false },
-        { $set: { status: 'active', scheduledAt: null } },
-      );
+      const { productModel, storeModel } = this.databaseService.repositories;
+      const now = new Date();
+      const due: any[] = await productModel
+        .find({ status: 'scheduled', scheduledAt: { $lte: now }, isDelete: false })
+        .select('_id name sellerId storeId scheduledAt')
+        .limit(500)
+        .lean();
+      if (!due.length) return;
+      // A product on a store that is not active would flip to 'active' yet stay invisible - keep it scheduled until the store is live.
+      const storeIds = [...new Set(due.map((p) => String(p.storeId)).filter(Boolean))];
+      const liveStores = await storeModel.find({ _id: { $in: storeIds }, status: 'active' }).select('_id').lean();
+      const live = new Set(liveStores.map((s: any) => String(s._id)));
+      let published = 0;
+      for (const p of due) {
+        if (!live.has(String(p.storeId))) {
+          this.logger.warn(`Scheduled product ${p._id} is due but store ${p.storeId} is not active - waiting`);
+          continue;
+        }
+        // Status-guarded, so a seller who edited/unscheduled it a moment ago is not overridden.
+        const res = await productModel.updateOne(
+          { _id: p._id, status: 'scheduled', scheduledAt: { $lte: now }, isDelete: false },
+          { $set: { status: 'active', scheduledAt: null } },
+        );
+        if (!res.modifiedCount) continue;
+        published++;
+        notifyProductPublished(this.notificationsService, p);
+      }
+      if (published > 0) this.logger.log(`Scheduled products published: ${published}`);
     });
   }
 
