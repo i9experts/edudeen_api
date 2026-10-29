@@ -52,6 +52,7 @@ export class productController {
     @Query('featured') featuredQuery?: string,
     @Query('class') classQuery?: string,
     @Query('exact') exactQuery?: string,
+    @Query('format') formatQuery?: string,
   ) {
     // Express/qs hands back arrays and objects for ?x[]=1 / ?x[$ne]=1 even though these are typed as strings.
     id = queryString(id);
@@ -120,6 +121,7 @@ export class productController {
         age: ageQuery !== undefined && /^\d{1,2}$/.test(String(ageQuery)) ? Number(ageQuery) : undefined,
         featured: featuredQuery === '1' || featuredQuery === 'true',
         classValue: CLASS_VALUES.includes(queryString(classQuery) as string) ? (queryString(classQuery) as string) : undefined,
+        format: ['course', 'live_class'].includes(queryString(formatQuery) as string) ? (queryString(formatQuery) as string) : undefined,
       },
     );
     // Typo tolerance only for real keyword searches (?exact=1 = "search instead for what I typed").

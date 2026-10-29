@@ -677,7 +677,7 @@ export class ProductsService {
     sortBy?: 'newest' | 'price_asc' | 'price_desc' | 'rating' | 'popularity',
     attributesFilter?: Record<string, string[]>,
     search?: string,
-    learning?: { curriculum?: string; age?: number; featured?: boolean; classValue?: string },
+    learning?: { curriculum?: string; age?: number; featured?: boolean; classValue?: string; format?: string },
   ): Promise<any> {
     const productModel = this.databaseService.repositories.productModel;
     const productVariantModel =
@@ -688,6 +688,8 @@ export class ProductsService {
       status: 'active',
       isDelete: false, isTest: { $ne: true },
     };
+    // Online course / live class listings (Product.deliveryFormat).
+    if (learning?.format === 'course' || learning?.format === 'live_class') query.deliveryFormat = learning.format;
 
     // Keyword search together with every filter below, so a search results
     // page can page and filter on the server (the plain search endpoint can't).
