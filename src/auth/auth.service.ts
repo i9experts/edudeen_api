@@ -5,6 +5,7 @@ import {
   InternalServerErrorException,
   UnauthorizedException,
   BadRequestException,
+  NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { Optional } from '@nestjs/common';
@@ -378,6 +379,32 @@ export class AuthService {
       };
     } catch (error) {
       throw this.mapError(error, 'Could not open a seller account');
+    }
+  }
+
+  /** A signed-in seller signs into the buyer account that already exists on the same email
+   *  (never creates one). Mirror of becomeSeller. */
+  async switchToBuyer(sellerId: string) {
+    try {
+      const { userModel, sellerModel } = this.databaseService.repositories;
+      const seller: any = await sellerModel.findById(sellerId).select('email').lean();
+      if (!seller) throw new UnauthorizedException('Your account is not available');
+      const buyer: any = await userModel.findOne({ email: seller.email });
+      if (!buyer) throw new NotFoundException('There is no buyer account for this email');
+      if (!buyer.isVerified || buyer.isDelete || buyer.status === 'deleted' || buyer.status === 'suspended') {
+        throw new UnauthorizedException('The buyer account for this email is not available');
+      }
+      const { accessToken, refreshToken } = await this.issueSession(buyer);
+      return {
+        message: 'Buyer account ready',
+        success: true,
+        data: {
+          user: { id: buyer._id, name: buyer.name, email: buyer.email, role: buyer.role, image: buyer.profileImage || null },
+          token: { accessToken, refreshToken },
+        },
+      };
+    } catch (error) {
+      throw this.mapError(error, 'Could not open your buyer account');
     }
   }
 

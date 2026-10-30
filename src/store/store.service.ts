@@ -1169,6 +1169,11 @@ export class StoreService {
 
     const filter: any = { storeId, isDelete: false, status: 'active', isTest: { $ne: true } };
     if (qType && qType !== 'all') filter.type = qType;
+    // Buyer-facing kind filter: physical | digital (downloads only) | course | live_class.
+    const qKind = queryString(query.kind);
+    if (qKind === 'physical') filter.type = 'physical';
+    else if (qKind === 'digital') { filter.type = 'digital'; filter.deliveryFormat = { $nin: ['course', 'live_class'] }; }
+    else if (qKind === 'course' || qKind === 'live_class') filter.deliveryFormat = qKind;
     // `Product.categoryId` is the store's single fixed root category — every
     // product in a store shares the exact same value there, so filtering on
     // it within one store's own listing is meaningless (matches either

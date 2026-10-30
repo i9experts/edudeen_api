@@ -91,6 +91,15 @@ export class AuthController {
     return this.authService.becomeSeller(req.user.userId);
   }
 
+  // Seller → the buyer account on the same email (only if it exists).
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Post('switch-to-buyer')
+  async switchToBuyer(@Req() req: any) {
+    return this.authService.switchToBuyer(req.user.userId);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   async logout(@Req() req: any) {
