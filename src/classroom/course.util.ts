@@ -94,12 +94,14 @@ export function cleanCertificateConfig(raw: unknown): CertificateConfig {
   if (raw === null) return { ...EMPTY_CERT_CONFIG };
   if (typeof raw !== 'object' || Array.isArray(raw)) throw new BadRequestException('certificateConfig must be an object');
   const c = raw as Record<string, unknown>;
+  const signatureImageUrl = certImage(c.signatureImageUrl, 'Signature image');
   return {
     watermarkText: certText(c.watermarkText, 40, 'Watermark text'),
     watermarkImageUrl: certImage(c.watermarkImageUrl, 'Watermark image'),
     stampImageUrl: certImage(c.stampImageUrl, 'Stamp image'),
     signatureName: certText(c.signatureName, 80, 'Signature name'),
     signatureTitle: certText(c.signatureTitle, 80, 'Signature title'),
+    ...(signatureImageUrl ? { signatureImageUrl } : {}),
     issuerName: certText(c.issuerName, 80, 'Issuer name'),
   };
 }

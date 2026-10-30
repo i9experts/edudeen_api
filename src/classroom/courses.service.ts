@@ -323,6 +323,7 @@ export class CoursesService {
         config: {
           watermarkText: cfg.watermarkText, watermarkImageUrl: cfg.watermarkImageUrl, stampImageUrl: cfg.stampImageUrl,
           signatureName: cfg.signatureName, signatureTitle: cfg.signatureTitle, issuerName: cfg.issuerName,
+          ...(cfg.signatureImageUrl ? { signatureImageUrl: cfg.signatureImageUrl } : {}),
         },
       },
     };

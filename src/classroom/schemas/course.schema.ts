@@ -15,6 +15,8 @@ export interface CertificateConfig {
   stampImageUrl: string | null;
   signatureName: string | null;
   signatureTitle: string | null;
+  /** Optional drawn/uploaded signature picture (transparent PNG). */
+  signatureImageUrl?: string | null;
   issuerName: string | null;
 }
 
