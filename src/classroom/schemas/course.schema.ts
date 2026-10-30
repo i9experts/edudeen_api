@@ -17,6 +17,8 @@ export interface CertificateConfig {
   signatureTitle: string | null;
   /** Optional drawn/uploaded signature picture (transparent PNG). */
   signatureImageUrl?: string | null;
+  /** Optional logo for the certificate header; empty = the store's own logo, then Edudeen's. */
+  logoImageUrl?: string | null;
   issuerName: string | null;
 }
 

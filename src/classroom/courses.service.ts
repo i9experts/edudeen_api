@@ -309,7 +309,7 @@ export class CoursesService {
     const p: any = await this.progressModel.findOne({ certificateCode: String(code ?? '').toUpperCase() }).lean();
     if (!p) throw new NotFoundException('No certificate with that code');
     const product: any = await this.r.productModel.findById(p.productId).select('name slug storeId').lean();
-    const store: any = product ? await this.r.storeModel.findById(product.storeId).select('name slug').lean() : null;
+    const store: any = product ? await this.r.storeModel.findById(product.storeId).select('name slug logo').lean() : null;
     const course: any = await this.r.courseModel.findOne({ productId: p.productId }).select('instructor certificateConfig').lean();
     const d = p.certificateDetails ?? null;
     const cfg = { ...EMPTY_CERT_CONFIG, ...(course?.certificateConfig ?? {}) };
@@ -324,7 +324,9 @@ export class CoursesService {
           watermarkText: cfg.watermarkText, watermarkImageUrl: cfg.watermarkImageUrl, stampImageUrl: cfg.stampImageUrl,
           signatureName: cfg.signatureName, signatureTitle: cfg.signatureTitle, issuerName: cfg.issuerName,
           ...(cfg.signatureImageUrl ? { signatureImageUrl: cfg.signatureImageUrl } : {}),
+          ...(cfg.logoImageUrl ? { logoImageUrl: cfg.logoImageUrl } : {}),
         },
+        storeLogoUrl: store?.logo ?? null,
       },
     };
   }

@@ -95,7 +95,9 @@ export function cleanCertificateConfig(raw: unknown): CertificateConfig {
   if (typeof raw !== 'object' || Array.isArray(raw)) throw new BadRequestException('certificateConfig must be an object');
   const c = raw as Record<string, unknown>;
   const signatureImageUrl = certImage(c.signatureImageUrl, 'Signature image');
+  const logoImageUrl = certImage(c.logoImageUrl, 'Logo image');
   return {
+    ...(logoImageUrl ? { logoImageUrl } : {}),
     watermarkText: certText(c.watermarkText, 40, 'Watermark text'),
     watermarkImageUrl: certImage(c.watermarkImageUrl, 'Watermark image'),
     stampImageUrl: certImage(c.stampImageUrl, 'Stamp image'),
