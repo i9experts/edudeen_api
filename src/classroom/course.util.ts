@@ -130,6 +130,36 @@ export function courseTotals(sections: { lessons: { durationMinutes?: number | n
   };
 }
 
+export type AccessDaysEntry = { from: Date | string; days: number | null };
+
+/**
+ * The access length that applied on `boughtAt`. The log lists "from <date>, access is <days>"; the entry in force on
+ * the purchase day wins, so a seller changing the length later only affects NEW buyers. No log = the current value.
+ */
+export function accessDaysAt(course: { accessDays?: number | null; accessDaysLog?: AccessDaysEntry[] | null } | null | undefined, boughtAt: Date | string | null | undefined): number | null {
+  const log = course?.accessDaysLog;
+  if (!log?.length || !boughtAt) return course?.accessDays ?? null;
+  const t = new Date(boughtAt).getTime();
+  let days: number | null | undefined;
+  let best = -Infinity;
+  for (const e of log) {
+    const from = new Date(e.from).getTime();
+    if (from <= t && from >= best) { best = from; days = e.days; }
+  }
+  return days === undefined ? (course?.accessDays ?? null) : days;
+}
+
+/** The log to store when the seller saves `newDays`; null = nothing changed (leave the stored log alone). */
+export function nextAccessDaysLog(existing: { accessDays?: number | null; accessDaysLog?: AccessDaysEntry[] | null } | null | undefined, newDays: number | null, now = new Date()): AccessDaysEntry[] | null {
+  const current = existing?.accessDays ?? null;
+  if (existing && current === newDays) return null;
+  const log: AccessDaysEntry[] = (existing?.accessDaysLog ?? []).map(e => ({ from: e.from, days: e.days }));
+  // First change on a course that has sold before: everything bought until now keeps the old length.
+  if (existing && !log.length) log.push({ from: new Date(0), days: current });
+  log.push({ from: now, days: newDays });
+  return log;
+}
+
 /** The date a purchased course stops being available, or null for lifetime access. */
 export function accessExpiry(paidAt: Date | string | null | undefined, accessDays: number | null | undefined): Date | null {
   if (!accessDays || !paidAt) return null;

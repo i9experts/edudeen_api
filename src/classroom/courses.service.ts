@@ -12,7 +12,7 @@ import { UploadedAssetsService } from '../upload/uploaded-assets.service';
 import { verifyStoreOwnershipStrict } from '../common/store-ownership.util';
 import { CourseProgress, CourseProgressDocument } from './schemas/course.schema';
 import { JOIN_OPENS_MINUTES, joinWindowOpen, liveClassBuyerIds, liveClassEmail, liveEndsAt, liveStatusOf, registrationOpen } from './live-class.util';
-import { accessExpiry, certificateCode, cleanCertificateConfig, cleanCertificateDetails, cleanCourseInput, EMPTY_CERT_CONFIG, courseTotals, lessonIds, paidSeatFilter, scoreQuiz } from './course.util';
+import { accessDaysAt, accessExpiry, nextAccessDaysLog,certificateCode, cleanCertificateConfig, cleanCertificateDetails, cleanCourseInput, EMPTY_CERT_CONFIG, courseTotals, lessonIds, paidSeatFilter, scoreQuiz } from './course.util';
 
 const LESSON_LINK_SECONDS = 3600;
 
@@ -38,6 +38,17 @@ export class CoursesService {
     return product;
   }
 
+  /**
+   * Learner-side lookup: a course the seller has since deleted (or switched to draft / paid / free) is still found,
+   * because buyers keep it until THEIR own access window ends. `assertLearner` then decides who may open it.
+   */
+  private async findLearnerProduct(idOrSlug: string) {
+    let product: any = await this.r.productModel.findOne({ slug: idOrSlug, isTest: { $ne: true } }).sort({ isDelete: 1 }).lean();
+    if (!product && isValidObjectId(idOrSlug)) product = await this.r.productModel.findOne({ _id: idOrSlug, isTest: { $ne: true } }).lean();
+    if (!product) throw new NotFoundException('Course not found');
+    return product;
+  }
+
   /** True when this user has a paid, non-refunded order line for the product. */
   async hasPurchased(userId: string, productId: string) {
     const order = await this.r.orderModel.findOne({ ...paidSeatFilter(productId), userId }).select('_id').lean();
@@ -56,10 +67,13 @@ export class CoursesService {
     if (product.removedByAdmin) throw new NotFoundException('This course is no longer available');
     if (String(product.sellerId) === userId) return; // the teacher can always view their own course
     const boughtAt = await this.lastPurchaseAt(userId, String(product._id));
+    // A deleted course only exists for people who bought it.
+    if (!boughtAt && product.isDelete) throw new NotFoundException('Course not found');
     if (!boughtAt) throw new ForbiddenException('Buy this course to start learning');
     if (product.deliveryFormat === 'course') {
-      const course: any = await this.r.courseModel.findOne({ productId: String(product._id) }).select('accessDays').lean();
-      const until = accessExpiry(boughtAt, course?.accessDays);
+      const course: any = await this.r.courseModel.findOne({ productId: String(product._id) }).select('accessDays accessDaysLog').lean();
+      // The length that applied on the day they bought, not whatever the seller set later.
+      const until = accessExpiry(boughtAt, accessDaysAt(course, boughtAt));
       if (until && until.getTime() < Date.now()) throw new ForbiddenException('Your access to this course has ended');
     }
   }
@@ -115,10 +129,12 @@ export class CoursesService {
     if (!totalLessons && ['active', 'pending_review', 'scheduled'].includes(product.status) && product.deliveryFormat === 'course') {
       throw new BadRequestException('A published course needs at least one lesson — unpublish it first to empty it');
     }
+    // Changing the access length never touches people who already bought: the log says which length applied from when.
+    const accessLog = body?.accessDays !== undefined ? nextAccessDaysLog(existing, accessDays) : null;
     await this.r.courseModel.findOneAndUpdate(
       { productId },
       // Outcomes / instructor / access length are only written when the request carries them (older clients keep what is stored).
-      { $set: { sections, certificateEnabled, storeId, sellerId, ...(body?.outcomes !== undefined ? { outcomes } : {}), ...(body?.instructor !== undefined ? { instructor } : {}), ...(body?.accessDays !== undefined ? { accessDays } : {}), ...(certificateConfig ? { certificateConfig } : {}) } },
+      { $set: { sections, certificateEnabled, storeId, sellerId, ...(body?.outcomes !== undefined ? { outcomes } : {}), ...(body?.instructor !== undefined ? { instructor } : {}), ...(body?.accessDays !== undefined ? { accessDays } : {}), ...(accessLog ? { accessDaysLog: accessLog } : {}), ...(certificateConfig ? { certificateConfig } : {}) } },
       { upsert: true, returnDocument: 'after' },
     );
     if (product.deliveryFormat !== 'course') await this.r.productModel.updateOne({ _id: productId }, { $set: { deliveryFormat: 'course', liveSession: null } });
@@ -186,7 +202,7 @@ export class CoursesService {
   }
 
   async getLearnView(userId: string, idOrSlug: string) {
-    const product = await this.findProduct(idOrSlug);
+    const product = await this.findLearnerProduct(idOrSlug);
     await this.assertLearner(userId, product);
     const productId = String(product._id);
     const course: any = await this.r.courseModel.findOne({ productId }).lean();
@@ -203,7 +219,7 @@ export class CoursesService {
         certificateDetailsRequired: !!course.certificateEnabled && !progress?.certificateDetails && !progress?.certificateCode,
         outcomes: course.outcomes ?? [],
         instructor: course.instructor ?? { name: '', bio: '' },
-        accessExpiresAt: String(product.sellerId) === userId ? null : accessExpiry(await this.lastPurchaseAt(userId, productId), course.accessDays),
+        accessExpiresAt: String(product.sellerId) === userId ? null : accessExpiry(await this.lastPurchaseAt(userId, productId), accessDaysAt(course, await this.lastPurchaseAt(userId, productId))),
         progress: {
           completedLessonIds: progress?.completedLessonIds ?? [],
           quizScores: progress?.quizScores ?? {},
@@ -216,7 +232,7 @@ export class CoursesService {
   }
 
   async getLesson(userId: string, idOrSlug: string, lessonId: string) {
-    const product = await this.findProduct(idOrSlug);
+    const product = await this.findLearnerProduct(idOrSlug);
     await this.assertLearner(userId, product);
     const lesson = await this.findLesson(String(product._id), lessonId);
     await this.progressModel.updateOne({ userId, productId: String(product._id) }, { $set: { lastLessonId: lessonId } }, { upsert: true });
@@ -249,7 +265,7 @@ export class CoursesService {
   }
 
   async markComplete(userId: string, idOrSlug: string, lessonId: string) {
-    const product = await this.findProduct(idOrSlug);
+    const product = await this.findLearnerProduct(idOrSlug);
     await this.assertLearner(userId, product);
     const lesson = await this.findLesson(String(product._id), lessonId);
     if (lesson.type === 'quiz') throw new BadRequestException('Pass the quiz to complete this lesson');
@@ -257,7 +273,7 @@ export class CoursesService {
   }
 
   async submitQuiz(userId: string, idOrSlug: string, lessonId: string, answers: unknown) {
-    const product = await this.findProduct(idOrSlug);
+    const product = await this.findLearnerProduct(idOrSlug);
     await this.assertLearner(userId, product);
     const lesson = await this.findLesson(String(product._id), lessonId);
     if (lesson.type !== 'quiz' || !lesson.quiz) throw new BadRequestException('This lesson is not a quiz');
@@ -275,7 +291,7 @@ export class CoursesService {
    * (it is printed from these details, so it cannot change afterwards). If the course is already finished the certificate is issued now.
    */
   async saveCertificateDetails(userId: string, idOrSlug: string, body: unknown) {
-    const product = await this.findProduct(idOrSlug);
+    const product = await this.findLearnerProduct(idOrSlug);
     await this.assertLearner(userId, product);
     const productId = String(product._id);
     const course: any = await this.r.courseModel.findOne({ productId }).lean();
@@ -349,11 +365,11 @@ export class CoursesService {
     const products: any[] = await this.r.productModel.find({ _id: { $in: valid }, deliveryFormat: { $in: ['course', 'live_class'] }, removedByAdmin: { $ne: true } }).select('_id name slug images deliveryFormat liveSession.startsAt liveSession.durationMinutes liveSession.platform liveSession.status storeId').lean();
     const courseIds = products.filter(p => p.deliveryFormat === 'course').map(p => String(p._id));
     const [courses, progress] = await Promise.all([
-      this.r.courseModel.find({ productId: { $in: courseIds } }).select('productId sections accessDays').lean(),
+      this.r.courseModel.find({ productId: { $in: courseIds } }).select('productId sections accessDays accessDaysLog').lean(),
       this.progressModel.find({ userId, productId: { $in: courseIds } }).lean(),
     ]);
     const total = new Map(courses.map((c: any) => [c.productId, lessonIds(c.sections).length]));
-    const accessDays = new Map(courses.map((c: any) => [c.productId, c.accessDays ?? null]));
+    const courseById = new Map(courses.map((c: any) => [c.productId, c]));
     const prog = new Map(progress.map((p: any) => [p.productId, p]));
     return {
       success: true,
@@ -362,7 +378,7 @@ export class CoursesService {
         const pr: any = prog.get(id);
         const lessons = total.get(id) ?? 0;
         const completed = pr?.completedLessonIds?.length ?? 0;
-        const expires = p.deliveryFormat === 'course' ? accessExpiry(boughtAt.get(id) ? new Date(boughtAt.get(id)!) : null, accessDays.get(id)) : null;
+        const expires = p.deliveryFormat === 'course' ? accessExpiry(boughtAt.get(id) ? new Date(boughtAt.get(id)!) : null, accessDaysAt(courseById.get(id), boughtAt.get(id) ? new Date(boughtAt.get(id)!) : null)) : null;
         const live = p.deliveryFormat === 'live_class' && p.liveSession ? p.liveSession : null;
         return {
           productId: id, name: p.name, slug: p.slug, image: p.images?.[0] ?? null, deliveryFormat: p.deliveryFormat,

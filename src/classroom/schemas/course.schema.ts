@@ -77,6 +77,10 @@ export class Course {
   @Prop({ type: Number, default: null })
   accessDays: number | null;
 
+  // History of the access length: "from <date> access is <days>". A buyer's window uses the entry in force the day they bought.
+  @Prop({ type: [{ _id: false, from: Date, days: { type: Number, default: null } }], default: [] })
+  accessDaysLog: { from: Date; days: number | null }[];
+
   // Seller's watermark / stamp / signature printed on every certificate of this course.
   @Prop({ type: Object, default: null })
   certificateConfig: CertificateConfig | null;
