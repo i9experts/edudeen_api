@@ -100,6 +100,15 @@ export class AuthController {
     return this.authService.switchToBuyer(req.user.userId);
   }
 
+  // Seller → opens a buyer account on the same email (if none exists yet) and signs into it.
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Post('create-buyer-account')
+  async createBuyerAccount(@Req() req: any) {
+    return this.authService.switchToBuyer(req.user.userId, true);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   async logout(@Req() req: any) {

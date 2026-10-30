@@ -384,12 +384,29 @@ export class AuthService {
 
   /** A signed-in seller signs into the buyer account that already exists on the same email
    *  (never creates one). Mirror of becomeSeller. */
-  async switchToBuyer(sellerId: string) {
+  async switchToBuyer(sellerId: string, createIfMissing = false) {
     try {
       const { userModel, sellerModel } = this.databaseService.repositories;
-      const seller: any = await sellerModel.findById(sellerId).select('email').lean();
+      const seller: any = await sellerModel.findById(sellerId).lean();
       if (!seller) throw new UnauthorizedException('Your account is not available');
-      const buyer: any = await userModel.findOne({ email: seller.email });
+      let buyer: any = await userModel.findOne({ email: seller.email });
+      if (!buyer && createIfMissing) {
+        if (!seller.isVerified || seller.isDelete || seller.status === 'deleted' || seller.status === 'suspended') {
+          throw new UnauthorizedException('Your account cannot open a buyer account');
+        }
+        // Same verified email + password as the seller account, so no second sign-up or OTP.
+        buyer = new userModel({ email: seller.email, role: 'user' });
+        Object.assign(buyer, {
+          name: seller.name,
+          password: seller.password,
+          phone: seller.phone,
+          address: seller.address,
+          profileImage: seller.profileImage,
+          role: 'user',
+          isVerified: true,
+        });
+        await buyer.save();
+      }
       if (!buyer) throw new NotFoundException('There is no buyer account for this email');
       if (!buyer.isVerified || buyer.isDelete || buyer.status === 'deleted' || buyer.status === 'suspended') {
         throw new UnauthorizedException('The buyer account for this email is not available');
