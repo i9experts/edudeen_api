@@ -51,6 +51,7 @@ import { SeoModule } from './seo/seo.module';
 import { AiStudioModule } from './ai-studio/ai-studio.module';
 import { ChatbotModule } from './chatbot/chatbot.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { RealtimeModule } from './realtime/realtime.module';
 import { AdminReauthModule } from './admin-reauth/admin-reauth.module';
 import { AdminConfigModule } from './admin-config/admin-config.module';
 import { AdminAnnouncementsModule } from './admin-announcements/admin-announcements.module';
@@ -93,6 +94,7 @@ import { PhoneVerificationModule } from './phone-verification/phone-verification
     DatabaseModule,
     QueueModule,
     NotificationsModule,
+    RealtimeModule,
     HealthModule,
     ActivityLogModule,
     AuthModule,

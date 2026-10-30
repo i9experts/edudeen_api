@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
+import { RealtimeService } from '../../realtime/realtime.service';
 import { FxSnapshot, FxSnapshotSchema } from '../../exchange-rate/schemas/exchange-rate.schema';
 
 export type OrderDocument = HydratedDocument<Order>;
@@ -568,3 +569,30 @@ OrderSchema.index({ createdAt: -1 });
 OrderSchema.index({ 'sellerOrders.storeId': 1, createdAt: -1 });
 OrderSchema.index({ userId: 1, createdAt: -1 });
 OrderSchema.index({ 'sellerOrders.sellerId': 1, createdAt: -1 });
+
+// Live updates: whenever an order is created or changed - by ANY code path (checkout, webhook, seller, admin, cron) -
+// tell exactly the people it concerns (the buyer, each store involved, admin). Topic names only, no data.
+function tellOrderParties(docs: Array<{ userId?: unknown; sellerOrders?: Array<{ storeId?: unknown }> }>) {
+  try {
+    const rt = RealtimeService.instance;
+    if (!rt || !docs.length) return;
+    const users = new Set<string>();
+    const stores = new Set<string>();
+    for (const d of docs) {
+      if (d?.userId) users.add(String(d.userId));
+      for (const so of d?.sellerOrders ?? []) if (so?.storeId) stores.add(String(so.storeId));
+    }
+    rt.emitTo({ users: [...users], stores: [...stores] }, ['orders', 'finance', 'customers', 'analytics', 'returns', 'refunds']);
+  } catch { /* never affects a write */ }
+}
+OrderSchema.post('save', function (doc) { tellOrderParties([doc as any]); });
+OrderSchema.post('insertMany', function (docs: any) { tellOrderParties(Array.isArray(docs) ? docs : []); });
+for (const op of ['updateOne', 'updateMany', 'findOneAndUpdate'] as const) {
+  // Look up who is affected BEFORE the update (the update may change the very fields the filter matches on).
+  OrderSchema.pre(op, async function () {
+    try {
+      (this as any)._rtDocs = await (this as any).model.find((this as any).getFilter()).select('userId sellerOrders.storeId').limit(100).lean();
+    } catch { (this as any)._rtDocs = []; }
+  });
+  OrderSchema.post(op, function () { tellOrderParties((this as any)._rtDocs ?? []); });
+}

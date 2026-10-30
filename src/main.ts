@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { RealtimeService } from './realtime/realtime.service';
 import { AdminConfigService } from './admin-config/admin-config.service';
 import { StaffService } from './staff/staff.service';
 import { StaffExtrasService } from './staff/staff-extras.service';
@@ -54,6 +55,18 @@ async function bootstrap() {
   }
 
   app.use(cookieParser());
+  // Live updates: after any SUCCESSFUL write, tell every connected screen which topic changed (no data in the message).
+  const realtime = app.get(RealtimeService);
+  app.use((req: any, res: any, next: any) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
+      res.on('finish', () => {
+        try {
+          if (res.statusCode < 400) realtime.publishFromRequest(req);
+        } catch { /* never affects the request */ }
+      });
+    }
+    next();
+  });
   app.use(requestAuditMiddleware); // ip + user-agent for audit entries (ActivityLogService fills them in when a caller omits them)
 
   // Baseline security headers (no helmet dependency). The API serves JSON plus the bot prerender HTML, so these are safe

@@ -1,6 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { AiStudioCreditsService } from '../ai-studio/ai-studio-credits.service';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { RealtimeService } from 'src/realtime/realtime.service';
 import { Cron } from '@nestjs/schedule';
 import { DatabaseService } from 'src/database/databaseservice';
 import { LoyaltyService } from 'src/loyalty/loyalty.service';
@@ -46,6 +47,7 @@ export class SchedulerService {
     private readonly activityLogService: ActivityLogService,
     private readonly adminFinanceService: AdminFinanceService,
     private readonly notificationsService: NotificationsService,
+    @Optional() private readonly realtime?: RealtimeService,
   ) {}
 
   /**
@@ -123,7 +125,7 @@ export class SchedulerService {
         published++;
         notifyProductPublished(this.notificationsService, p);
       }
-      if (published > 0) this.logger.log(`Scheduled products published: ${published}`);
+      if (published > 0) { this.logger.log(`Scheduled products published: ${published}`); this.realtime?.emit('products'); }
     });
   }
 
@@ -201,6 +203,7 @@ export class SchedulerService {
     await this.runLocked('campaign-expiry', 50_000, async () => {
       const result = await this.adminMarketingService.expireCampaigns();
       if (result.expired > 0) {
+        this.realtime?.emit('campaigns');
         this.logger.log(`Campaigns expired: ${result.expired} moved to 'ended', rotation order compacted`);
       }
     });
@@ -215,6 +218,7 @@ export class SchedulerService {
     await this.runLocked('promotion-expiry', 50_000, async () => {
       const result = await this.promotionsService.runExpiryAndActivation();
       if (result.activated > 0 || result.expired > 0) {
+        this.realtime?.emit('banners');
         this.logger.log(`Promotions: ${result.activated} activated, ${result.expired} expired, ${result.expiringSoonNotified} expiring-soon notices sent`);
       }
     });
@@ -225,6 +229,7 @@ export class SchedulerService {
   async tickBanners() {
     await this.runLocked('banner-schedule', 50_000, async () => {
       const r = await this.bannersService.runScheduleTick();
+      if (r.activated > 0 || r.expired > 0) this.realtime?.emit('banners');
       if (r.activated > 0 || r.expired > 0) this.logger.log(`Banners: ${r.activated} went live, ${r.expired} expired`);
     });
   }
