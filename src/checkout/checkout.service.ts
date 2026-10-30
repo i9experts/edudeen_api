@@ -1,7 +1,4 @@
 import { bundleSavings } from '../classroom/bundle.util';
-import { paidSeatFilter } from '../classroom/course.util';
-import { capacityUsed } from '../classroom/live-seats.util';
-import { registrationOpen } from '../classroom/live-class.util';
 import {
   Injectable,
   BadRequestException,
@@ -394,18 +391,8 @@ export class CheckoutService {
 
       const seller = sellerMap.get(product.sellerId?.toString());
 
-      // A live class can't be bought once it has ended, or when its seats are full.
-      if (product.deliveryFormat === 'live_class' && product.liveSession) {
-        const live = product.liveSession;
-        const endsAt = new Date(live.startsAt).getTime() + (live.durationMinutes ?? 0) * 60000;
-        if (live.status === 'cancelled') throw new BadRequestException(`"${product.name}" was cancelled`);
-        if (endsAt < Date.now()) throw new BadRequestException(`"${product.name}" has already taken place`);
-        if (!registrationOpen(live)) throw new BadRequestException(`Registration for "${product.name}" has closed`);
-        if (live.capacity) {
-          const taken = capacityUsed(live.seatsTaken, await this.databaseService.repositories.orderModel.countDocuments(paidSeatFilter(product._id.toString())));
-          if (taken + cartItem.quantity > live.capacity) throw new BadRequestException(`"${product.name}" is full — no seats left`);
-        }
-      }
+      // Live classes are retired: an old listing that still carries that format can no longer be bought.
+      if ((product as any).deliveryFormat === 'live_class') throw new BadRequestException(`"${product.name}" is no longer available`);
 
       checkoutItems.push({
         productId: product._id.toString(),

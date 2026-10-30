@@ -142,9 +142,6 @@ export class InventoryService {
         productType: product.productType,
         deliveryFormat: (product as any).deliveryFormat ?? 'download',
         courseSummary: (product as any).deliveryFormat === 'course' ? (courseSummaryById.get(String(product._id)) ?? { lessonCount: 0, totalMinutes: 0 }) : null,
-        liveSession: (product as any).deliveryFormat === 'live_class' && (product as any).liveSession
-          ? { startsAt: (product as any).liveSession.startsAt, durationMinutes: (product as any).liveSession.durationMinutes, capacity: (product as any).liveSession.capacity ?? null, seatsTaken: (product as any).liveSession.seatsTaken ?? 0, status: (product as any).liveSession.status ?? 'scheduled', platform: (product as any).liveSession.platform }
-          : null,
         stock: stockDisplay,
         stockStatus,
         status: product.status,

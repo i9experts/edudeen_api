@@ -12,7 +12,6 @@ import { PromotionsService } from 'src/promotions/promotions.service';
 import { FinanceService } from 'src/finance/finance.service';
 import { AdminConfigService } from 'src/admin-config/admin-config.service';
 import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
-import { claimLiveSeats, releaseLiveSeats } from '../classroom/live-seats.util';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { GiftCardsService } from 'src/gift-cards/gift-cards.service';
 import { StripeConnectService } from 'src/stripe-connect/stripe-connect.service';
@@ -1688,9 +1687,7 @@ export class PaymentService {
   }
 
   /**
-   * Places the order(s) for a checkout. Live-class lines claim a seat atomically first (full / cancelled class = the
-   * whole call fails, the same way a stock shortage does, so a captured card payment is auto-refunded by the caller);
-   * the seats go back if anything below fails. Retries/duplicate webhooks hit the existing-orders guard before any claim.
+   * Places the order(s) for a checkout. Retries/duplicate webhooks hit the existing-orders guard first.
    */
   private async createOrder(
     userId: string,
@@ -1704,16 +1701,7 @@ export class PaymentService {
   ) {
     const existing = await orderModel.find({ checkoutId: checkout._id.toString(), isDelete: false });
     if (existing.length > 0) return existing;
-    const { productModel } = this.databaseService.repositories;
-    const claimed = await claimLiveSeats(productModel as any, orderModel, (checkout.items ?? []).filter((i: any) => i.type === 'digital'));
-    try {
-      return await this.createOrderInner(userId, checkout, orderModel, addressModel, physicalPayment, digitalPayment, currencyConversion, connectInfo);
-    } catch (err) {
-      // If the order already exists the seat is genuinely taken (the failure was in the follow-up bookkeeping).
-      const placed: any[] = await Promise.resolve().then(() => orderModel.find({ checkoutId: checkout._id.toString(), isDelete: false })).catch(() => [{}]);
-      if (!placed?.length) await releaseLiveSeats(productModel as any, claimed.map(c => ({ ...c, type: 'digital' })), true).catch(() => undefined);
-      throw err;
-    }
+    return this.createOrderInner(userId, checkout, orderModel, addressModel, physicalPayment, digitalPayment, currencyConversion, connectInfo);
   }
 
   private async createOrderInner(

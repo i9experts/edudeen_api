@@ -51,15 +51,8 @@ export class CartService {
       const storeLive = await this.databaseService.repositories.storeModel.exists({ _id: storeId, status: 'active', isDelete: false });
       if (!storeLive) throw new BadRequestException('Product not found');
 
-      // A cancelled live class, one past its registration deadline, or one that has ended can't be bought (checkout refuses it too).
-      if ((product as any).deliveryFormat === 'live_class') {
-        const ls: any = (product as any).liveSession;
-        if (ls?.status === 'cancelled') throw new BadRequestException('This live class has been cancelled');
-        const startsAt = ls?.startsAt ? new Date(ls.startsAt).getTime() : null;
-        const endsAt = startsAt != null ? startsAt + (Number(ls.durationMinutes) || 0) * 60_000 : null;
-        const closesAt = ls?.registrationDeadline ? new Date(ls.registrationDeadline).getTime() : endsAt;
-        if (closesAt != null && Date.now() >= closesAt) throw new BadRequestException('Registration for this live class is closed');
-      }
+      // Live classes are retired: an old listing that still carries that format can no longer be bought.
+      if ((product as any).deliveryFormat === 'live_class') throw new BadRequestException('This product is no longer available');
 
       // 2️⃣ Get variant
       const variant = await variantModel.findById(dto.productVariantId).lean();

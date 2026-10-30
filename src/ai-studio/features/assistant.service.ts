@@ -12,7 +12,7 @@ export const ASSISTANT_TOOLS: AiToolDef[] = [
       type: 'object',
       properties: {
         keywords: { type: 'array', items: { type: 'string' }, description: 'Subject/topic words (English or Urdu)' },
-        educationLevel: { type: 'string' }, productType: { type: 'string', enum: ['physical', 'digital', 'educational'] },
+        educationLevel: { type: 'string' }, productType: { type: 'string', enum: ['physical', 'digital'] },
         age: { type: 'integer' }, maxPrice: { type: 'number' }, minPrice: { type: 'number' },
         sort: { type: 'string', enum: ['newest', 'price_asc', 'price_desc', 'rating', 'popularity'] },
       },

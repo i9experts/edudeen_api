@@ -38,8 +38,6 @@ export class productController {
     @Query('page') pageQuery?: string,
     @Query('limit') limitQuery?: string,
     @Query('productType') productType?: string,
-    @Query('educationLevel') educationLevel?: string,
-    @Query('normalizedCustomLevel') normalizedCustomLevel?: string,
     @Query('campaignId') campaignId?: string,
     @Query('minPrice') minPriceQuery?: string,
     @Query('maxPrice') maxPriceQuery?: string,
@@ -58,8 +56,6 @@ export class productController {
     id = queryString(id);
     searchQuery = queryString(searchQuery);
     productType = queryString(productType);
-    educationLevel = queryString(educationLevel);
-    normalizedCustomLevel = queryString(normalizedCustomLevel);
     campaignId = queryString(campaignId);
     const page = clampInt(pageQuery, 1, 1, 1000);
     const limit = clampInt(limitQuery, 10, 1, 100);
@@ -107,8 +103,6 @@ export class productController {
       limit,
       req.user?.userId ?? null,
       productType,
-      educationLevel,
-      normalizedCustomLevel,
       campaignId,
       parseNum(minPriceQuery),
       parseNum(maxPriceQuery),
@@ -121,7 +115,7 @@ export class productController {
         age: ageQuery !== undefined && /^\d{1,2}$/.test(String(ageQuery)) ? Number(ageQuery) : undefined,
         featured: featuredQuery === '1' || featuredQuery === 'true',
         classValue: CLASS_VALUES.includes(queryString(classQuery) as string) ? (queryString(classQuery) as string) : undefined,
-        format: ['course', 'live_class'].includes(queryString(formatQuery) as string) ? (queryString(formatQuery) as string) : undefined,
+        format: queryString(formatQuery) === 'course' ? (queryString(formatQuery) as string) : undefined,
       },
     );
     // Typo tolerance only for real keyword searches (?exact=1 = "search instead for what I typed").
@@ -155,18 +149,6 @@ export class productController {
   @Get('free-resources')
   async freeResources(@Req() req: any, @Query('limit') limit?: string) {
     return this.ProductsService.getFreeResources(clampInt(limit, 10, 1, 24), req.user?.userId ?? null);
-  }
-
-  @Get('education/facets')
-  async getEducationFacets() {
-    return this.ProductsService.getEducationFacets();
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('seller')
-  @Get('education/custom-level-suggestions')
-  async getCustomLevelSuggestions(@Query('q') q: string = '') {
-    return this.ProductsService.getCustomLevelSuggestions(q);
   }
 
   @UseGuards(OptionalJwtAuthGuard)

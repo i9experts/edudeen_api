@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { cleanClassRange } from './class-levels';
-import { CURRICULA, DELIVERY_FORMATS, DeliveryFormat, DownloadLimit, LicenseType, LICENSE_OPTION_LABEL, LICENSE_OPTION_NAME, LIVE_PLATFORMS } from './schemas/product.schema';
+import { CURRICULA, DELIVERY_FORMATS, DeliveryFormat, DownloadLimit, LicenseType, LICENSE_OPTION_LABEL, LICENSE_OPTION_NAME } from './schemas/product.schema';
 
 /** 'single_classroom' etc. for a variant that carries a "License" option. */
 export function licenseFromVariant(variant: any): string | null {
@@ -283,76 +283,22 @@ export function cleanDigitalSettings(
 }
 
 /**
- * `deliveryFormat` / `liveSession` from a create or edit body. A live class
- * needs a start time (in the future when it's being set or moved), a sensible
- * length and an https meeting link. `existing` is the product being edited.
+ * `deliveryFormat` from a create or edit body. Live classes are retired:
+ * 'live_class' is just an invalid value now (with a clear message).
  */
 export function cleanDeliveryFormat(
   body: Record<string, unknown>,
-  existing: { deliveryFormat?: string | null; liveSession?: any } | null,
-): { deliveryFormat?: DeliveryFormat; liveSession?: any } {
-  const out: { deliveryFormat?: DeliveryFormat; liveSession?: any } = {};
+  _existing?: { deliveryFormat?: string | null } | null,
+): { deliveryFormat?: DeliveryFormat } {
+  const out: { deliveryFormat?: DeliveryFormat } = {};
   if (body.deliveryFormat !== undefined) {
+    if (body.deliveryFormat === 'live_class') {
+      throw new BadRequestException('Live classes are no longer available. Choose files to download or an online course.');
+    }
     if (!(DELIVERY_FORMATS as readonly string[]).includes(body.deliveryFormat as string)) {
       throw new BadRequestException(`deliveryFormat must be one of: ${DELIVERY_FORMATS.join(', ')}`);
     }
     out.deliveryFormat = body.deliveryFormat as DeliveryFormat;
   }
-  const format = out.deliveryFormat ?? existing?.deliveryFormat ?? 'download';
-  if (format !== 'live_class') {
-    if (out.deliveryFormat !== undefined) out.liveSession = null;
-    return out;
-  }
-  if (body.liveSession === undefined) {
-    if (!existing?.liveSession) throw new BadRequestException('A live class needs a date, time and meeting link');
-    return out;
-  }
-  const raw = body.liveSession as Record<string, unknown> | null;
-  if (!raw || typeof raw !== 'object') throw new BadRequestException('A live class needs a date, time and meeting link');
-  const startsAt = new Date(raw.startsAt as string);
-  if (Number.isNaN(startsAt.getTime())) throw new BadRequestException('Pick when the live class starts');
-  const prevStart = existing?.liveSession?.startsAt ? new Date(existing.liveSession.startsAt).getTime() : null;
-  if (startsAt.getTime() !== prevStart && startsAt.getTime() < Date.now()) throw new BadRequestException('The live class must start in the future');
-  const durationMinutes = Number(raw.durationMinutes);
-  if (!Number.isInteger(durationMinutes) || durationMinutes < 15 || durationMinutes > 600) {
-    throw new BadRequestException('Class length should be between 15 minutes and 10 hours');
-  }
-  const meetingUrl = typeof raw.meetingUrl === 'string' ? raw.meetingUrl.trim() : '';
-  let url: URL | null = null;
-  try { url = new URL(meetingUrl); } catch { url = null; }
-  if (!url || url.protocol !== 'https:' || meetingUrl.length > 500) throw new BadRequestException('Add the https:// meeting link (Zoom, Google Meet, Teams…)');
-  const platform = (LIVE_PLATFORMS as readonly string[]).includes(raw.platform as string) ? (raw.platform as string) : 'other';
-  let capacity: number | null = null;
-  if (raw.capacity !== undefined && raw.capacity !== null && raw.capacity !== '') {
-    capacity = Number(raw.capacity);
-    if (!Number.isInteger(capacity) || capacity < 1 || capacity > 10000) throw new BadRequestException('Seats should be between 1 and 10,000 (or leave empty for no limit)');
-  }
-  const notes = typeof raw.notes === 'string' ? raw.notes.trim().slice(0, 1000) : '';
-  const prev = existing?.liveSession ?? null;
-  if (prev?.status === 'cancelled') throw new BadRequestException('This live class was cancelled and cannot be changed');
-  let registrationDeadline: Date | null = null;
-  if (raw.registrationDeadline !== undefined && raw.registrationDeadline !== null && raw.registrationDeadline !== '') {
-    registrationDeadline = new Date(raw.registrationDeadline as string);
-    if (Number.isNaN(registrationDeadline.getTime())) throw new BadRequestException('Registration deadline is not a valid date');
-    if (registrationDeadline.getTime() >= startsAt.getTime()) throw new BadRequestException('Registration must close before the class starts');
-  }
-  let recordingUrl: string | null = null;
-  if (typeof raw.recordingUrl === 'string' && raw.recordingUrl.trim()) {
-    recordingUrl = raw.recordingUrl.trim();
-    let ru: URL | null = null;
-    try { ru = new URL(recordingUrl); } catch { ru = null; }
-    if (!ru || ru.protocol !== 'https:' || recordingUrl.length > 500) throw new BadRequestException('The recording link must be an https:// link');
-  }
-  // Server-owned fields survive an edit: seats already sold, status, reschedule stamp.
-  const moved = prevStart !== null && prevStart !== startsAt.getTime();
-  out.liveSession = {
-    startsAt, durationMinutes, platform, meetingUrl, capacity, notes, registrationDeadline, recordingUrl,
-    status: 'scheduled',
-    cancelledAt: null,
-    cancelReason: '',
-    rescheduledAt: moved ? new Date() : (prev?.rescheduledAt ?? null),
-    seatsTaken: Number(prev?.seatsTaken) > 0 ? Number(prev.seatsTaken) : 0,
-  };
-  if (capacity !== null && out.liveSession.seatsTaken > capacity) throw new BadRequestException('Seats cannot be lower than the seats already sold (' + out.liveSession.seatsTaken + ')');
   return out;
 }

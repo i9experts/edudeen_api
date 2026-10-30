@@ -61,9 +61,6 @@ export const NOTIFICATION_TYPES = {
   PRODUCT_SCHEDULED: 'product_scheduled',
   PRODUCT_PUBLISHED: 'product_published',
   LISTING_IN_REVIEW: 'listing_in_review',
-  LIVE_CLASS_REMINDER: 'live_class_reminder',
-  LIVE_CLASS_CHANGED: 'live_class_changed',
-  LIVE_CLASS_CANCELLED: 'live_class_cancelled',
 } as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[keyof typeof NOTIFICATION_TYPES];

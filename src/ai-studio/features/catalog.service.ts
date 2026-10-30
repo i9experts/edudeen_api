@@ -4,7 +4,7 @@ import { Types } from 'mongoose';
 import { DatabaseService } from 'src/database/databaseservice';
 
 export const EDUCATION_LEVELS = ['preschool', 'primary_school', 'middle_school', 'secondary_school', 'college', 'university', 'professional_courses', 'islamic_education', 'other'];
-export const PRODUCT_TYPES = ['physical', 'digital', 'educational'];
+export const PRODUCT_TYPES = ['physical', 'digital'];
 export const CURRICULA_KEYS = ['federal', 'punjab', 'sindh', 'kpk', 'balochistan', 'ajk_gb', 'cambridge_o', 'cambridge_a', 'igcse', 'ib', 'aku_eb', 'madrasa'];
 
 export interface SearchFilters {

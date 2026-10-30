@@ -51,7 +51,7 @@ describe('home shelves: bestsellers + free resources', () => {
     expect(res.data.products).toHaveLength(1);
   });
 
-  it('free resources: price-0 digital/educational first, then sample-offering products, never test products, no duplicates', async () => {
+  it('free resources: price-0 digital first, then sample-offering products, never test products, no duplicates', async () => {
     const { svc, productModel } = make({
       variants: [{ productId: A }, { productId: A }],
       free: [{ _id: A }],
@@ -60,7 +60,7 @@ describe('home shelves: bestsellers + free resources', () => {
     const res = await svc.getFreeResources(10, null);
     for (const call of productModel.find.mock.calls) {
       expect(call[0].isTest).toEqual({ $ne: true });
-      expect(call[0].productType).toEqual({ $in: ['digital', 'educational'] });
+      expect(call[0].productType).toEqual('digital');
     }
     expect(res.data.products.map((p: any) => [p._id, p.freeKind])).toEqual([[A, 'free'], [C, 'sample']]);
   });

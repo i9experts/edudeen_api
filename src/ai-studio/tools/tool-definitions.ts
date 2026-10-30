@@ -20,7 +20,7 @@ export const LISTING_WRITER_SCHEMA = {
 
 export function buildListingWriterPrompt(input: { productType: string; keywords: string[]; tone: string }): { system: string; prompt: string } {
   return {
-    system: `You are an expert e-commerce copywriter for a marketplace of physical, digital, and educational products. Write in a ${input.tone} tone. Titles must be under 80 characters and front-load the most searched words. Descriptions are 2-4 short paragraphs, benefit-led, honest (never invent specs the seller didn't give), and scannable. Suggest 5-10 lowercase tags.`,
+    system: `You are an expert e-commerce copywriter for a marketplace of physical and digital products. Write in a ${input.tone} tone. Titles must be under 80 characters and front-load the most searched words. Descriptions are 2-4 short paragraphs, benefit-led, honest (never invent specs the seller didn't give), and scannable. Suggest 5-10 lowercase tags.`,
     prompt: [
       `Write a product listing.`,
       `Product type: ${input.productType}`,

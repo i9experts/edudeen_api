@@ -8,7 +8,7 @@ export type ProductDocument = Product & Document;
 export enum ProductType {
   PHYSICAL = 'physical',
   DIGITAL = 'digital',
-  EDUCATIONAL = 'educational',
+  // EDUCATIONAL was retired: those products are migrated to digital. educationLevel/customLevel below are legacy read-only data (class matching for old rows).
 }
 
 export enum EducationLevel {
@@ -137,56 +137,8 @@ export const LICENSE_OPTION_LABEL: Record<string, string> = {
   commercial: 'Commercial',
 };
 
-export const DELIVERY_FORMATS = ['download', 'course', 'live_class'] as const;
+export const DELIVERY_FORMATS = ['download', 'course'] as const;
 export type DeliveryFormat = (typeof DELIVERY_FORMATS)[number];
-export const LIVE_PLATFORMS = ['zoom', 'google_meet', 'teams', 'other'] as const;
-
-@Schema({ _id: false })
-export class LiveSession {
-  @Prop({ type: Date, required: true })
-  startsAt: Date;
-
-  @Prop({ type: Number, required: true })
-  durationMinutes: number;
-
-  @Prop({ type: String, enum: LIVE_PLATFORMS, default: 'zoom' })
-  platform: string;
-
-  @Prop({ type: String, default: '' })
-  meetingUrl: string;
-
-  // null = no seat limit.
-  @Prop({ type: Number, default: null })
-  capacity: number | null;
-
-  @Prop({ type: String, default: '' })
-  notes: string;
-
-  // null = registration stays open until the class ends.
-  @Prop({ type: Date, default: null })
-  registrationDeadline: Date | null;
-
-  // Replay link for entitled buyers, shown only after the class ended.
-  @Prop({ type: String, default: null })
-  recordingUrl: string | null;
-
-  @Prop({ type: String, enum: ['scheduled', 'cancelled'], default: 'scheduled' })
-  status: string;
-
-  @Prop({ type: Date, default: null })
-  cancelledAt: Date | null;
-
-  @Prop({ type: String, default: '' })
-  cancelReason: string;
-
-  @Prop({ type: Date, default: null })
-  rescheduledAt: Date | null;
-
-  // Seats claimed atomically when an order is created (see LiveSeatsService).
-  @Prop({ type: Number, default: 0 })
-  seatsTaken: number;
-}
-export const LiveSessionSchema = SchemaFactory.createForClass(LiveSession);
 
 // ---- main product ----
 
@@ -259,13 +211,10 @@ export class Product {
   coverStyle: 'book' | 'flat' | null;
 
   // How a digital product reaches the buyer: files to download, an online
-  // course built in the course builder, or a scheduled live class.
-  @Prop({ type: String, enum: DELIVERY_FORMATS, default: 'download' })
+  // course built in the course builder.
+  // No enum validator on purpose: retired legacy docs may still hold 'live_class'; input is checked by cleanDeliveryFormat.
+  @Prop({ type: String, default: 'download' })
   deliveryFormat: DeliveryFormat;
-
-  // Only for deliveryFormat 'live_class'. meetingUrl is buyers-only (stripped from public views).
-  @Prop({ type: LiveSessionSchema, default: null })
-  liveSession: LiveSession | null;
 
   // product gallery / cover images (dono type ke liye)
   @Prop({ type: [String], default: [] })
@@ -449,7 +398,6 @@ ProductSchema.index({ isTest: 1 });
 ProductSchema.index({ previousSlugs: 1 });
 ProductSchema.index({ categoryId: 1, status: 1, isDelete: 1 });
 ProductSchema.index({ scheduledAt: 1 });
-ProductSchema.index({ deliveryFormat: 1, 'liveSession.startsAt': 1 });
 // Public browse (products-by-category): the filter prefix + the default / popularity / rating sorts.
 ProductSchema.index({ status: 1, isDelete: 1, isFeatured: -1, createdAt: -1 });
 ProductSchema.index({ status: 1, isDelete: 1, purchaseCount: -1 });

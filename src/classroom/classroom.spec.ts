@@ -7,7 +7,6 @@ import { bundleSavings, cleanBundleInput } from './bundle.util';
 import { cleanCollectionInput } from './curated-collections.service';
 import { cleanCourseInput, scoreQuiz } from './course.util';
 import { cleanDeliveryFormat } from '../products/product-input.util';
-import { sanitizeDigitalForPublicView } from '../products/product-public-view.util';
 
 const P1 = '64b0000000000000000000a1';
 const L1 = '64b0000000000000000000b1';
@@ -212,31 +211,11 @@ describe('Course builder input', () => {
   });
 });
 
-describe('Live classes', () => {
-  const soon = new Date(Date.now() + 3 * 864e5).toISOString();
-  const live = { startsAt: soon, durationMinutes: 60, meetingUrl: 'https://zoom.us/j/123', platform: 'zoom', capacity: 30 };
-
-  it('needs a future time, sensible length and an https link', () => {
-    expect(cleanDeliveryFormat({ deliveryFormat: 'live_class', liveSession: live }, null).liveSession).toEqual(expect.objectContaining({ durationMinutes: 60, capacity: 30, platform: 'zoom' }));
-    expect(() => cleanDeliveryFormat({ deliveryFormat: 'live_class' }, null)).toThrow(BadRequestException);
-    expect(() => cleanDeliveryFormat({ deliveryFormat: 'live_class', liveSession: { ...live, startsAt: '2020-01-01' } }, null)).toThrow(BadRequestException);
-    expect(() => cleanDeliveryFormat({ deliveryFormat: 'live_class', liveSession: { ...live, meetingUrl: 'http://zoom.us/j/1' } }, null)).toThrow(BadRequestException);
-    expect(() => cleanDeliveryFormat({ deliveryFormat: 'live_class', liveSession: { ...live, durationMinutes: 5 } }, null)).toThrow(BadRequestException);
-  });
-
-  it('lets an already-past start time stay when editing other fields', () => {
-    const past = new Date('2026-01-01T10:00:00Z');
-    const out = cleanDeliveryFormat({ liveSession: { ...live, startsAt: past.toISOString() } }, { deliveryFormat: 'live_class', liveSession: { startsAt: past } });
-    expect(out.liveSession.startsAt.getTime()).toBe(past.getTime());
-  });
-
-  it('clears the session when switching back to downloads', () => {
-    expect(cleanDeliveryFormat({ deliveryFormat: 'download' }, { deliveryFormat: 'live_class', liveSession: live })).toEqual({ deliveryFormat: 'download', liveSession: null });
-  });
-
-  it('never shows the meeting link publicly', () => {
-    const shown: any = sanitizeDigitalForPublicView({ name: 'Class', liveSession: { ...live } } as any);
-    expect(shown.liveSession.meetingUrl).toBeUndefined();
-    expect(shown.liveSession.durationMinutes).toBe(60);
+describe('Delivery format', () => {
+  it('accepts download and course; live classes are retired (clear 400)', () => {
+    expect(cleanDeliveryFormat({ deliveryFormat: 'course' }, null)).toEqual({ deliveryFormat: 'course' });
+    expect(cleanDeliveryFormat({ deliveryFormat: 'download' }, null)).toEqual({ deliveryFormat: 'download' });
+    expect(() => cleanDeliveryFormat({ deliveryFormat: 'live_class' }, null)).toThrow(/no longer available/);
+    expect(() => cleanDeliveryFormat({ deliveryFormat: 'nope' }, null)).toThrow(BadRequestException);
   });
 });

@@ -5,7 +5,7 @@ import { CLASS_LEVELS, classIndex } from './class-levels';
  * Title quality + class/age rules for seller products. Mirrors edudeen_web/.../products/productQuality.ts (the seller
  * forms and bulk upload use the web copy for instant feedback; this is the authority).
  *
- * Class range decision: REQUIRED for digital + educational products (everything sold as a download / course / class,
+ * Class range decision: REQUIRED for digital products (everything sold as a download / course / class,
  * i.e. everything except physical goods) once the listing is going live; OPTIONAL for physical goods (a pencil box
  * or school bag has no grade). Drafts may stay incomplete.
  */
@@ -96,7 +96,7 @@ export function titleClassConflict(title: string, classFrom?: string | null, cla
   return null;
 }
 
-/** Digital + educational listings need a class range to go live; physical goods do not. */
+/** Digital listings need a class range to go live; physical goods do not. */
 export function classRangeRequired(type: string | null | undefined, productType?: string | null): boolean {
   return !(type === 'physical' || (!type && productType === 'physical'));
 }

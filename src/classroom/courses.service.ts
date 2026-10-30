@@ -3,7 +3,6 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { NotificationsService } from '../notifications/notifications.service';
 import { NOTIFICATION_TYPES } from '../notifications/notification.types';
 import { ActivityLogService } from '../activity-log/activity-log.service';
-import { capacityUsed } from './live-seats.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model } from 'mongoose';
 import { DatabaseService } from '../database/databaseservice';
@@ -11,7 +10,6 @@ import { UploadService } from '../upload/upload.service';
 import { UploadedAssetsService } from '../upload/uploaded-assets.service';
 import { verifyStoreOwnershipStrict } from '../common/store-ownership.util';
 import { CourseProgress, CourseProgressDocument } from './schemas/course.schema';
-import { JOIN_OPENS_MINUTES, joinWindowOpen, liveClassBuyerIds, liveClassEmail, liveEndsAt, liveStatusOf, registrationOpen } from './live-class.util';
 import { accessDaysAt, accessExpiry, nextAccessDaysLog,certificateCode, cleanCertificateConfig, cleanCertificateDetails, cleanCourseInput, EMPTY_CERT_CONFIG, courseTotals, lessonIds, paidSeatFilter, scoreQuiz } from './course.util';
 
 const LESSON_LINK_SECONDS = 3600;
@@ -137,7 +135,7 @@ export class CoursesService {
       { $set: { sections, certificateEnabled, storeId, sellerId, ...(body?.outcomes !== undefined ? { outcomes } : {}), ...(body?.instructor !== undefined ? { instructor } : {}), ...(body?.accessDays !== undefined ? { accessDays } : {}), ...(accessLog ? { accessDaysLog: accessLog } : {}), ...(certificateConfig ? { certificateConfig } : {}) } },
       { upsert: true, returnDocument: 'after' },
     );
-    if (product.deliveryFormat !== 'course') await this.r.productModel.updateOne({ _id: productId }, { $set: { deliveryFormat: 'course', liveSession: null } });
+    if (product.deliveryFormat !== 'course') await this.r.productModel.updateOne({ _id: productId }, { $set: { deliveryFormat: 'course' } });
     return { success: true, message: 'Course saved', data: { sections, certificateEnabled, outcomes, instructor, accessDays, certificateConfig: certificateConfig ?? { ...EMPTY_CERT_CONFIG, ...(existing?.certificateConfig ?? {}) } } };
   }
 
@@ -347,7 +345,7 @@ export class CoursesService {
     };
   }
 
-  /** My courses — every course / live-class product the buyer owns, with progress. */
+  /** My courses — every course product the buyer owns, with progress. */
   async myCourses(userId: string) {
     const orders: any[] = await this.r.orderModel.find({ userId, isDelete: false, isPaid: true }).select('paidAt createdAt sellerOrders.items').lean();
     const ids = new Set<string>();
@@ -362,7 +360,7 @@ export class CoursesService {
       }
     }
     const valid = [...ids].filter(id => isValidObjectId(id));
-    const products: any[] = await this.r.productModel.find({ _id: { $in: valid }, deliveryFormat: { $in: ['course', 'live_class'] }, removedByAdmin: { $ne: true } }).select('_id name slug images deliveryFormat liveSession.startsAt liveSession.durationMinutes liveSession.platform liveSession.status storeId').lean();
+    const products: any[] = await this.r.productModel.find({ _id: { $in: valid }, deliveryFormat: 'course', removedByAdmin: { $ne: true } }).select('_id name slug images deliveryFormat storeId').lean();
     const courseIds = products.filter(p => p.deliveryFormat === 'course').map(p => String(p._id));
     const [courses, progress] = await Promise.all([
       this.r.courseModel.find({ productId: { $in: courseIds } }).select('productId sections accessDays accessDaysLog').lean(),
@@ -379,7 +377,6 @@ export class CoursesService {
         const lessons = total.get(id) ?? 0;
         const completed = pr?.completedLessonIds?.length ?? 0;
         const expires = p.deliveryFormat === 'course' ? accessExpiry(boughtAt.get(id) ? new Date(boughtAt.get(id)!) : null, accessDaysAt(courseById.get(id), boughtAt.get(id) ? new Date(boughtAt.get(id)!) : null)) : null;
-        const live = p.deliveryFormat === 'live_class' && p.liveSession ? p.liveSession : null;
         return {
           productId: id, name: p.name, slug: p.slug, image: p.images?.[0] ?? null, deliveryFormat: p.deliveryFormat,
           lessons, completed, completedAt: pr?.completedAt ?? null, certificateCode: pr?.certificateCode ?? null,
@@ -387,54 +384,13 @@ export class CoursesService {
           lastLessonId: pr?.lastLessonId ?? null,
           accessExpiresAt: expires,
           accessExpired: !!expires && expires.getTime() < Date.now(),
-          liveSession: live ? { startsAt: live.startsAt, durationMinutes: live.durationMinutes, platform: live.platform } : null,
-          liveStatus: liveStatusOf(live),
         };
       }),
     };
   }
 
-  /** The meeting link of a live class — buyers (and the teacher) only, inside the join window, never after the class ended or was cancelled. */
-  async liveAccess(userId: string, idOrSlug: string) {
-    const product = await this.findProduct(idOrSlug);
-    if (product.deliveryFormat !== 'live_class' || !product.liveSession) throw new NotFoundException('This is not a live class');
-    await this.assertLearner(userId, product);
-    const live = product.liveSession;
-    const { startsAt, durationMinutes, platform, meetingUrl, notes } = live;
-    const endsAt = liveEndsAt(startsAt, durationMinutes);
-    const status = live.status === 'cancelled' ? 'cancelled' : 'scheduled';
-    const opensAt = new Date(new Date(startsAt).getTime() - JOIN_OPENS_MINUTES * 60000);
-    const isTeacher = String(product.sellerId) === userId;
-    const ended = endsAt.getTime() < Date.now();
-    // Buyers get the link from JOIN_OPENS_MINUTES before the start; the teacher is always allowed until the class is over.
-    const open = status !== 'cancelled' && !ended && (isTeacher || joinWindowOpen(startsAt));
-    return {
-      success: true,
-      data: {
-        name: product.name, startsAt, endsAt, durationMinutes, platform, notes, status,
-        meetingUrl: open ? meetingUrl : null,
-        ended, opensAt, joinOpen: open,
-        recordingUrl: ended && status !== 'cancelled' ? (live.recordingUrl ?? null) : null,
-      },
-    };
-  }
+  // ── Seller: roster ─────────────────────────────────────────────────────────
 
-  /** Seats left in a live class, for the product page. */
-  async seats(idOrSlug: string) {
-    const product = await this.findProduct(idOrSlug);
-    const live = product.liveSession;
-    if (product.deliveryFormat !== 'live_class' || !live) return { success: true, data: { capacity: null, left: null, registrationOpen: true, deadline: null, status: null } };
-    const capacity = live.capacity ?? null;
-    let left: number | null = null;
-    if (capacity) {
-      const paid = await this.r.orderModel.countDocuments(paidSeatFilter(String(product._id)));
-      left = Math.max(0, capacity - capacityUsed(live.seatsTaken, paid));
-    }
-    const status = live.status === 'cancelled' ? 'cancelled' : 'scheduled';
-    return { success: true, data: { capacity, left, registrationOpen: registrationOpen(live) && (left === null || left > 0), deadline: live.registrationDeadline ?? null, status } };
-  }
-
-  // ── Seller: roster and live-class cancel ───────────────────────────────────
 
   /** Everyone who holds a paid, non-refunded seat, with course progress. Derived from orders, so buyers who never opened a lesson appear too. */
   async studentsForSeller(storeId: string, sellerId: string, productId: string, query: { page?: unknown; limit?: unknown } = {}) {
@@ -478,46 +434,5 @@ export class CoursesService {
         }),
       },
     };
-  }
-
-  /**
-   * Seller cancels a live class: it stops selling, the join link is withdrawn and every buyer is told.
-   * Refunds are NOT automatic - the notice tells buyers Edudeen support handles them and the admin activity log gets an entry.
-   * Idempotent: a second call changes nothing and notifies nobody.
-   */
-  async cancelLive(storeId: string, sellerId: string, productId: string, reason?: unknown) {
-    const product = await this.sellerProduct(storeId, sellerId, productId);
-    if (product.deliveryFormat !== 'live_class' || !product.liveSession) throw new BadRequestException('This product is not a live class');
-    if (reason !== undefined && reason !== null && typeof reason !== 'string') throw new BadRequestException('Reason must be text');
-    const cleanReason = (typeof reason === 'string' ? reason.trim() : '');
-    if (cleanReason.length > 300) throw new BadRequestException('Reason can be up to 300 characters');
-    const res: any = await this.r.productModel.updateOne(
-      { _id: productId, 'liveSession.status': { $ne: 'cancelled' } },
-      { $set: { 'liveSession.status': 'cancelled', 'liveSession.cancelledAt': new Date(), 'liveSession.cancelReason': cleanReason } },
-    );
-    if (!res?.modifiedCount) return { success: true, message: 'This class was already cancelled', data: { status: 'cancelled', notified: 0 } };
-
-    const buyers = (await liveClassBuyerIds(this.r.orderModel as any, productId)).filter(b => b !== String(sellerId));
-    const title = `"${product.name}" was cancelled`;
-    const body = `The teacher cancelled this live class.${cleanReason ? ` Reason: ${cleanReason}.` : ''} If you already paid, Edudeen support will arrange your refund - contact support if you do not hear from us.`;
-    const path = `/product/${product.slug ?? productId}`;
-    let notified = 0;
-    for (const id of buyers) {
-      try {
-        await this.notifications?.notify({
-          recipientId: id, recipientRole: 'user', type: NOTIFICATION_TYPES.LIVE_CLASS_CANCELLED, title, body,
-          data: { productId, link: path },
-          email: liveClassEmail(title, body, { name: product.name, startsAt: product.liveSession.startsAt }, { label: 'Open class page', path }),
-        });
-        notified++;
-      } catch { /* best effort per buyer */ }
-    }
-    await this.activityLog?.log({
-      storeId, category: 'products', action: 'live_class_cancelled',
-      description: `Live class "${product.name}" was cancelled by the seller; ${buyers.length} paid buyer(s) notified. Refunds need manual handling.`,
-      actorId: sellerId, actorRole: 'seller', targetId: productId, targetType: 'product',
-      metadata: { buyers: buyers.length, reason: cleanReason },
-    });
-    return { success: true, message: 'Live class cancelled', data: { status: 'cancelled', notified } };
   }
 }

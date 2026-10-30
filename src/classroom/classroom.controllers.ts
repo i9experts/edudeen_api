@@ -278,7 +278,7 @@ export class AdminCuratedCollectionsController {
   }
 }
 
-/** Online courses (builder, player, quizzes, certificates) and live-class access. */
+/** Online courses (builder, player, quizzes, certificates). */
 @Controller('api/courses')
 export class CoursesController {
   constructor(private readonly courses: CoursesService) {}
@@ -298,21 +298,10 @@ export class CoursesController {
     return this.courses.verifyCertificate(code);
   }
 
-  @Get('live-seats/:idOrSlug')
-  seats(@Param('idOrSlug') idOrSlug: string) {
-    return this.courses.seats(idOrSlug);
-  }
-
   @UseGuards(JwtAuthGuard)
   @Get('mine')
   mine(@Req() req: any) {
     return this.courses.myCourses(req.user.userId);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Get('live/:idOrSlug')
-  live(@Req() req: any, @Param('idOrSlug') idOrSlug: string) {
-    return this.courses.liveAccess(req.user.userId, idOrSlug);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -358,13 +347,6 @@ export class CoursesController {
   @Get('seller/:storeId/:productId/students')
   students(@Req() req: any, @Param('storeId') storeId: string, @Param('productId') productId: string, @Query('page') page?: string, @Query('limit') limit?: string) {
     return this.courses.studentsForSeller(storeId, req.user.userId, productId, { page, limit });
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('seller')
-  @Post('seller/:storeId/:productId/live/cancel')
-  cancelLive(@Req() req: any, @Param('storeId') storeId: string, @Param('productId') productId: string, @Body('reason') reason?: string) {
-    return this.courses.cancelLive(storeId, req.user.userId, productId, reason);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

@@ -42,7 +42,7 @@ describe('title vs class range', () => {
 });
 
 describe('class range requirement', () => {
-  it('required to go live for digital/educational, optional for physical and drafts', () => {
+  it('required to go live for digital, optional for physical and drafts', () => {
     expect(() => assertClassRangeRule({ type: 'digital', goingLive: true })).toThrow(/Choose the classes/);
     expect(() => assertClassRangeRule({ type: 'digital', goingLive: false })).not.toThrow();
     expect(() => assertClassRangeRule({ type: 'physical', goingLive: true })).not.toThrow();

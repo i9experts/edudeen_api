@@ -1,6 +1,4 @@
 import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
-import { releaseLiveSeats } from '../classroom/live-seats.util';
-import { liveEndsAt, liveStatusOf } from '../classroom/live-class.util';
 import {
   Injectable,
   BadRequestException,
@@ -245,7 +243,7 @@ export class OrdersService {
     const rows = [...seen.values()];
     const productIds = rows.map(r => r.productId).filter((id) => isValidObjectId(id));
     const products: any[] = productIds.length
-      ? await productModel.find({ _id: { $in: productIds } }).select('slug categoryId subCategoryId educationLevel customLevel curricula ageMin ageMax digital.files digital.linkExpiryDays digital.downloadLimit removedByAdmin deliveryFormat liveSession.startsAt liveSession.durationMinutes liveSession.status').lean()
+      ? await productModel.find({ _id: { $in: productIds } }).select('slug categoryId subCategoryId educationLevel customLevel curricula ageMin ageMax digital.files digital.linkExpiryDays digital.downloadLimit removedByAdmin deliveryFormat').lean()
       : [];
     const productById = new Map(products.map(p => [String(p._id), p]));
     const catIds = [...new Set(products.flatMap(p => [p.categoryId, p.subCategoryId]).filter(Boolean))];
@@ -280,9 +278,6 @@ export class OrdersService {
           unavailable: removed ? 'removed' : expired ? 'expired' : null,
           expiresAt,
           deliveryFormat: p?.deliveryFormat ?? 'download',
-          liveStartsAt: p?.liveSession?.startsAt ?? null,
-          liveEndsAt: p?.liveSession?.startsAt ? liveEndsAt(p.liveSession.startsAt, p.liveSession.durationMinutes) : null,
-          liveStatus: p?.deliveryFormat === 'live_class' ? liveStatusOf(p?.liveSession) : null,
           storeName: store?.name ?? null,
           storeSlug: store?.slug ?? null,
         };
@@ -1155,10 +1150,6 @@ export class OrdersService {
           { $inc: { stock: item.quantity } },
         );
       }
-      // live-class seat goes back to the class
-      if (item.type === 'digital' && item.productId) {
-        await releaseLiveSeats(this.databaseService.repositories.productModel as any, [{ productId: String(item.productId), quantity: item.quantity, type: 'digital' }]).catch(() => undefined);
-      }
     }
 
     // sellerOrder status recalculate
@@ -1706,9 +1697,6 @@ export class OrdersService {
             { _id: item.variantId, unlimitedStock: { $ne: true } },
             { $inc: { stock: item.quantity } },
           );
-        }
-        if (item.type === 'digital' && item.productId) {
-          await releaseLiveSeats(this.databaseService.repositories.productModel as any, [{ productId: String(item.productId), quantity: item.quantity, type: 'digital' }]).catch(() => undefined);
         }
       }
     }

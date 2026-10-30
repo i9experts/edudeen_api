@@ -25,10 +25,6 @@ import { DatabaseService } from './databaseservice';
       { name: schema.Category.name, schema: schema.CategorySchema },
       { name: schema.Product.name, schema: schema.ProductSchema },
       { name: schema.ProductVariant.name, schema: schema.ProductVariantSchema },
-      {
-        name: schema.EducationLevelAlias.name,
-        schema: schema.EducationLevelAliasSchema,
-      },
       { name: schema.Cart.name, schema: schema.CartSchema },
       { name: schema.wishList.name, schema: schema.wishListSchema },
       { name: schema.Rating.name, schema: schema.RatingSchema },

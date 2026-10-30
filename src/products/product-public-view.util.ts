@@ -69,16 +69,13 @@ function hideAiReview<T>(product: T): T {
   return rest as T;
 }
 
-/** A live class's meeting link goes only to buyers (GET /api/courses/live/:productId), never into public views. */
+/** Live classes are retired; an old product doc may still carry liveSession (with a meeting link) - never expose it. */
 function hideLiveLink<T>(product: T): T {
-  const live = (product as { liveSession?: { meetingUrl?: unknown } | null } | null)?.liveSession;
-  if (!live) return product;
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { meetingUrl, recordingUrl, ...rest } = live as Record<string, unknown>;
-  void meetingUrl; void recordingUrl;
-  return { ...product, liveSession: rest } as T;
+  if (!product || typeof product !== 'object' || !('liveSession' in (product as object))) return product;
+  const { liveSession, ...rest } = product as Record<string, unknown>;
+  void liveSession;
+  return rest as T;
 }
-
 export { clampInt } from '../common/query-safety.util';
 
 /** Only accepts a real string; `?x[$ne]=y` (an object) and `?x[]=a` (an array) become undefined. */

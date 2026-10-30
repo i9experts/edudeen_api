@@ -21,8 +21,7 @@ import { EntitlementsService } from 'src/platform-plans/entitlements.service';
 import { MarketingService } from 'src/marketing/marketing.service';
 import { ActiveCampaignForStore, applyCampaignsToVariants, pickBestCampaignForLine, pickPrimaryCampaignForBadge } from 'src/marketing/campaign-pricing.util';
 import { campaignsForProduct, loadCampaignContext, parseCampaignIdsInput } from 'src/marketing/campaign-eligibility.util';
-import { EducationLevel, LICENSE_OPTION_LABEL, LICENSE_OPTION_NAME } from './schemas/product.schema';
-import { EducationLevelService } from './education-level.service';
+import { LICENSE_OPTION_LABEL, LICENSE_OPTION_NAME } from './schemas/product.schema';
 import { UploadService } from 'src/upload/upload.service';
 import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
 import { fetchPdfPageCount, isPdfName } from './pdf-page-count.util';
@@ -33,7 +32,6 @@ import { splitEditForReview, overlayPendingEdit } from './product-edit-review.ut
 import { NotificationsService } from '../notifications/notifications.service';
 import { notifyPublishRequest, pktLabel } from './product-schedule-notify.util';
 import { NOTIFICATION_TYPES } from '../notifications/notification.types';
-import { liveClassBuyerIds, liveClassEmail } from '../classroom/live-class.util';
 import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, sellerSkipsListingReview, cleanLearningMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
 import { allocateSkus, cleanSku } from './sku.util';
 import { generateProductSlug, nextPreviousSlugs } from 'src/common/slug.util';
@@ -55,7 +53,6 @@ import { premiumPercentFor } from 'src/premium/premium.util';
 import { clampInt } from 'src/common/query-safety.util';
 import { resolveStoreNames } from './store-name.util';
 import { FuzzyIndex, buildAllWordsFilter, relevanceTier } from 'src/search/search-terms.util';
-const EDUCATION_LEVEL_VALUES: string[] = Object.values(EducationLevel);
 
 /** Prices arrive on `body: any` endpoints, so they are checked here rather
  *  than by a DTO. 0 is allowed (free resources are common on education
@@ -76,7 +73,6 @@ export class ProductsService {
     private activityLogService: ActivityLogService,
     private subscriptionBenefits: SubscriptionBenefitsService,
     private entitlementsService: EntitlementsService,
-    private educationLevelService: EducationLevelService,
     private marketingService: MarketingService,
     private uploadService: UploadService,
     private redisService: RedisService,
@@ -95,37 +91,6 @@ export class ProductsService {
     }
   }
 
-  /**
-   * A live class that was moved or got a new meeting link: tell every buyer holding a seat (and the seller, as a receipt).
-   * Reminders re-arm on their own because the reminder log is keyed by the start time. Never throws.
-   */
-  private async notifyLiveClassChange(before: any, after: any): Promise<void> {
-    try {
-      if (!this.notifications || !after || after.deliveryFormat !== 'live_class') return;
-      const a = before?.liveSession; const b = after.liveSession;
-      if (!a?.startsAt || !b?.startsAt) return;
-      const moved = new Date(a.startsAt).getTime() !== new Date(b.startsAt).getTime();
-      const relinked = (a.meetingUrl ?? '') !== (b.meetingUrl ?? '');
-      if (!moved && !relinked) return;
-      if (new Date(b.startsAt).getTime() <= Date.now()) return;
-      const title = moved ? `"${after.name}" was rescheduled` : `"${after.name}" has a new meeting link`;
-      const body = moved
-        ? `New start: ${pktLabel(b.startsAt)}. You will get reminders again before the new time.`
-        : 'The teacher updated the meeting link. Open the class page before it starts to see it.';
-      const buyers = await liveClassBuyerIds(this.databaseService.repositories.orderModel as any, String(after._id));
-      const path = `/product/${after.slug ?? after._id}`;
-      const input = { name: after.name, startsAt: b.startsAt, meetingUrl: b.meetingUrl };
-      for (const id of buyers) {
-        await this.notifications.notify({
-          recipientId: id, recipientRole: 'user', type: NOTIFICATION_TYPES.LIVE_CLASS_CHANGED, title, body,
-          data: { productId: String(after._id), link: path },
-          email: liveClassEmail(title, body, input, { label: 'Open class page', path }),
-        });
-      }
-    } catch {
-      /* best effort */
-    }
-  }
 
   /** Attaches an `activeCampaign` badge summary (or null) to each product,
    *  based on whether its store currently has an active platform-sale
@@ -443,7 +408,7 @@ export class ProductsService {
     const sourceFileIndex = digital.preview.sourceFileIndex ?? 0;
     // The seller's free sample is what buyers preview; without one, the chosen paid file is used.
     const file = digital.sampleFile?.url ? digital.sampleFile : digital.files?.[sourceFileIndex];
-    // Course / live-class products have no files to preview: nothing to build, so just switch preview off.
+    // Course products have no files to preview: nothing to build, so just switch preview off.
     if (!file && !(digital.files?.length > 0))
       return {
         ...digital,
@@ -668,8 +633,6 @@ export class ProductsService {
     limit: number = 10,
     customerId?: string | null,
     productType?: string,
-    educationLevel?: string,
-    normalizedCustomLevel?: string,
     campaignId?: string,
     minPrice?: number,
     maxPrice?: number,
@@ -689,7 +652,7 @@ export class ProductsService {
       isDelete: false, isTest: { $ne: true },
     };
     // Online course / live class listings (Product.deliveryFormat).
-    if (learning?.format === 'course' || learning?.format === 'live_class') query.deliveryFormat = learning.format;
+    if (learning?.format === 'course') query.deliveryFormat = learning.format;
 
     // Keyword search together with every filter below, so a search results
     // page can page and filter on the server (the plain search endpoint can't).
@@ -716,14 +679,8 @@ export class ProductsService {
       query.$and = [...(query.$and ?? []), buildAllWordsFilter(term)];
     }
 
-    // 0️⃣ Optional productType/educationLevel filters — used by verticals like the
-    // Education marketplace to show only `productType: 'educational'` listings
-    // from the same shared catalog, instead of a separate one. normalizedCustomLevel
-    // is the Tier-2 drill-down, only meaningful when educationLevel === 'other'.
-    if (productType) query.productType = productType;
-    if (educationLevel) query.educationLevel = educationLevel;
-    if (normalizedCustomLevel)
-      query.normalizedCustomLevel = normalizedCustomLevel;
+    // Optional productType filter ('educational' is retired and counts as digital).
+    if (productType) query.productType = productType === 'educational' ? 'digital' : productType;
 
     // "Shop the Sale" — an expired/unknown/inactive/malformed campaignId (e.g. a
     // stale bookmark to a sale that's since ended) yields an intentionally
@@ -1151,8 +1108,8 @@ export class ProductsService {
    */
   async getAlsoBought(idOrSlug: string, limit = 8, customerId?: string | null) {
     const { productModel, orderModel } = this.databaseService.repositories;
-    let product: any = await productModel.findOne({ slug: idOrSlug, status: 'active', isDelete: false, isTest: { $ne: true } }).select('_id categoryId educationLevel').lean();
-    if (!product && isValidObjectId(idOrSlug)) product = await productModel.findOne({ _id: idOrSlug, status: 'active', isDelete: false, isTest: { $ne: true } }).select('_id categoryId educationLevel').lean();
+    let product: any = await productModel.findOne({ slug: idOrSlug, status: 'active', isDelete: false, isTest: { $ne: true } }).select('_id categoryId').lean();
+    if (!product && isValidObjectId(idOrSlug)) product = await productModel.findOne({ _id: idOrSlug, status: 'active', isDelete: false, isTest: { $ne: true } }).select('_id categoryId').lean();
     if (!product) throw new NotFoundException('Product not found');
     const pid = String(product._id);
     const max = Math.min(Math.max(limit, 1), 20);
@@ -1175,8 +1132,7 @@ export class ProductsService {
     if (picked.length < max) {
       const have = new Set([pid, ...picked.map(p => String(p._id))]);
       const filter: any = { status: 'active', isDelete: false, isTest: { $ne: true }, _id: { $nin: [...have] } };
-      if (product.educationLevel) filter.educationLevel = product.educationLevel;
-      else filter.categoryId = product.categoryId;
+      filter.categoryId = product.categoryId;
       await this.restrictToActiveStores(filter);
       const extra = await productModel.find(filter).sort({ purchaseCount: -1, averageRating: -1 }).limit(max - picked.length).lean();
       picked = [...picked, ...(await this.attachVariantsAndPricing(extra, customerId))];
@@ -1309,12 +1265,12 @@ export class ProductsService {
     return { success: true, data: { products } };
   }
 
-  /** Free downloads: digital / educational products with a 0 price, then paid ones that offer a free sample file (flagged `freeKind`). */
+  /** Free downloads: digital products with a 0 price, then paid ones that offer a free sample file (flagged `freeKind`). */
   async getFreeResources(limit = 10, customerId?: string | null) {
     const lim = Math.min(24, Math.max(1, Math.floor(limit) || 10));
     const { productModel, productVariantModel } = this.databaseService.repositories as any;
     const loaded = await this.cachedShelfIds('home:free-resources:v1', async () => {
-      const base = { status: 'active', isDelete: false, isTest: { $ne: true }, productType: { $in: ['digital', 'educational'] } };
+      const base = { status: 'active', isDelete: false, isTest: { $ne: true }, productType: 'digital' };
       const zero: any[] = await productVariantModel.find({ isDelete: false, price: 0 }).select('productId').limit(400).lean();
       const freeIds = [...new Set(zero.map((v) => String(v.productId)))].filter((id) => isValidObjectId(id));
       const free: any[] = freeIds.length ? await productModel.find({ ...base, _id: { $in: freeIds } }).sort({ purchaseCount: -1, _id: -1 }).limit(60).select('_id').lean() : [];
@@ -1829,8 +1785,6 @@ export class ProductsService {
       price,
       compareAtPrice,
       digital,
-      educationLevel,
-      customLevel,
     } = body;
 
     if (!storeId) throw new BadRequestException('storeId is required');
@@ -1881,42 +1835,10 @@ export class ProductsService {
     const cleanTags = tags === undefined ? [] : assertStringArray(tags, 'tags', { maxItems: 30, maxLength: 60 });
     const cleanImages = images === undefined ? [] : assertStringArray(images, 'images', { maxItems: 20, maxLength: 2048 });
 
-    const finalProductType =
-      productType === 'educational' ? 'educational' : 'digital';
-
-    // Tier-1/Tier-2 education taxonomy — required only for educational products.
-    let finalEducationLevel: string | null = null;
-    let normalizedFields: {
-      customLevel: string | null;
-      normalizedCustomLevel: string | null;
-    } = {
-      customLevel: null,
-      normalizedCustomLevel: null,
-    };
-    const skipLevel = (body.deliveryFormat === 'course' || body.deliveryFormat === 'live_class') && !educationLevel;
-    if (finalProductType === 'educational' && !skipLevel) {
-      if (!educationLevel || !EDUCATION_LEVEL_VALUES.includes(educationLevel)) {
-        throw new BadRequestException(
-          `educationLevel is required and must be one of: ${EDUCATION_LEVEL_VALUES.join(', ')}`,
-        );
-      }
-      finalEducationLevel = educationLevel;
-      if (educationLevel === EducationLevel.OTHER) {
-        if (!customLevel || !String(customLevel).trim()) {
-          throw new BadRequestException(
-            'customLevel is required when educationLevel is "other"',
-          );
-        }
-        const normalized =
-          await this.educationLevelService.normalizeCustomLevel(
-            String(customLevel),
-          );
-        normalizedFields = {
-          customLevel: normalized.customLevel,
-          normalizedCustomLevel: normalized.normalizedCustomLevel,
-        };
-      }
+    if (productType === 'educational') {
+      throw new BadRequestException('Educational products are no longer available. Choose digital.');
     }
+    const finalProductType = 'digital';
 
     const categoryId = await this.resolveRootCategoryId(store.categoryId, body.categoryId);
 
@@ -1955,9 +1877,6 @@ export class ProductsService {
       type: 'digital',
       categoryId,
       subCategoryId: validSubCategoryId,
-      educationLevel: finalEducationLevel,
-      customLevel: normalizedFields.customLevel,
-      normalizedCustomLevel: normalizedFields.normalizedCustomLevel,
       images: cleanImages,
       tags: cleanTags,
       digital: digitalConfig,
@@ -2004,7 +1923,7 @@ export class ProductsService {
   }
 
   /**
-   * Quality checks shared by every create/edit: class range (needed to go live for digital/educational), the non-blocking
+   * Quality checks shared by every create/edit: class range (needed to go live for digital), the non-blocking
    * title warnings, and the off-platform contact scan of the seller-written text.
    */
   private checkListing(opts: { title: string; type: 'physical' | 'digital'; description?: unknown; classFrom?: string | null; classTo?: string | null; requestedStatus?: string | null; fields?: Record<string, unknown>; coverStyle?: string | null; deliveryFormat?: string | null; currentStatus?: string | null }) {
@@ -2153,13 +2072,14 @@ export class ProductsService {
       status,
       scheduledAt,
       digital,
-      educationLevel,
-      customLevel,
       price,
       compareAtPrice,
     } = body;
 
     if (!productId) throw new BadRequestException('productId is required');
+    if (body?.productType === 'educational') {
+      throw new BadRequestException('Educational products are no longer available. Choose digital.');
+    }
 
     const seller = await sellerModel.findOne({
       _id: sellerId,
@@ -2268,44 +2188,7 @@ export class ProductsService {
       }
     }
 
-    if (educationLevel !== undefined && product.productType === 'educational') {
-      if (!EDUCATION_LEVEL_VALUES.includes(educationLevel)) {
-        throw new BadRequestException(
-          `educationLevel must be one of: ${EDUCATION_LEVEL_VALUES.join(', ')}`,
-        );
-      }
-      productUpdate.educationLevel = educationLevel;
-    }
-    if (product.productType === 'educational') {
-      const effectiveLevel =
-        productUpdate.educationLevel ?? product.educationLevel;
-      if (effectiveLevel === EducationLevel.OTHER) {
-        if (customLevel !== undefined) {
-          if (!String(customLevel).trim())
-            throw new BadRequestException(
-              'customLevel is required when educationLevel is "other"',
-            );
-          const normalized =
-            await this.educationLevelService.normalizeCustomLevel(
-              String(customLevel),
-            );
-          productUpdate.customLevel = normalized.customLevel;
-          productUpdate.normalizedCustomLevel =
-            normalized.normalizedCustomLevel;
-        } else if (!product.customLevel || product.educationLevel !== EducationLevel.OTHER) {
-          // Moving TO "other" must bring its own customLevel — a stale one left from an earlier
-          // "other" (or none at all) is not accepted silently.
-          throw new BadRequestException(
-            'customLevel is required when educationLevel is "other"',
-          );
-        }
-      } else if (productUpdate.educationLevel !== undefined) {
-        productUpdate.customLevel = null;
-        productUpdate.normalizedCustomLevel = null;
-      }
-    }
-
-    // Price rules (digital/educational default variant): compare-at above price, no negatives, PKR whole rupees. Checked before anything is written.
+    // Price rules (digital default variant): compare-at above price, no negatives, PKR whole rupees. Checked before anything is written.
     if (product.type !== 'physical' && (price !== undefined || compareAtPrice !== undefined)) {
       const ruleStore = await this.databaseService.repositories.storeModel.findById(product.storeId).select('baseCurrency').lean();
       const curVariant: any = price !== undefined && compareAtPrice !== undefined ? null : await productVariantModel.findOne({ productId, isDefault: true, isDelete: false }).select('price compareAtPrice').lean();
@@ -2337,7 +2220,7 @@ export class ProductsService {
     const split = splitEditForReview(productPlain, productUpdate);
     let writeUpdate: any = productUpdate;
     let editSentForReview = false;
-    // Price of a digital/educational listing lives on its default variant: a changed price waits for approval too.
+    // Price of a digital listing lives on its default variant: a changed price waits for approval too.
     const heldPrice: Record<string, unknown> = {};
     let heldVariantView: any = null;
     if (split.hold && product.type !== 'physical' && (price !== undefined || compareAtPrice !== undefined)) {
@@ -2359,7 +2242,7 @@ export class ProductsService {
         if (flaggedStatusBefore) { if (flaggedStatusBefore.had) writeUpdate.status = flaggedStatusBefore.value; else delete writeUpdate.status; }
         editSentForReview = true;
         if (JSON.stringify(mergedChanges) !== JSON.stringify(priorChanges)) {
-          const fields = Object.keys(mergedChanges).filter((k) => !['slug', 'previousSlugs', 'normalizedCustomLevel', 'flags', 'contactMatches', 'flagReason'].includes(k));
+          const fields = Object.keys(mergedChanges).filter((k) => !['slug', 'previousSlugs', 'flags', 'contactMatches', 'flagReason'].includes(k));
           writeUpdate.pendingEdit = { changes: mergedChanges, fields, submittedAt: new Date() };
           writeUpdate.lastEditRejection = null;
           this.activityLogService.log({
@@ -2380,7 +2263,7 @@ export class ProductsService {
         : product;
     if (writeUpdate.digital) void this.fillPdfPageCounts(productId);
 
-    // Digital/educational products still have exactly one (default) variant
+    // Digital products still have exactly one (default) variant
     // and no dedicated variant-management endpoints — price/compareAtPrice
     // edits for them stay routed through here. Physical products manage
     // price per-variant exclusively via the product-variants module now.
@@ -2407,7 +2290,6 @@ export class ProductsService {
     }
 
     void scanImagesForContactInfo(productId, Array.isArray(images) ? images : (product as any).images ?? []); // TODO(OCR) no-op hook
-    void this.notifyLiveClassChange(product as any, updatedProduct as any);
     // Tell the seller what their publish/schedule request really became (only when it changed, not on every save).
     if (updatedProduct && status !== undefined) {
       const nextStatus = (updatedProduct as any).status;
@@ -2462,18 +2344,5 @@ export class ProductsService {
       message: 'Product deleted successfully',
       data: null,
     };
-  }
-
-  /** GET /api/products/education/facets — public, backs the Education marketplace's dynamic filter chips. */
-  async getEducationFacets() {
-    const facets = await this.educationLevelService.getFacets();
-    return { success: true, data: facets };
-  }
-
-  /** GET /api/products/education/custom-level-suggestions — seller-only autocomplete while typing a custom level. */
-  async getCustomLevelSuggestions(q: string) {
-    const suggestions =
-      await this.educationLevelService.getCustomLevelSuggestions(q);
-    return { success: true, data: suggestions };
   }
 }

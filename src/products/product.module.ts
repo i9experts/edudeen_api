@@ -3,7 +3,6 @@ import { productController } from './products.controller';
 import { ProductsService } from './products.service';
 import { ProductStockService } from './product-stock.service';
 import { ProductOffersService } from './product-offers.service';
-import { EducationLevelService } from './education-level.service';
 import { AuthModule } from 'src/auth/auth.module';
 import { RedisModule } from 'src/redis/redis.module';
 import { AdminConfigModule } from 'src/admin-config/admin-config.module';
@@ -21,7 +20,7 @@ import { AttributesModule } from 'src/attributes/attributes.module';
     AttributesModule,
   ],
   controllers: [productController],
-  providers: [ProductsService, ProductStockService, ProductOffersService, EducationLevelService],
+  providers: [ProductsService, ProductStockService, ProductOffersService],
   exports: [ProductsService],
 })
 export class ProductsModule {}

@@ -1,5 +1,4 @@
 /* eslint-disable prettier/prettier */
-import { releaseLiveSeats } from '../classroom/live-seats.util';
 import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { DatabaseService } from 'src/database/databaseservice';
@@ -444,7 +443,6 @@ export class ManualPaymentsService {
     if (!order) return false;
     const set: Record<string, any> = { orderStatus: 'cancelled' };
     const toRestock: { variantId: string; quantity: number }[] = [];
-    const toFreeSeats: { productId: string; quantity: number; type: string }[] = [];
     order.sellerOrders.forEach((so: any, si: number) => {
       if (so.status !== 'cancelled') { set[`sellerOrders.${si}.status`] = 'cancelled'; set[`sellerOrders.${si}.cancelledAt`] = now; set[`sellerOrders.${si}.cancelReason`] = reason; }
       so.items.forEach((item: any, ii: number) => {
@@ -453,7 +451,6 @@ export class ManualPaymentsService {
         set[`sellerOrders.${si}.items.${ii}.cancelledAt`] = now;
         set[`sellerOrders.${si}.items.${ii}.cancelReason`] = reason;
         if (item.type === 'physical' && item.variantId) toRestock.push({ variantId: item.variantId, quantity: item.quantity });
-        if (item.type === 'digital' && item.productId) toFreeSeats.push({ productId: String(item.productId), quantity: item.quantity, type: 'digital' });
       });
     });
     // The claim: only the caller that flips the still-unpaid order restocks it.
@@ -465,7 +462,6 @@ export class ManualPaymentsService {
     for (const r of toRestock) {
       await this.db.repositories.productVariantModel.updateOne({ _id: r.variantId, unlimitedStock: { $ne: true } }, { $inc: { stock: r.quantity } });
     }
-    if (toFreeSeats.length) await releaseLiveSeats(this.db.repositories.productModel as any, toFreeSeats).catch(() => undefined);
     for (const so of order.sellerOrders) {
       const live = so.items.filter((i: any) => i.status !== 'cancelled');
       if (live.length) await this.paymentService.restoreGiftCardForItems(order, so, live, `unpaid-release-${orderId}`);

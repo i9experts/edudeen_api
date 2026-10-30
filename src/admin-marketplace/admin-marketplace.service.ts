@@ -280,7 +280,6 @@ export class AdminMarketplaceService {
         type: product.type,
         productType: product.productType,
         deliveryFormat: product.deliveryFormat ?? 'download',
-        liveSession: product.deliveryFormat === 'live_class' ? (product.liveSession ?? null) : null,
         course,
         educationLevel: product.educationLevel,
         customLevel: product.customLevel,
