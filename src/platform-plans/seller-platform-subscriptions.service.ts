@@ -12,6 +12,7 @@ import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 
 import { clampInt } from 'src/common/query-safety.util';
+import { syncStoreListings, NO_PLAN_STATUSES } from './plan-listing-sync.util';
 const MAX_RENEWAL_ATTEMPTS = 3;
 const RETRY_INTERVAL_DAYS = 1;
 // Every Stripe object created by THIS module is tagged with this so the shared
@@ -130,13 +131,22 @@ export class SellerPlatformSubscriptionsService {
     sub.pendingPlanChange = null;
     sub.platformPlanId = (freePlan as any)._id.toString();
     sub.amountUSD = 0;
-    sub.status = ((freePlan as any).trialDays ?? 0) > 0 ? 'expired' : 'active';
+    // A lapse (cancellation reached its end, failed payments, ended admin grant) always lands as
+    // 'expired': the store has no usable plan, its listings are hidden until a plan is chosen.
+    sub.status = 'expired';
     sub.failedPaymentAttempts = 0;
     sub.cancelAtPeriodEnd = false;
     sub.canceledAt = null;
     sub.cancelReason = null;
     await this.syncFeaturedBadge(sub.storeId, freePlan);
     return freePlan;
+  }
+
+  /** E-mail with an "Upgrade plan" button: the plan ended, products are hidden until a plan is chosen. */
+  private async emailPlanEnded(sub: any, reason: 'cancelled' | 'grant' | 'subscription_ended') {
+    const { sellerName, sellerEmail, storeName } = await this.getSellerAndStoreNames(sub.sellerId, sub.storeId);
+    if (!sellerEmail) return;
+    await this.notifications.sendPlanEnded(sellerEmail, { sellerName, storeName, reason, billingPath: `/store/${sub.storeId}/plan-billing` }).catch(() => undefined);
   }
 
   private async getSellerAndStoreNames(sellerId: string, storeId: string) {
@@ -177,6 +187,7 @@ export class SellerPlatformSubscriptionsService {
         if (sellerEmail) {
           await this.notifications.sendDowngradedDueToFailedPayments(sellerEmail, {
             sellerName, storeName, planName: freePlan.name, maxAttempts: MAX_RENEWAL_ATTEMPTS,
+            billingPath: `/store/${sub.storeId}/plan-billing`,
           });
         }
         this.notificationsService.notify({
@@ -207,6 +218,7 @@ export class SellerPlatformSubscriptionsService {
         sellerName, storeName, planName: (plan as any)?.name ?? 'your plan',
         amountUSD: chargeAmount ?? sub.amountUSD, attemptNumber: sub.failedPaymentAttempts,
         maxAttempts: MAX_RENEWAL_ATTEMPTS, nextRetryDate: retryAt,
+        billingPath: `/store/${sub.storeId}/plan-billing`,
       });
     }
     this.notificationsService.notify({
@@ -892,6 +904,7 @@ export class SellerPlatformSubscriptionsService {
       sub.nextBillingDate = sub.currentPeriodEnd;
       await sub.save();
       expired++;
+      await this.emailPlanEnded(sub, 'grant');
       this.activityLogService.log({
         storeId: sub.storeId, category: 'platform_plans', action: 'plan_grant_expired',
         description: `Admin-granted plan ended — store moved to the ${freePlan.name} plan`,
@@ -951,6 +964,28 @@ export class SellerPlatformSubscriptionsService {
   }
 
   /**
+   * Safety net for the save hook (webhook / update-query paths, hook failures): stores with an
+   * expired plan lose their live listings, stores with a usable plan get paused ones back.
+   * Only touches stores that actually need it.
+   */
+  async reconcileListingsWithPlans(): Promise<{ paused: number; restored: number; stores: number }> {
+    const productModel = this.db.repositories.productModel as any;
+    const total = { paused: 0, restored: 0, stores: 0 };
+    const [expiredSubs, pausedStoreIds] = await Promise.all([
+      this.subModel.find({ status: { $in: [...NO_PLAN_STATUSES] }, isDelete: false }).select('storeId status').lean(),
+      productModel.distinct('storeId', { pausedFromStatus: { $ne: null }, isDelete: { $ne: true } }),
+    ]);
+    const expiredIds = new Set((expiredSubs as any[]).map(s => String(s.storeId)));
+    const targets = new Set<string>([...expiredIds, ...(pausedStoreIds as any[]).map(String)]);
+    for (const storeId of targets) {
+      const status = expiredIds.has(storeId) ? 'expired' : 'active';
+      const r = await syncStoreListings(productModel, storeId, status);
+      if (r.paused || r.restored) { total.stores++; total.paused += r.paused; total.restored += r.restored; }
+    }
+    return total;
+  }
+
+  /**
    * Executes `cancelSubscription()`'s promise once the paid period the seller
    * already covered actually ends — for manual-provider subs only (a
    * Stripe-driven cancellation resolves itself via the `customer.subscription.deleted`
@@ -971,6 +1006,7 @@ export class SellerPlatformSubscriptionsService {
       if (!freePlan) continue;
       await sub.save();
       downgraded++;
+      await this.emailPlanEnded(sub, 'cancelled');
       this.activityLogService.log({
         storeId: sub.storeId, category: 'platform_plans', action: 'plan_downgraded_cancellation',
         description: `Scheduled cancellation reached period end — store moved to the ${freePlan.name} plan`,
@@ -1111,6 +1147,7 @@ export class SellerPlatformSubscriptionsService {
     await this.downgradeToFree(sub);
     sub.providerSubscriptionId = null;
     await sub.save();
+    await this.emailPlanEnded(sub, 'subscription_ended');
   }
 
   // ═══════════════════════════════════════════════════════════════════════

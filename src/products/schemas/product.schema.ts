@@ -336,6 +336,14 @@ export class Product {
   @Prop({ type: Object, default: null })
   trust: { scholarReviewed: boolean; ageAppropriateMin: number | null; ageAppropriateMax: number | null; reviewedAt?: Date; reviewedBy?: string } | null;
 
+  // Set while the store's platform plan is expired: the listing was live ('active' / 'scheduled')
+  // and was hidden by plan-listing-sync; it is restored to this status when the store has a plan again.
+  @Prop({ type: String, default: null })
+  pausedFromStatus: string | null;
+
+  @Prop({ type: Date, default: null })
+  pausedByPlanAt: Date | null;
+
   @Prop({ default: false })
   isDelete: boolean;
 

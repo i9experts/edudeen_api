@@ -113,8 +113,8 @@ export class EntitlementsService {
   async assertCanCreateProduct(storeId: string): Promise<void> {
     // An ended free trial must be replaced by a paid plan before listing anything new.
     const sub = await this.subModel.findOne({ storeId, isDelete: false }).select('status').lean();
-    if ((sub as any)?.status === 'expired') {
-      throw new ForbiddenException('Your free trial has ended. Choose a plan in Plan & Billing to keep adding products.');
+    if (['expired', 'past_due', 'canceled'].includes((sub as any)?.status)) {
+      throw new ForbiddenException('Your free trial has ended. Choose a plan in Plan & Billing to add or publish products.');
     }
   }
 

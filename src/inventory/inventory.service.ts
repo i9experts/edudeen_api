@@ -150,6 +150,7 @@ export class InventoryService {
         reviewNote: (product as any).reviewNote ?? null,
         // A seller edit of this live listing is waiting for admin approval / was declined.
         hasPendingEdit: !!(product as any).pendingEdit?.submittedAt,
+        pausedByPlan: !!(product as any).pausedFromStatus,
         editRejection: (product as any).lastEditRejection?.reason ?? null,
         price,
         compareAtPrice: defaultVariant?.compareAtPrice ?? null,

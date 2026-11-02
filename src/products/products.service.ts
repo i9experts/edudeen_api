@@ -2140,7 +2140,11 @@ export class ProductsService {
     }
     if (status !== undefined) {
       assertSellerStatus(status);
+      // Expired plan: nothing can be switched on (publish/schedule) until a plan is chosen.
+      if (status === 'active' || status === 'scheduled') await this.entitlementsService.assertCanCreateProduct(String(product.storeId));
       productUpdate.status = resolveSellerPublishStatus(status, product, await this.paidPlanSkipsReview(String(product.storeId)));
+      productUpdate.pausedFromStatus = null;
+      productUpdate.pausedByPlanAt = null;
       productUpdate.scheduledAt = status === 'scheduled' ? parseScheduledAt(scheduledAt) : null;
     }
     if (digital !== undefined && product.type === 'digital') {

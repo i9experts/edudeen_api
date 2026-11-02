@@ -292,6 +292,17 @@ export class SchedulerService {
     });
   }
 
+  // Every minute — listings of stores with an expired plan are hidden; paused ones return once a plan is active.
+  @Cron('* * * * *')
+  async reconcilePlanListings() {
+    await this.runLocked('platform-plan-listing-sync', 5 * 60_000, async () => {
+      const r = await this.sellerPlatformSubscriptionsService.reconcileListingsWithPlans();
+      if (r.paused || r.restored) {
+        this.logger.log(`Plan listing sync: ${r.paused} paused, ${r.restored} restored across ${r.stores} store(s)`);
+      }
+    });
+  }
+
   // Runs daily — admin-granted free plans that ran out go back to the free plan.
   @Cron('50 2 * * *')
   async expireAdminGrantedPlans() {

@@ -1,6 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
+import { syncStoreListings } from '../plan-listing-sync.util';
 
 export type SellerPlatformSubscriptionDocument = SellerPlatformSubscription & Document;
 
@@ -69,6 +70,36 @@ export class SellerPlatformSubscription {
 }
 
 export const SellerPlatformSubscriptionSchema = SchemaFactory.createForClass(SellerPlatformSubscription);
+// Whenever the plan status is saved, hide (expired) or restore (any other status) the store's listings.
+// Best effort: a failure here is caught by the periodic reconcile in SchedulerService.
+SellerPlatformSubscriptionSchema.post('save', async function (doc: any) {
+  try {
+    if (!doc?.storeId) return;
+    await syncStoreListings(doc.model('Product'), String(doc.storeId), doc.status);
+  } catch {
+    /* reconciled by cron */
+  }
+});
+// Same for query-style updates (updateOne/updateMany/findOneAndUpdate): remember the affected stores
+// before the write, re-read their status after it. Capped so a broad filter can't fan out.
+async function syncAfterQueryUpdate(query: any, storeIds: string[]) {
+  const subModel = query.model;
+  for (const storeId of storeIds) {
+    const sub: any = await subModel.findOne({ storeId }).select('status').lean();
+    if (sub) await syncStoreListings(subModel.db.model('Product'), storeId, sub.status);
+  }
+}
+for (const op of ['updateOne', 'updateMany', 'findOneAndUpdate'] as const) {
+  SellerPlatformSubscriptionSchema.pre(op, async function (this: any) {
+    try {
+      const rows = await this.model.find(this.getFilter()).select('storeId').limit(100).lean();
+      this._planSyncStores = rows.map((r: any) => String(r.storeId));
+    } catch { this._planSyncStores = []; }
+  });
+  SellerPlatformSubscriptionSchema.post(op, async function (this: any) {
+    try { await syncAfterQueryUpdate(this, this._planSyncStores ?? []); } catch { /* reconciled by cron */ }
+  });
+}
 SellerPlatformSubscriptionSchema.index({ storeId: 1 }, { unique: true }); // one active platform plan per store, ever
 SellerPlatformSubscriptionSchema.index({ sellerId: 1 });
 SellerPlatformSubscriptionSchema.index({ platformPlanId: 1 });

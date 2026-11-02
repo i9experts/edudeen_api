@@ -105,9 +105,30 @@ export class PlatformPlanNotificationsService {
     await this.send(to, `${escapeHtml(data.storeName)} moved to the free plan`, html);
   }
 
+  private cta(billingPath: string | undefined, label: string): string {
+    if (!billingPath) return '';
+    const url = `${process.env.WEB_APP_URL || 'https://edudeen.com'}${billingPath}`;
+    return `<p style="text-align:center;margin:28px 0;"><a href="${url}" style="background:#174771;color:#fff;padding:12px 26px;border-radius:8px;text-decoration:none;font-weight:600;">${label}</a></p>`;
+  }
+
+  /** The plan ended (cancellation reached its end, admin-granted access ran out, subscription ended): products are hidden until a plan is chosen. */
+  async sendPlanEnded(to: string, data: { sellerName: string; storeName: string; reason: 'cancelled' | 'grant' | 'subscription_ended'; billingPath: string }) {
+    const why = data.reason === 'grant' ? 'The free plan access given to your store has ended.'
+      : data.reason === 'cancelled' ? 'Your cancelled plan has reached the end of its billing period.'
+      : 'Your plan subscription has ended.';
+    const html = shell('Your plan has ended', `
+      <p>Hi ${escapeHtml(data.sellerName)},</p>
+      <p>${why}</p>
+      <div class="warning">Your products on <strong>${escapeHtml(data.storeName)}</strong> are now <strong>hidden from buyers</strong>.
+      Choose a plan and the same products go live again automatically.</div>
+      ${this.cta(data.billingPath, 'Upgrade plan')}
+    `);
+    await this.send(to, `Your ${escapeHtml(data.storeName)} plan has ended - products are hidden`, html);
+  }
+
   async sendPaymentFailed(to: string, data: {
     sellerName: string; storeName: string; planName: string; amountUSD: number;
-    attemptNumber: number; maxAttempts: number; nextRetryDate: Date;
+    attemptNumber: number; maxAttempts: number; nextRetryDate: Date; billingPath?: string;
   }) {
     const html = shell('Platform plan payment failed', `
       <p>Hi ${escapeHtml(data.sellerName)},</p>
@@ -115,19 +136,21 @@ export class PlatformPlanNotificationsService {
       <div class="danger">
         <strong>Attempt ${data.attemptNumber} of ${data.maxAttempts} failed</strong> for ${money(data.amountUSD)}.
       </div>
-      <p>We'll automatically retry on <strong>${data.nextRetryDate.toDateString()}</strong>. To avoid your store being
-      moved to the free plan, please make sure your payment method is up to date before then.</p>
+      <p>We'll automatically retry on <strong>${data.nextRetryDate.toDateString()}</strong>. Until the payment goes through,
+      your products are <strong>hidden from buyers</strong>. Please update your payment method or choose a plan.</p>
+      ${this.cta(data.billingPath, 'Update payment / Upgrade plan')}
     `);
     await this.send(to, `Action needed: payment failed for ${escapeHtml(data.storeName)}`, html);
   }
 
-  async sendDowngradedDueToFailedPayments(to: string, data: { sellerName: string; storeName: string; planName: string; maxAttempts: number }) {
-    const html = shell('Your store was downgraded', `
+  async sendDowngradedDueToFailedPayments(to: string, data: { sellerName: string; storeName: string; planName: string; maxAttempts: number; billingPath?: string }) {
+    const html = shell('Your plan has ended', `
       <p>Hi ${escapeHtml(data.sellerName)},</p>
-      <p>Your store <strong>${escapeHtml(data.storeName)}</strong> has been moved to the free "${escapeHtml(data.planName)}" plan after
+      <p>Your plan for <strong>${escapeHtml(data.storeName)}</strong> has ended after
       ${data.maxAttempts} failed payment attempts.</p>
-      <div class="warning">Any features exclusive to your previous tier (staff seats, custom domain, loyalty program,
-      etc.) are now paused until you upgrade again — your store and existing data are safe and unaffected.</div>
+      <div class="warning">Your products are now <strong>hidden from buyers</strong> and the features of your previous tier are paused.
+      Your store and data are safe. Choose a plan and the same products go live again automatically.</div>
+      ${this.cta(data.billingPath, 'Upgrade plan')}
     `);
     await this.send(to, `${escapeHtml(data.storeName)} was moved to the free plan after failed payments`, html);
   }
