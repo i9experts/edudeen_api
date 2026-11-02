@@ -1778,6 +1778,24 @@ export class OrdersService {
       }
     }
 
+    // Tell the buyer the decision (best effort).
+    if (order.userId) {
+      const num = order.orderNumber ?? orderId;
+      const n = targetItems.length;
+      this.notificationsService
+        .notify({
+          recipientId: String(order.userId),
+          recipientRole: 'user',
+          type: action === 'approve' ? NOTIFICATION_TYPES.RETURN_APPROVED : NOTIFICATION_TYPES.RETURN_REJECTED,
+          title: action === 'approve' ? 'Return approved' : 'Return not approved',
+          body: action === 'approve'
+            ? `Your return for ${n} item(s) from order #${num} was approved.${order.isPaid ? ' Your refund is on its way.' : ''}`
+            : `Your return for ${n} item(s) from order #${num} was not approved.${rejectReason ? ` Reason: ${String(rejectReason).slice(0, 200)}` : ''}`,
+          data: { orderId, orderNumber: String(num), link: `/account/orders/${orderId}` },
+        })
+        .catch(() => {});
+    }
+
     this.activityLogService.log({
       storeId,
       category: 'orders',

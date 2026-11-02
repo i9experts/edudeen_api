@@ -11,6 +11,8 @@ import { AddReviewDto } from './dto/add-review.dto';
 import { EditReviewDto } from './dto/edit-review.dto';
 import { SellerReplyDto } from './dto/seller-reply.dto';
 import { LoyaltyService } from 'src/loyalty/loyalty.service';
+import { NotificationsService } from 'src/notifications/notifications.service';
+import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 
 import { clampInt } from 'src/common/query-safety.util';
 import { recalcProductRating, recalcStoreRating } from './rating-aggregate.util';
@@ -23,6 +25,7 @@ export class RatingService {
     private databaseService: DatabaseService,
     private loyaltyService: LoyaltyService,
     @Optional() private activityLogService?: ActivityLogService,
+    @Optional() private notificationsService?: NotificationsService,
   ) {}
 
   private get r() {
@@ -179,6 +182,26 @@ export class RatingService {
     if (isVerifiedPurchase && rating && product.storeId) {
       this.loyaltyService
         .awardReviewPoints(product.storeId, userId)
+        .catch(() => {});
+    }
+
+    // Tell the store owner about the new review (best effort).
+    if (product.storeId && this.notificationsService) {
+      void this.r.storeModel
+        .findById(product.storeId)
+        .select('sellerId')
+        .lean()
+        .then((store: any) => {
+          if (!store?.sellerId) return;
+          return this.notificationsService!.notify({
+            recipientId: String(store.sellerId),
+            recipientRole: 'seller',
+            type: NOTIFICATION_TYPES.REVIEW_RECEIVED,
+            title: rating ? `New ${rating}-star review` : 'New review comment',
+            body: `A buyer reviewed "${String((product as any).title ?? (product as any).name ?? 'your product').slice(0, 80)}"${comment ? `: ${String(comment).slice(0, 120)}` : '.'}`,
+            data: { productId, storeId: String(product.storeId), link: `/store/${product.storeId}/reviews` },
+          });
+        })
         .catch(() => {});
     }
 
@@ -666,6 +689,19 @@ export class RatingService {
         updatedAt: new Date(),
       },
     });
+
+    if (review.userId && this.notificationsService) {
+      this.notificationsService
+        .notify({
+          recipientId: String(review.userId),
+          recipientRole: 'user',
+          type: NOTIFICATION_TYPES.REVIEW_REPLIED,
+          title: 'The seller replied to your review',
+          body: String(dto.text).slice(0, 160),
+          data: { productId: String(review.productId), link: '/account/reviews' },
+        })
+        .catch(() => {});
+    }
 
     return { success: true, message: 'Reply added' };
   }

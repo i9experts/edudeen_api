@@ -54,6 +54,12 @@ export class NotificationsController {
     return this.notificationsService.markRead(req.user.userId, id);
   }
 
+  // Must stay above ':id' so "clear-read" is not taken for an id.
+  @Delete('clear-read')
+  clearRead(@Req() req: any) {
+    return this.notificationsService.clearRead(req.user.userId);
+  }
+
   @Delete(':id')
   remove(@Req() req: any, @Param('id') id: string) {
     return this.notificationsService.remove(req.user.userId, id);

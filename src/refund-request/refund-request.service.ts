@@ -3,7 +3,10 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
-} from '@nestjs/common';
+  Optional,
+} from '@nestjs/common';
+import { NotificationsService } from 'src/notifications/notifications.service';
+import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 import { DatabaseService } from 'src/database/databaseservice';
 import { FinanceService } from 'src/finance/finance.service';
 import { PaymentService } from 'src/payment/payment.service';
@@ -20,7 +23,16 @@ export class RefundRequestService {
     private readonly paymentService: PaymentService,
     private readonly exchangeRateService: ExchangeRateService,
     private readonly activityLogService: ActivityLogService,
+    @Optional() private readonly notificationsService?: NotificationsService,
   ) {}
+
+  /** Best-effort notice; a notification problem must never fail the refund flow. */
+  private tell(recipientId: string | null | undefined, recipientRole: 'user' | 'seller', type: string, title: string, body: string, data: Record<string, any>) {
+    if (!recipientId || !this.notificationsService) return;
+    this.notificationsService
+      .notify({ recipientId: String(recipientId), recipientRole, type, title, body, data })
+      .catch(() => {});
+  }
 
   private round(n: number) {
     return Math.round(n * 100) / 100;
@@ -126,6 +138,18 @@ export class RefundRequestService {
       targetId: created._id.toString(),
       targetType: 'refund_request',
     });
+
+    // A buyer's request goes to the seller who has to decide it.
+    if (role === 'user') {
+      const store: any = await this.databaseService.repositories.storeModel
+        .findById(sellerOrder.storeId).select('sellerId').lean();
+      this.tell(
+        store?.sellerId ?? sellerOrder.sellerId, 'seller', NOTIFICATION_TYPES.REFUND_REQUESTED,
+        'New refund request',
+        `A buyer asked for a refund on ${items.length} item(s) of order #${order.orderNumber} - ${String(dto.reason).slice(0, 200)}`,
+        { orderId: dto.orderId, orderNumber: String(order.orderNumber ?? ''), storeId: sellerOrder.storeId, link: `/store/${sellerOrder.storeId}/returns` },
+      );
+    }
 
     return { success: true, message: 'Refund request submitted', data: created };
   }
@@ -367,6 +391,13 @@ export class RefundRequestService {
       targetType: 'refund_request',
     });
 
+    this.tell(
+      order.userId, 'user', NOTIFICATION_TYPES.REFUND_APPROVED,
+      'Refund approved',
+      `Your refund of ${buyerRefundAmount} ${buyerRefundCurrency} for order #${order.orderNumber} was approved.`,
+      { orderId: String(order._id), orderNumber: String(order.orderNumber ?? ''), link: `/account/orders/${order._id}` },
+    );
+
     return {
       success: true,
       message: 'Refund approved',
@@ -397,6 +428,14 @@ export class RefundRequestService {
       targetId: request._id.toString(),
       targetType: 'refund_request',
     });
+    if (request.requestedByRole === 'user') {
+      this.tell(
+        request.requestedBy, 'user', NOTIFICATION_TYPES.REFUND_REJECTED,
+        'Refund request not approved',
+        `Your refund request was not approved.${notes ? ` Reason: ${String(notes).slice(0, 200)}` : ''}`,
+        { orderId: String(request.orderId), link: `/account/orders/${request.orderId}` },
+      );
+    }
     return { success: true, message: 'Refund request rejected', data: request };
   }
 }

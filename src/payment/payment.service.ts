@@ -86,6 +86,54 @@ export class PaymentService {
     return Math.round(n * 100) / 100;
   }
 
+  /** Same threshold the seller Inventory page uses for "low stock". */
+  private static readonly LOW_STOCK_THRESHOLD = 10;
+
+  /**
+   * Tells a seller when an order takes a physical variant to "low" or "out of stock".
+   * Fires only on the crossing (stock was above the line before this order), one notice per variant.
+   */
+  private async notifyStockCrossings(createdOrders: any[]) {
+    const lines: { variantId: string; qty: number; storeId: string; sellerId: string; name: string }[] = [];
+    for (const o of createdOrders) {
+      for (const so of o.sellerOrders ?? []) {
+        for (const it of so.items ?? []) {
+          if (it.type === 'physical' && it.variantId) {
+            lines.push({ variantId: String(it.variantId), qty: Number(it.quantity) || 0, storeId: String(so.storeId), sellerId: String(so.sellerId), name: String(it.name ?? 'A product') });
+          }
+        }
+      }
+    }
+    if (!lines.length) return;
+    const variants: any[] = await this.databaseService.repositories.productVariantModel
+      .find({ _id: { $in: [...new Set(lines.map((l) => l.variantId))] } })
+      .select('stock unlimitedStock')
+      .lean();
+    const byId = new Map(variants.map((v) => [String(v._id), v]));
+    const done = new Set<string>();
+    const limit = PaymentService.LOW_STOCK_THRESHOLD;
+    for (const l of lines) {
+      const v = byId.get(l.variantId);
+      if (!v || v.unlimitedStock || done.has(l.variantId)) continue;
+      const now = Number(v.stock ?? 0);
+      const before = now + l.qty;
+      const out = now <= 0 && before > 0;
+      const low = !out && now <= limit && before > limit;
+      if (!out && !low) continue;
+      done.add(l.variantId);
+      this.notificationsService
+        .notify({
+          recipientId: l.sellerId,
+          recipientRole: 'seller',
+          type: out ? NOTIFICATION_TYPES.OUT_OF_STOCK : NOTIFICATION_TYPES.LOW_STOCK,
+          title: out ? 'Out of stock' : 'Running low on stock',
+          body: out ? `"${l.name}" is out of stock. Restock it so buyers can keep ordering.` : `"${l.name}" has only ${now} left.`,
+          data: { storeId: l.storeId, variantId: l.variantId, link: `/store/${l.storeId}/inventory` },
+        })
+        .catch(() => {});
+    }
+  }
+
   /**
    * Stripe Connect destination-charge routing switch — env
    * `STRIPE_CONNECT_DIRECT_CHARGES`, off unless explicitly 'true'. When off
@@ -2184,11 +2232,14 @@ export class PaymentService {
             type: NOTIFICATION_TYPES.ORDER_PLACED,
             title: 'New order received',
             body: `You have a new order #${createdOrder.orderNumber} for ${so.items.length} item(s).`,
-            data: { orderId: createdOrder._id.toString() },
+            data: { orderId: createdOrder._id.toString(), orderNumber: String(createdOrder.orderNumber ?? ''), storeId: so.storeId, link: `/store/${so.storeId}/orders` },
           })
           .catch(() => {});
       }
     }
+
+    // Low / out-of-stock alerts: only when THIS order pushes a variant across the line (no repeat alerts per sale).
+    void this.notifyStockCrossings(createdOrders).catch(() => {});
 
     // Buyer confirmation + emailed receipt, one per order (a mixed cart
     // becomes a physical and a digital order).

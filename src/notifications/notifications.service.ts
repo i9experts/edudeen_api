@@ -162,6 +162,12 @@ export class NotificationsService {
     return { success: true, message: 'All notifications marked as read' };
   }
 
+  /** Deletes every notification the user has already read (the unread ones are kept). */
+  async clearRead(userId: string) {
+    const res = await this.databaseService.repositories.notificationModel.deleteMany({ recipientId: userId, isRead: true });
+    return { success: true, message: 'Read notifications cleared', data: { deleted: res.deletedCount ?? 0 } };
+  }
+
   async remove(userId: string, id: string) {
     if (!isValidObjectId(id)) throw new BadRequestException('Invalid notification id');
     await this.databaseService.repositories.notificationModel.deleteOne({ _id: id, recipientId: userId });
