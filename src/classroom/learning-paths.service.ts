@@ -6,7 +6,6 @@ import { DatabaseService } from '../database/databaseservice';
 import { ProductsService } from '../products/products.service';
 import { sanitizeDigitalForPublicView } from '../products/product-public-view.util';
 import { EducationLevel } from '../products/schemas/product.schema';
-import { SavedListsService } from './saved-lists.service';
 import { LearningPath, LearningPathDocument } from './schemas/learning-path.schema';
 
 export const MAX_PATH_STEPS = 12;
@@ -61,7 +60,6 @@ export class LearningPathsService {
     @InjectModel(LearningPath.name) private readonly model: Model<LearningPathDocument>,
     private readonly productsService: ProductsService,
     private readonly databaseService: DatabaseService,
-    private readonly savedLists: SavedListsService,
   ) {}
 
   private shape(p: any) {
@@ -93,23 +91,6 @@ export class LearningPathsService {
     const p = await this.model.findOne({ status: 'active', slug: String(slug ?? '') }).lean();
     if (!p) throw new NotFoundException('This learning path is not available');
     return { success: true, data: { ...this.shape(p), steps: await this.resolve(p, viewerId) } };
-  }
-
-  /** Copies the path's live products into a new private reading list owned by the parent. */
-  async saveToList(userId: string, slug: string) {
-    const p = await this.model.findOne({ status: 'active', slug: String(slug ?? '') }).lean();
-    if (!p) throw new NotFoundException('This learning path is not available');
-    const steps = await this.resolve(p, userId);
-    const ids = [...new Set(steps.flatMap((s) => s.products.map((x: any) => String(x._id))))];
-    if (!ids.length) throw new BadRequestException('There is nothing to save in this path yet');
-    const created: any = await this.savedLists.create(userId, { name: `Reading list: ${p.title}`.slice(0, 80), description: p.subtitle || '', isPublic: false });
-    const listId = String(created.data._id);
-    let added = 0;
-    for (const id of ids) {
-      const r: any = await this.savedLists.addItem(userId, listId, { productId: id }).catch(() => null);
-      if (r?.data?.added) added++;
-    }
-    return { success: true, message: 'Saved as your reading list', data: { listId, slug: created.data.slug, added } };
   }
 
   // ── Admin ─────────────────────────────────────────────────────────────────

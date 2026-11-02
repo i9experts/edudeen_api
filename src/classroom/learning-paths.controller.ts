@@ -7,7 +7,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { LearningPathsService } from './learning-paths.service';
 import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 
-/** Public learning paths + "save as my reading list". */
+/** Public learning paths. */
 @Controller('api/learning-paths')
 export class LearningPathsController {
   constructor(private readonly paths: LearningPathsService) {}
@@ -21,13 +21,6 @@ export class LearningPathsController {
   @Get(':slug')
   bySlug(@Req() req: any, @Param('slug') slug: string) {
     return this.paths.bySlug(slug, req.user?.userId ?? null);
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('user')
-  @Post(':slug/save-to-list')
-  save(@Req() req: any, @Param('slug') slug: string) {
-    return this.paths.saveToList(req.user.userId, slug);
   }
 }
 

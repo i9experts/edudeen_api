@@ -42,8 +42,7 @@ describe('LearningPathsService', () => {
   const make = (found: any, live: string[] = [P1, P2]) => {
     const model: any = { findOne: jest.fn(() => chain(found)), find: jest.fn(() => chain(found ? [found] : [])) };
     const products: any = { getShapedProductsByIds: jest.fn(async (ids: string[]) => ids.filter((i) => live.includes(i)).map((_id) => ({ _id, name: `P${_id}`, digital: { files: [{ key: 'secret' }] } }))) };
-    const lists: any = { create: jest.fn(async () => ({ data: { _id: 'L1', slug: 'reading-list-class-3-ab12' } })), addItem: jest.fn(async () => ({ data: { added: true } })) };
-    return { svc: new LearningPathsService(model, products, {} as any, lists), lists, products };
+    return { svc: new LearningPathsService(model, products, {} as any), products };
   };
 
   it('returns live steps with their picks in order, with file keys stripped; empty/unavailable picks drop out', async () => {
@@ -60,15 +59,5 @@ describe('LearningPathsService', () => {
   it('lists nothing when no path exists (empty state)', async () => {
     const r: any = await make(null).svc.list();
     expect(r.data).toEqual([]);
-  });
-  it('saves the whole path as a private reading list owned by the buyer', async () => {
-    const { svc, lists } = make(doc);
-    const r: any = await svc.saveToList('u1', 'class-3');
-    expect(lists.create).toHaveBeenCalledWith('u1', expect.objectContaining({ name: 'Reading list: Class 3', isPublic: false }));
-    expect(lists.addItem).toHaveBeenCalledTimes(2);
-    expect(r.data).toMatchObject({ listId: 'L1', added: 2 });
-  });
-  it('refuses to save a path with nothing live in it', async () => {
-    await expect(make(doc, []).svc.saveToList('u1', 'class-3')).rejects.toBeInstanceOf(BadRequestException);
   });
 });

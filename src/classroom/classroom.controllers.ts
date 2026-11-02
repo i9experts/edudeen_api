@@ -5,67 +5,10 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
-import { SavedListsService } from './saved-lists.service';
 import { ProductQuestionsService } from './product-questions.service';
-import { QuoteRequestsService } from './quote-requests.service';
 import { BundlesService } from './bundles.service';
 import { CuratedCollectionsService } from './curated-collections.service';
 import { CoursesService } from './courses.service';
-
-/** Teacher lists — many named, shareable lists per buyer. */
-@Controller('api/lists')
-export class SavedListsController {
-  constructor(private readonly lists: SavedListsService) {}
-
-
-  @UseGuards(OptionalJwtAuthGuard)
-  @Get('public/:slug')
-  bySlug(@Req() req: any, @Param('slug') slug: string) {
-    return this.lists.getBySlug(slug, req.user?.userId ?? null);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Get('mine')
-  mine(@Req() req: any) {
-    return this.lists.getMine(req.user.userId);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Post()
-  create(@Req() req: any, @Body() body: any) {
-    return this.lists.create(req.user.userId, body);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Patch(':id')
-  update(@Req() req: any, @Param('id') id: string, @Body() body: any) {
-    return this.lists.update(req.user.userId, id, body);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Delete(':id')
-  remove(@Req() req: any, @Param('id') id: string) {
-    return this.lists.remove(req.user.userId, id);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Post(':id/items')
-  addItem(@Req() req: any, @Param('id') id: string, @Body() body: any) {
-    return this.lists.addItem(req.user.userId, id, body);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Patch(':id/items/:productId')
-  note(@Req() req: any, @Param('id') id: string, @Param('productId') productId: string, @Body() body: any) {
-    return this.lists.updateItemNote(req.user.userId, id, productId, body);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Delete(':id/items/:productId')
-  removeItem(@Req() req: any, @Param('id') id: string, @Param('productId') productId: string) {
-    return this.lists.removeItem(req.user.userId, id, productId);
-  }
-}
 
 /** Pre-purchase questions and seller answers on a listing. */
 @Controller('api/product-questions')
@@ -109,64 +52,6 @@ export class ProductQuestionsController {
   @Delete(':id')
   remove(@Req() req: any, @Param('id') id: string) {
     return this.questions.deleteOwn(req.user.userId, id);
-  }
-}
-
-/** Bulk / school quote requests. */
-@Controller('api/quotes')
-export class QuoteRequestsController {
-  constructor(private readonly quotes: QuoteRequestsService) {}
-
-  @UseGuards(JwtAuthGuard)
-  @Post()
-  create(@Req() req: any, @Body() body: any) {
-    return this.quotes.create(req.user.userId, body);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Get('mine')
-  mine(@Req() req: any) {
-    return this.quotes.listMine(req.user.userId);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Patch('mine/:id/purchase-order')
-  purchaseOrder(@Req() req: any, @Param('id') id: string, @Body() body: any) {
-    return this.quotes.attachPurchaseOrder(req.user.userId, id, body);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Patch('mine/:id/:action')
-  respond(@Req() req: any, @Param('id') id: string, @Param('action') action: string) {
-    if (!['accept', 'decline', 'cancel'].includes(action)) return { success: false, message: 'Unknown action' };
-    return this.quotes.respondAsBuyer(req.user.userId, id, action as 'accept' | 'decline' | 'cancel');
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('seller')
-  @Get('seller/:storeId')
-  forSeller(@Req() req: any, @Param('storeId') storeId: string, @Query('status') status?: string) {
-    return this.quotes.listForSeller(storeId, req.user.userId, status);
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('seller')
-  @Patch('seller/:storeId/:id/offer')
-  offer(@Req() req: any, @Param('storeId') storeId: string, @Param('id') id: string, @Body() body: any) {
-    return this.quotes.sendOffer(storeId, req.user.userId, id, body);
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('seller')
-  @Patch('seller/:storeId/:id/decline')
-  decline(@Req() req: any, @Param('storeId') storeId: string, @Param('id') id: string, @Body() body: any) {
-    return this.quotes.declineAsSeller(storeId, req.user.userId, id, body);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Get(':id')
-  one(@Req() req: any, @Param('id') id: string) {
-    return this.quotes.getOne(req.user.userId, id);
   }
 }
 

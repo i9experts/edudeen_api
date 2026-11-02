@@ -1,55 +1,14 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return -- mock-heavy tests */
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { SavedListsService } from './saved-lists.service';
 import { ProductQuestionsService } from './product-questions.service';
-import { QuoteRequestsService, cleanQuoteInput } from './quote-requests.service';
 import { bundleSavings, cleanBundleInput } from './bundle.util';
 import { cleanCollectionInput } from './curated-collections.service';
 import { cleanCourseInput, scoreQuiz } from './course.util';
 import { cleanDeliveryFormat } from '../products/product-input.util';
 
 const P1 = '64b0000000000000000000a1';
-const L1 = '64b0000000000000000000b1';
 const Q1 = '64b0000000000000000000c1';
 const chain = (v: any) => ({ select: () => chain(v), lean: () => Promise.resolve(v), sort: () => chain(v), limit: () => chain(v), catch: () => Promise.resolve(v), then: (r: any) => Promise.resolve(v).then(r) });
-
-describe('Teacher lists', () => {
-  const listDoc = (over: any = {}) => {
-    const doc: any = { _id: L1, userId: 'u1', name: 'Term 1', items: [], save: jest.fn(), deleteOne: jest.fn(), markModified: jest.fn(), ...over };
-    return doc;
-  };
-  const make = (doc: any, product: any = { _id: P1 }) => {
-    const listModel: any = { findById: jest.fn(() => Promise.resolve(doc)), findOne: jest.fn(() => chain(doc)) };
-    const repos: any = { productModel: { exists: jest.fn(() => Promise.resolve(product)) }, userModel: { findById: () => chain({ name: 'Ayesha Khan' }) } };
-    const products: any = { getShapedProductsByIds: jest.fn(() => Promise.resolve([{ _id: P1, name: 'Algebra', digital: { files: [{ key: 'secret' }] } }])) };
-    return new SavedListsService(listModel, { repositories: repos } as any, products);
-  };
-
-  it('adds a product once and refuses another user', async () => {
-    const doc = listDoc();
-    const svc = make(doc);
-    await svc.addItem('u1', L1, { productId: P1, note: 'week 2' });
-    expect(doc.items).toEqual([expect.objectContaining({ productId: P1, note: 'week 2' })]);
-    const again: any = await svc.addItem('u1', L1, { productId: P1 });
-    expect(again.data.added).toBe(false);
-    await expect(svc.addItem('u2', L1, { productId: P1 })).rejects.toBeInstanceOf(ForbiddenException);
-  });
-
-  it('rejects a product that is not live', async () => {
-    await expect(make(listDoc(), null).addItem('u1', L1, { productId: P1 })).rejects.toBeInstanceOf(NotFoundException);
-  });
-
-  it('hides a private list from everyone but its owner, and strips file keys from public view', async () => {
-    const doc = listDoc({ isPublic: false, slug: 'term-1-abcd', items: [{ productId: P1, note: 'n' }] });
-    await expect(make(doc).getBySlug('term-1-abcd', 'u2')).rejects.toBeInstanceOf(NotFoundException);
-    await expect(make(doc).getBySlug('term-1-abcd', null)).rejects.toBeInstanceOf(NotFoundException);
-    const own: any = await make(doc).getBySlug('term-1-abcd', 'u1');
-    expect(own.data.isOwner).toBe(true);
-    expect(own.data.ownerName).toBe('Ayesha');
-    expect(own.data.items[0].note).toBe('n');
-    expect(JSON.stringify(own.data.items[0].product)).not.toContain('secret');
-  });
-});
 
 describe('Product Q&A', () => {
   const product = { _id: P1, name: 'Algebra', slug: 'algebra', storeId: 's1', sellerId: 'seller1', status: 'active' };
@@ -89,52 +48,6 @@ describe('Product Q&A', () => {
   it('keeps answered questions from being deleted by the asker', async () => {
     const { svc } = make({ askerId: 'u1', answeredAt: new Date(), deleteOne: jest.fn() });
     await expect(svc.deleteOwn('u1', Q1)).rejects.toBeInstanceOf(BadRequestException);
-  });
-});
-
-describe('School quote requests', () => {
-  const valid = { institutionName: 'City School', contactName: 'Sana', contactPhone: '0300 1234567', quantity: 40, institutionType: 'madrasa' };
-
-  it('validates the request form', () => {
-    expect(cleanQuoteInput(valid)).toEqual(expect.objectContaining({ institutionName: 'City School', quantity: 40, institutionType: 'madrasa' }));
-    expect(cleanQuoteInput({ ...valid, institutionType: 'hacker' }).institutionType).toBe('school');
-    expect(() => cleanQuoteInput({ ...valid, quantity: 1 })).toThrow(BadRequestException);
-    expect(() => cleanQuoteInput({ ...valid, quantity: 2.5 })).toThrow(BadRequestException);
-    expect(() => cleanQuoteInput({ ...valid, contactPhone: 'abc' })).toThrow(BadRequestException);
-    expect(() => cleanQuoteInput({ ...valid, institutionName: ' ' })).toThrow(BadRequestException);
-  });
-
-  const quoteDoc = (over: any = {}) => ({ _id: Q1, buyerId: 'u1', sellerId: 'seller1', storeId: 's1', quantity: 40, productName: 'Algebra', institutionName: 'City School', status: 'pending', offer: null, save: jest.fn(), toObject() { return this; }, ...over });
-  const make = (q: any) => {
-    const quoteModel: any = { findOne: jest.fn(() => Promise.resolve(q)), findById: jest.fn(() => Promise.resolve(q)) };
-    const repos: any = { storeModel: { findById: jest.fn(() => Promise.resolve({ _id: 's1', sellerId: 'seller1', baseCurrency: 'PKR', isDelete: false })) } };
-    const notify = jest.fn();
-    return { svc: new QuoteRequestsService(quoteModel, { repositories: repos } as any, { notify } as any), notify };
-  };
-
-  it('prices the whole order from the unit price and notifies the buyer', async () => {
-    const q = quoteDoc();
-    const { svc, notify } = make(q);
-    await svc.sendOffer('s1', 'seller1', Q1, { unitPrice: 350 });
-    expect(q.status).toBe('quoted');
-    expect(q.offer).toEqual(expect.objectContaining({ unitPrice: 350, totalPrice: 14000, currency: 'PKR' }));
-    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ recipientId: 'u1', type: 'quote_sent' }));
-  });
-
-  it('will not let another seller price it', async () => {
-    await expect(make(quoteDoc()).svc.sendOffer('s1', 'seller2', Q1, { unitPrice: 350 })).rejects.toBeInstanceOf(ForbiddenException);
-  });
-
-  it('lets the buyer accept only a live quote', async () => {
-    await expect(make(quoteDoc()).svc.respondAsBuyer('u1', Q1, 'accept')).rejects.toBeInstanceOf(BadRequestException);
-    const expired = quoteDoc({ status: 'quoted', offer: { unitPrice: 1, totalPrice: 40, currency: 'PKR', validUntil: new Date(Date.now() - 1000) } });
-    await expect(make(expired).svc.respondAsBuyer('u1', Q1, 'accept')).rejects.toBeInstanceOf(BadRequestException);
-    const live = quoteDoc({ status: 'quoted', offer: { unitPrice: 1, totalPrice: 40, currency: 'PKR', validUntil: null } });
-    const { svc, notify } = make(live);
-    await svc.respondAsBuyer('u1', Q1, 'accept');
-    expect(live.status).toBe('accepted');
-    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ recipientId: 'seller1', type: 'quote_accepted' }));
-    await expect(make(quoteDoc()).svc.respondAsBuyer('u9', Q1, 'cancel')).rejects.toBeInstanceOf(NotFoundException);
   });
 });
 

@@ -50,7 +50,7 @@ const PUBLIC_TOPICS = new Set(['catalog', 'products', 'config', 'banners', 'spot
 /** Everything a signed-in user's private screens may show; sent to a user when they receive a notification. */
 export const PRIVATE_TOPICS = [
   'orders', 'finance', 'returns', 'refunds', 'customers', 'analytics', 'marketing', 'messaging', 'messages', 'cart', 'wishlist',
-  'premium', 'subscriptions', 'reviews', 'plans', 'users', 'payouts', 'loyalty', 'quotes', 'product-questions', 'promotions', 'children', 'store',
+  'premium', 'subscriptions', 'reviews', 'plans', 'users', 'payouts', 'loyalty', 'product-questions', 'promotions', 'children', 'store',
 ];
 
 const HEX24 = /^[0-9a-f]{24}$/;
