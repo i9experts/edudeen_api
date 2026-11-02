@@ -22,7 +22,7 @@ export class SellerPlatformSubscription {
 
   @Prop({
     type: String,
-    enum: ['trialing', 'active', 'past_due', 'canceled'],
+    enum: ['trialing', 'active', 'past_due', 'canceled', 'expired'],
     default: 'trialing',
   })
   status: string;
