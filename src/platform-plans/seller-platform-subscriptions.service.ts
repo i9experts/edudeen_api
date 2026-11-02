@@ -971,6 +971,8 @@ export class SellerPlatformSubscriptionsService {
   async reconcileListingsWithPlans(): Promise<{ paused: number; restored: number; stores: number }> {
     const productModel = this.db.repositories.productModel as any;
     const total = { paused: 0, restored: 0, stores: 0 };
+    // Trials are also expired here (every minute) so a missed daily 02:45 run can never leave an ended trial live.
+    await this.expireTrials().catch((e: any) => this.logger.error(`expireTrials from reconcile failed: ${e?.message}`));
     const [expiredSubs, pausedStoreIds] = await Promise.all([
       this.subModel.find({ status: { $in: [...NO_PLAN_STATUSES] }, isDelete: false }).select('storeId status').lean(),
       productModel.distinct('storeId', { pausedFromStatus: { $ne: null }, isDelete: { $ne: true } }),
