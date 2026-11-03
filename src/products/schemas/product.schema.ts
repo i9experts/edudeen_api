@@ -210,6 +210,14 @@ export class Product {
   @Prop({ type: String, enum: ['book', 'flat'], default: null })
   coverStyle: 'book' | 'flat' | null;
 
+  // Physical products: what kind of parcel it is and its packed size (cm). Drives the weight-based delivery charge
+  // (checkout/shipping-rate.util.ts). parcelType null = legacy product, treated as 'standard'.
+  @Prop({ type: String, enum: ['document', 'standard', 'fragile', 'bulky'], default: null })
+  parcelType: 'document' | 'standard' | 'fragile' | 'bulky' | null;
+
+  @Prop({ type: Object, default: null })
+  packageCm: { l: number; w: number; h: number } | null;
+
   // How a digital product reaches the buyer: files to download, an online
   // course built in the course builder.
   // No enum validator on purpose: retired legacy docs may still hold 'live_class'; input is checked by cleanDeliveryFormat.

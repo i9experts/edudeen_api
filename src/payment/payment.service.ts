@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Optional,
   BadRequestException,
   NotFoundException,
   ConflictException,
@@ -19,18 +20,11 @@ import { CommissionRulesService } from 'src/commission-rules/commission-rules.se
 import Stripe from 'stripe';
 import { orderPlacedEmail } from 'src/notifications/templates/notification-email.template';
 import { getHostedProvider } from './providers/hosted-providers.registry';
+import { evaluateCod, withCodFee } from './cod-rules.util';
+import { ShippingRatesService } from 'src/checkout/shipping-rates.service';
+import { ShippingQuoteService } from 'src/checkout/shipping-quote.service';
+import type { CodCollector } from 'src/checkout/courier-settings.util';
 import type { HostedRedirect, VerifiedCallback } from './providers/payment-provider.types';
-
-/** Cash on Delivery is collected and confirmed per seller, so it only works when all of the
- *  checkout's physical items come from ONE store. Enforced here as well as hidden in the
- *  offered payment methods (CheckoutService.createCheckout) — the client is never trusted. */
-function assertSingleStoreForCod(physicalStoreIds: unknown[]) {
-  if (physicalStoreIds.length > 1) {
-    throw new BadRequestException(
-      'Cash on Delivery is only available when all physical items are from one store — please pay online, or check out one store at a time.',
-    );
-  }
-}
 
 /** The id of the Order that actually holds this store's items (a checkout yields up to two Orders —
  *  digital and physical — and a gift card / reward voucher belongs to ONE store). Falls back to the
@@ -63,6 +57,8 @@ export class PaymentService {
     private readonly giftCardsService: GiftCardsService,
     private readonly stripeConnectService: StripeConnectService,
     private readonly commissionRulesService: CommissionRulesService,
+    @Optional() private readonly shippingRates?: ShippingRatesService,
+    @Optional() private readonly shippingQuotes?: ShippingQuoteService,
   ) {
     const secretKey = this.configService
       .get<string>('STRIPE_SECRET_KEY')
@@ -302,7 +298,6 @@ export class PaymentService {
     // this endpoint doesn't trust that client-side state alone.
     if (useSplit) {
       const physicalStoreIds = [...new Set(physicalItems.map((i: any) => i.storeId))];
-      assertSingleStoreForCod(physicalStoreIds);
       const codDisabledStores = await this.databaseService.repositories.storeModel
         .find({ _id: { $in: physicalStoreIds }, codEnabled: false })
         .select('name')
@@ -312,6 +307,8 @@ export class PaymentService {
           `Cash on Delivery isn't available for: ${codDisabledStores.map((s: any) => s.name).join(', ')} — please pay the full amount online instead.`,
         );
       }
+      // Admin's per-package COD limit (the fee is added later, when the orders are created).
+      await this.prepareCodCheckout({ ...checkout.toObject?.() ?? checkout }, true);
     }
     // digitalItems[].totalPrice is each item's OWN native seller currency
     // (never converted at checkout-item level — only checkout.totalAmount
@@ -846,6 +843,10 @@ export class PaymentService {
       ? { storeId: checkout.items[0]?.storeId, accountId: transaction.stripeConnectedAccountId }
       : null;
 
+    // 'split': the physical part is COD, so the admin's per-package COD fee applies to it (the limit was already
+    // enforced when the card payment was initiated - the buyer's money is captured by now, so no refusal here).
+    const splitCodPatch = transaction.paymentScope === 'digital_only' ? await this.prepareCodCheckout(checkout, false) : null;
+
     let orders: any[];
     try {
       orders = await this.createOrder(transaction.userId, checkout, orderModel, addressModel, physicalPayment, digitalPayment, undefined, connectInfo);
@@ -882,6 +883,7 @@ export class PaymentService {
     });
     await checkoutModel.findByIdAndUpdate(checkout._id, {
       status: 'completed',
+      ...(splitCodPatch ?? {}),
     });
     await this.removeCheckedOutItemsFromCart(
       transaction.userId,
@@ -1140,11 +1142,10 @@ export class PaymentService {
     if (!checkout) throw new NotFoundException('Checkout not found');
 
     if (checkout.status === 'completed') {
-      const transaction = await paymentTransactionModel.findOne({
-        checkoutId,
-        status: 'completed',
-        isDelete: false,
-      });
+      // A multi-package COD checkout has one (pending-until-paid) row per package, none 'completed' yet.
+      const transaction =
+        (await paymentTransactionModel.findOne({ checkoutId, status: 'completed', isDelete: false })) ??
+        (await paymentTransactionModel.findOne({ checkoutId, paymentType: 'cash_on_delivery', status: 'pending', isDelete: false }));
       const orders = await this.formatOrdersByIds(transaction?.orderIds ?? []);
       return { success: true, data: { status: 'completed', orders } };
     }
@@ -1326,6 +1327,69 @@ export class PaymentService {
     }
   }
 
+  /**
+   * Admin's Cash-on-Delivery guard rails for this checkout. Throws a readable 400 when a package is over the limit
+   * (`enforceLimit`); returns the fee-adjusted figures to persist (and applies them to the in-memory `checkout`,
+   * so order creation sees them), or null when there is no fee / it is already on the checkout. Idempotent.
+   * Nothing configured -> returns null and never touches the checkout (behaviour identical to before).
+   */
+  /** Who collects each physical package's COD cash (store -> 'seller' | 'platform'). Computed ONCE per checkout object
+   *  (cached), so the COD fee and the order's `codCollector` can never disagree within one placement. */
+  private readonly collectorCache = new WeakMap<object, Map<string, CodCollector>>();
+
+  private async codCollectorsFor(checkout: any): Promise<Map<string, CodCollector>> {
+    const hit = this.collectorCache.get(checkout);
+    if (hit) return hit;
+    const storeIds = [...new Set(((checkout.items ?? []) as any[]).filter((i: any) => i.type === 'physical').map((i: any) => String(i.storeId)))];
+    const map = new Map<string, CodCollector>();
+    if (storeIds.length) {
+      const stores: any[] = await this.databaseService.repositories.storeModel
+        .find({ _id: { $in: storeIds } }).select('deliveryMethod fulfillmentMode').lean();
+      let settings: any = null;
+      try { settings = this.shippingRates ? await this.shippingRates.getCourierSettings() : null; } catch { settings = null; }
+      // No courier info available (module not wired / settings unreadable) = nothing usable: seller-collected unless the store is admin-'platform'.
+      const resolved = this.shippingQuotes && settings
+        ? this.shippingQuotes.codCollectors(stores, settings)
+        : new Map<string, CodCollector>(stores.map((s: any) => [String(s._id), (s.fulfillmentMode === 'platform' ? 'platform' : 'seller') as CodCollector]));
+      for (const id of storeIds) map.set(id, resolved.get(id) ?? 'seller');
+    }
+    this.collectorCache.set(checkout, map);
+    return map;
+  }
+
+  private async prepareCodCheckout(checkout: any, enforceLimit = true) {
+    const cfg = typeof (this.adminConfigService as any)?.getCodConfig === 'function'
+      ? await this.adminConfigService.getCodConfig().catch(() => ({ maxPerPackagePKR: null, feePerPackagePKR: 0 }))
+      : { maxPerPackagePKR: null, feePerPackagePKR: 0 };
+    if (!cfg.maxPerPackagePKR && !(cfg.feePerPackagePKR > 0)) return null;
+    const snaps = (checkout.fxSnapshots as any) ?? [];
+    // The COD fee is only charged on packages whose cash lands with Edudeen (its courier).
+    const collectors = cfg.feePerPackagePKR > 0 ? await this.codCollectorsFor(checkout) : null;
+    const feeStoreIds = collectors ? [...collectors.entries()].filter(([, c]) => c === 'platform').map(([id]) => id) : undefined;
+    const ev = evaluateCod(checkout, cfg, (n, from, to) => this.exchangeRateService.convertWithSnapshots(n, from, to, snaps), feeStoreIds);
+    if (enforceLimit && !ev.available) throw new BadRequestException(ev.reason ?? 'Cash on Delivery is not available for this order.');
+    const patch = withCodFee(checkout, ev.feePerPackage, feeStoreIds);
+    if (patch) {
+      checkout.shippingByStore = patch.shippingByStore;
+      checkout.shippingFee = patch.shippingFee;
+      checkout.totalAmount = patch.totalAmount;
+      checkout.codFeeTotal = patch.codFeeTotal;
+    }
+    return patch;
+  }
+
+  /** One { storeId, amount } per COD package of the placed order(s). */
+  private codPackageRows(orders: any[]): { storeId: string; amount: number }[] {
+    const rows: { storeId: string; amount: number }[] = [];
+    for (const o of orders) {
+      for (const so of (o.sellerOrders ?? []) as any[]) {
+        if (so.fulfillmentType && so.fulfillmentType !== 'physical') continue;
+        rows.push({ storeId: String(so.storeId), amount: so.codAmount ?? this.round((so.subtotal ?? 0) + (so.shippingFee ?? 0)) });
+      }
+    }
+    return rows;
+  }
+
   /** The checkout's grand total recomputed from its own server-priced lines (each converted from its native
    *  currency with the checkout's frozen FX snapshots) plus shipping — never read from the client. */
   private recomputeCheckoutTotal(checkout: any): number {
@@ -1482,7 +1546,7 @@ export class PaymentService {
     // Per-seller opt-out — a store can disable COD on its own listings.
     // No platform-wide order-value ceiling — COD is available for any amount.
     const storeIds = [...new Set(checkout.items.map((i: any) => i.storeId))];
-    assertSingleStoreForCod(storeIds);
+    // Several sellers are fine: each package is its own COD collection (SellerOrder.isPaid / codAmount).
     const codDisabledStores = await this.databaseService.repositories.storeModel
       .find({ _id: { $in: storeIds }, codEnabled: false })
       .select('name')
@@ -1513,6 +1577,9 @@ export class PaymentService {
     }
 
     await this.assertGiftCardStillCovers(checkout);
+    // Admin's COD limit (per package) is enforced here, server-side; the fee is folded into each package's
+    // shipping line IN MEMORY and saved together with the completed checkout (so a failed attempt leaves no fee).
+    const codPatch = await this.prepareCodCheckout(checkout);
     // The claim also records the payment type/status (was a separate update).
     await this.claimCheckoutForPlacement(checkoutId, userId, { paymentType: 'cash_on_delivery', status: 'payment_pending' });
 
@@ -1527,21 +1594,39 @@ export class PaymentService {
     await this.cancelPendingCardIntents(checkoutId);
 
     // Independent writes: run them together.
+    // 2+ packages: the cash is collected package by package, so each package gets its own row (pending until
+    // that package is marked paid - OrdersService.markPackagePaid). One package: the single row as before.
+    const codRows = this.codPackageRows(orders);
     await Promise.all([
-      paymentTransactionModel.create({
-        userId,
-        checkoutId: checkout._id.toString(),
-        orderIds: orders.map((o: any) => o._id.toString()),
-        paymentType: 'cash_on_delivery',
-        amount: checkout.totalAmount,
-        currency: checkout.currency,
-        fxSnapshots: checkout.fxSnapshots,
-        status: 'completed',
-        stripePaymentIntentId: null,
-        stripeClientSecret: null,
-        paidAt: null,
-      }),
-      checkoutModel.findByIdAndUpdate(checkoutId, { status: 'completed' }),
+      ...(codRows.length > 1
+        ? codRows.map((r) => paymentTransactionModel.create({
+            userId,
+            checkoutId: checkout._id.toString(),
+            orderIds: orders.map((o: any) => o._id.toString()),
+            paymentType: 'cash_on_delivery',
+            amount: r.amount,
+            currency: checkout.currency,
+            fxSnapshots: checkout.fxSnapshots,
+            status: 'pending',
+            storeId: r.storeId,
+            stripePaymentIntentId: null,
+            stripeClientSecret: null,
+            paidAt: null,
+          }))
+        : [paymentTransactionModel.create({
+            userId,
+            checkoutId: checkout._id.toString(),
+            orderIds: orders.map((o: any) => o._id.toString()),
+            paymentType: 'cash_on_delivery',
+            amount: checkout.totalAmount,
+            currency: checkout.currency,
+            fxSnapshots: checkout.fxSnapshots,
+            status: 'completed',
+            stripePaymentIntentId: null,
+            stripeClientSecret: null,
+            paidAt: null,
+          })]),
+      checkoutModel.findByIdAndUpdate(checkoutId, { status: 'completed', ...(codPatch ?? {}) }),
       this.removeCheckedOutItemsFromCart(userId, checkout, cartModel),
     ]);
 
@@ -1716,7 +1801,18 @@ export class PaymentService {
       paymentDate: order.paidAt ?? null,
       paymentMethod: order.paymentType,
       isPaid: order.isPaid,
+      paymentStatus: order.paymentStatus ?? null,
       orderStatus: order.orderStatus,
+      // One entry per seller package, same fields as OrdersService.toBuyerOrderViews, so order-success can show
+      // 'Pay Rs X on delivery' per package straight after placing (no extra fetch).
+      packages: (order.sellerOrders ?? []).map((so: any) => ({
+        storeId: String(so.storeId),
+        status: so.status ?? 'pending',
+        packageIsPaid: so.isPaid === true,
+        packagePaidAt: so.paidAt ?? null,
+        codAmount: so.codAmount ?? 0,
+        codCollector: so.codCollector ?? null,
+      })),
       // The currency this order was ACTUALLY placed/charged in — permanent,
       // never re-derived from today's rate or the buyer's current display
       // preference (which may have changed since). This was previously
@@ -1963,6 +2059,12 @@ export class PaymentService {
           settlementAmount,
           shippingFee: sellerShippingFee,
           settlementShippingFee,
+          // How the delivery charge was priced (courier/service/ETA/source); booking is locked to this courier.
+          shippingCourier: (() => {
+            if (storeItems[0].type !== 'physical') return null;
+            const l: any = ((checkout.shippingByStore as any[]) ?? []).find((x: any) => x.storeId === sellerStoreId);
+            return l?.source ? { courier: l.courier ?? null, service: l.service ?? null, etaDays: l.etaDays ?? null, source: l.source } : null;
+          })(),
           settledViaConnect: isConnectSettled,
           stripeConnectedAccountId: isConnectSettled ? connectInfo!.accountId : null,
           items: storeItems.map((i) => ({
@@ -2023,6 +2125,18 @@ export class PaymentService {
     // === PHYSICAL ORDER ===
     if (physicalItems.length > 0) {
       const sellerOrders = buildSellerOrders(physicalItems);
+      // Cash on delivery: each package is collected by its own rider, so it carries its own amount
+      // (items + its own shipping) and its own paid flag (see OrdersService.markPaid).
+      if (physicalPayment.paymentType === 'cash_on_delivery' && !physicalPayment.isPaid) {
+        const collectors = await this.codCollectorsFor(checkout);
+        for (const so of sellerOrders as any[]) {
+          so.isPaid = false;
+          so.paidAt = null;
+          // Whose cash: Edudeen's courier -> 'platform' (admin confirms, seller credited after), else the seller's rider.
+          so.codCollector = collectors.get(String(so.storeId)) ?? 'seller';
+          so.codAmount = this.round((so.subtotal ?? 0) + (so.shippingFee ?? 0));
+        }
+      }
       // Spans potentially multiple sellers/currencies — each item is
       // converted from its OWN native currency into orderCurrency before
       // summing (convertedSum), never summed raw across mixed currencies.

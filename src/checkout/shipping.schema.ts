@@ -45,6 +45,22 @@ export class ShippingZone {
 export const ShippingZoneSchema =
   SchemaFactory.createForClass(ShippingZone);
 
+/** One document (key 'default'): the admin's weight-based delivery rate table (see shipping-rate.util.ts). */
+@Schema({ timestamps: true, collection: 'shipping_rate_tables' })
+export class ShippingRateTable {
+  @Prop({ required: true, unique: true, default: 'default' })
+  key: string;
+
+  @Prop({ type: Object, default: {} })
+  table: Record<string, any>;
+
+  // Admin courier settings (courier-settings.util.ts): which couriers sellers may pick, live-rate switch, markup.
+  @Prop({ type: Object, default: null })
+  couriers: Record<string, any> | null;
+}
+export type ShippingRateTableDocument = ShippingRateTable & Document;
+export const ShippingRateTableSchema = SchemaFactory.createForClass(ShippingRateTable);
+
 // indexes
 ShippingZoneSchema.index({ country: 1 });
 ShippingZoneSchema.index({ province: 1 });

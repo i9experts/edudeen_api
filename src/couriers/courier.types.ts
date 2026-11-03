@@ -48,10 +48,30 @@ export const DEFAULT_HTTP_REQUEST: HttpRequest = async (url, init) => {
   return { status: res.status, json: () => res.json().catch(() => ({})) };
 };
 
+/** Input for a live delivery-charge quote (one parcel group). */
+export interface QuoteInput {
+  originCity: string | null;
+  destCity: string;
+  weightKg: number;
+}
+
+export interface QuoteResult {
+  ok: boolean;
+  feePKR?: number;
+  service?: string | null;
+  etaDays?: number | null;
+  error?: string;
+}
+
 export interface CourierAdapter {
   readonly id: CourierId;
   readonly label: string;
   isConfigured(): boolean;
+  /**
+   * Live delivery-charge quote. Optional: an adapter without it (or without credentials) is treated as
+   * "no live rate" and the checkout falls back to the admin slab table / zone fee. Never invent a rate.
+   */
+  quote?(input: QuoteInput): Promise<QuoteResult>;
   createShipment(input: ShipmentInput): Promise<ShipmentResult>;
   trackingUrl(trackingNumber: string): string;
   /** Secret the courier must present on its status webhook (null = webhook disabled). */

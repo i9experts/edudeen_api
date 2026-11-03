@@ -13,11 +13,12 @@ import { UploadService } from 'src/upload/upload.service';
 import { ZIP_MAX_FILE_BYTES, ZIP_MAX_TOTAL_BYTES, buildZipStream, uniqueZipEntryNames, zipDownloadName } from './download-zip.util';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { FinanceService, shippingCreditFor, feeItemsFor } from 'src/finance/finance.service';
+import { FinanceService, shippingCreditFor, feeItemsFor, cashMode } from 'src/finance/finance.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { LoyaltyService } from 'src/loyalty/loyalty.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
+import { isPackagePaid } from './package-paid.util';
 import { round } from 'src/common/number.util';
 import { PaymentService } from 'src/payment/payment.service';
 import { orderStatusEmail, downloadLinkEmail } from 'src/notifications/templates/notification-email.template';
@@ -28,7 +29,7 @@ import {
   searchTerm,
 } from 'src/common/query-safety.util';
 /** A sellerOrder's true payout basis for FinanceService.recordSale, in the
- *  SELLER'S OWN currency (so.settlementCurrency) — independent of what
+ *  SELLER'S OWN currency (so.settlementCurrency) â€” independent of what
  *  currency the buyer actually paid in (order.currency). Computed once at
  *  order-creation time (PaymentService.createOrder) already restoring the
  *  platform-sponsored portion of any campaign discount on top of the
@@ -75,13 +76,13 @@ export class OrdersService {
     );
   }
 
-  /** The buyer-facing shape of a page of Orders (my-orders, orders-by-checkout) — one batched seller lookup
+  /** The buyer-facing shape of a page of Orders (my-orders, orders-by-checkout) â€” one batched seller lookup
    *  for the whole page. */
   private async toBuyerOrderViews(orders: any[]) {
     const { sellerModel } = this.databaseService.repositories;
 
     // Batch-resolve seller name + verification badge across every distinct
-    // seller in this page — same one-query-instead-of-N pattern used on the
+    // seller in this page â€” same one-query-instead-of-N pattern used on the
     // product listing endpoints.
     const sellerIds = [
       ...new Set(
@@ -126,6 +127,7 @@ export class OrdersService {
           // Who ships this sub-order (snapshotted at order creation); orders placed before the
           // setting existed carry none and were seller-fulfilled.
           fulfillmentMode: so.fulfillmentMode ?? 'seller',
+          codCollector: so.codCollector ?? null,
           // This store's own shipping line, in the order's currency (0 on digital sub-orders).
           shippingFee: so.shippingFee ?? 0,
           status: so.status,
@@ -330,6 +332,11 @@ export class OrdersService {
           ...so,
           items: (so.items ?? []).map((item: any) => ({ ...item, canReview: isVerifiedPurchaseLine(order as any, item) })),
           fulfillmentMode: so.fulfillmentMode ?? 'seller',
+          // Per-package COD (multi-seller): paid state + the cash due for THIS package. Older orders: order-level only.
+          packageIsPaid: so.isPaid === true,
+          packagePaidAt: so.paidAt ?? null,
+          codAmount: so.codAmount ?? 0,
+          codCollector: so.codCollector ?? null,
           shippingFee: so.shippingFee ?? 0,
           sellerName: seller ? seller.name : null,
           sellerVerified: seller ? !!seller.isVerified : false,
@@ -347,7 +354,7 @@ export class OrdersService {
     };
   }
 
-  /** Who availed (claimed) this store's free products — one row per product per buyer, newest first.
+  /** Who availed (claimed) this store's free products â€” one row per product per buyer, newest first.
    *  Free claims are not orders for the seller, so this is the only place they show up. */
   async getSellerFreeClaims(sellerId: string, storeId: string, query: any) {
     const { orderModel, storeModel, userModel } = this.databaseService.repositories;
@@ -384,7 +391,7 @@ export class OrdersService {
     return { success: true, data: { claims, total, page, totalPages: Math.ceil(total / limit) } };
   }
 
-  /** `storeId` omitted (null) means "every store this seller owns" — used by the
+  /** `storeId` omitted (null) means "every store this seller owns" â€” used by the
    *  seller-wide dashboard, as opposed to a single store's own orders page. */
   async getSellerOrders(sellerId: string, storeId: string | null, query: any) {
     const { orderModel, storeModel, userModel } =
@@ -412,7 +419,7 @@ export class OrdersService {
     const limit = Math.min(50, clampInt(query.limit, 10, 1, 100));
     const skip = (page - 1) * limit;
 
-    // base filter — orders touching any of the scoped store(s)
+    // base filter â€” orders touching any of the scoped store(s)
     const matchFilter: any = {
       'sellerOrders.storeId': { $in: storeIds },
       isDelete: false,
@@ -440,7 +447,7 @@ export class OrdersService {
       }
     }
 
-    // ?q= — order number, buyer name/email, or one of THIS store's item names
+    // ?q= â€” order number, buyer name/email, or one of THIS store's item names
     // (case-insensitive, regex-escaped). Buyer lookup is limited to people
     // who actually ordered from the scoped store(s).
     const q = searchTerm(query.q);
@@ -480,7 +487,7 @@ export class OrdersService {
       .limit(limit)
       .lean();
 
-    // stats — all orders across the scoped store(s) (no pagination)
+    // stats â€” all orders across the scoped store(s) (no pagination)
     const allOrders = await orderModel
       .find({ 'sellerOrders.storeId': { $in: storeIds }, isDelete: false, isFreeClaim: { $ne: true } })
       .lean();
@@ -500,7 +507,7 @@ export class OrdersService {
       if (so.status !== 'cancelled') {
         totalRevenue += so.subtotal || 0;
         countedOrders++;
-        if (order.isPaid && so.status !== 'refunded') paidRevenue += so.subtotal || 0;
+        if ((order.isPaid || so.isPaid === true) && so.status !== 'refunded') paidRevenue += so.subtotal || 0;
       }
       if (['pending', 'processing'].includes(so.status)) {
         pendingCount++;
@@ -539,13 +546,16 @@ export class OrdersService {
           date: order.createdAt,
           amount: so.subtotal,
           // `amount` above is so.subtotal, which is denominated in the order's
-          // own currency (fixed per store) — carried per-row so a cross-store
+          // own currency (fixed per store) â€” carried per-row so a cross-store
           // "my orders" list can label each row correctly even when the
           // seller's stores don't all share one currency.
           currency: order.currency ?? 'USD',
           status: so.status,
           cancelReason: so.cancelReason ?? null,
-          isPaid: order.isPaid,
+          // This seller's own package paid state wins on a multi-seller COD order.
+          isPaid: order.isPaid || so.isPaid === true,
+          codAmount: so.codAmount ?? 0,
+          codCollector: so.codCollector ?? null,
           paymentType: order.paymentType,
         };
       }),
@@ -615,7 +625,9 @@ export class OrdersService {
         orderNumber: order.orderNumber,
         date: order.createdAt,
         currency: order.currency ?? 'USD',
-        isPaid: order.isPaid,
+        isPaid: order.isPaid || so.isPaid === true,
+        codAmount: so.codAmount ?? 0,
+        codCollector: so.codCollector ?? null,
         paymentType: order.paymentType,
         customer: {
           name: user?.name || 'Unknown',
@@ -630,6 +642,7 @@ export class OrdersService {
         subtotal: so.subtotal,
         tracking: so.tracking ?? null,
         shipment: so.shipment ?? null,
+        shippingCourier: so.shippingCourier ?? null,
         giftMessage: order.giftMessage ?? null,
         giftWrap: !!order.giftWrap,
         trackingEvents: so.trackingEvents ?? [],
@@ -678,7 +691,7 @@ export class OrdersService {
 
     const { orderModel, storeModel } = this.databaseService.repositories;
 
-    // store ownership check (an admin acts on any store, but only where the platform fulfills — see below)
+    // store ownership check (an admin acts on any store, but only where the platform fulfills â€” see below)
     const store = await storeModel.findOne({
       _id: storeId,
       ...(isAdmin ? {} : { sellerId }),
@@ -701,14 +714,14 @@ export class OrdersService {
     const target = order.sellerOrders[sellerOrderIndex] as any;
     const platformFulfilled = target.fulfillmentType === 'physical' && target.fulfillmentMode === 'platform';
     if (isAdmin && !platformFulfilled) {
-      throw new ForbiddenException('This sub-order is fulfilled by the seller — only the seller can update its status');
+      throw new ForbiddenException('This sub-order is fulfilled by the seller â€” only the seller can update its status');
     }
     if (!isAdmin && platformFulfilled) {
-      throw new ForbiddenException('This sub-order is fulfilled by Edudeen — its shipping status and tracking are handled by the Edudeen team');
+      throw new ForbiddenException('This sub-order is fulfilled by Edudeen â€” its shipping status and tracking are handled by the Edudeen team');
     }
 
     // Guards against double-crediting the finance ledger if this sellerOrder was already
-    // completed before this call (duplicate/retried request, double-click, etc.) — mirrors
+    // completed before this call (duplicate/retried request, double-click, etc.) â€” mirrors
     // the `order.isPaid` guard already used in `markPaid` below for the same reason.
     const wasAlreadyCompleted =
       order.sellerOrders[sellerOrderIndex].status === 'completed';
@@ -722,11 +735,11 @@ export class OrdersService {
       throw new BadRequestException('This order was cancelled');
     }
     if (RANK[currentStatus] !== undefined && RANK[status] < RANK[currentStatus]) {
-      throw new BadRequestException(`Order is already ${currentStatus} — it can't go back to ${status}`);
+      throw new BadRequestException(`Order is already ${currentStatus} â€” it can't go back to ${status}`);
     }
     // Completing credits the seller's ledger, so the buyer must have paid.
     // A COD order is completed via "Mark Paid" once the cash is collected.
-    if (status === 'completed' && !order.isPaid) {
+    if (status === 'completed' && !order.isPaid && (order.sellerOrders[sellerOrderIndex] as any).isPaid !== true) {
       throw new BadRequestException('Mark this order as paid before completing it');
     }
 
@@ -774,12 +787,12 @@ export class OrdersService {
 
     await orderModel.findByIdAndUpdate(orderId, { $set: updateData });
 
-    // Record sale in finance ledger when seller marks their order completed — only on the
+    // Record sale in finance ledger when seller marks their order completed â€” only on the
     // transition into `completed`, never again if it was already completed (see guard above).
     if (status === 'completed' && !wasAlreadyCompleted) {
       const so = order.sellerOrders[sellerOrderIndex];
       // A Connect-settled sellerOrder's money already went straight to the
-      // seller's own Stripe-connected account at payment time — crediting
+      // seller's own Stripe-connected account at payment time â€” crediting
       // the internal ledger here too would let them draw a second, duplicate
       // payout through the platform's own payout-request flow. See
       // PaymentService.initiatePayment/SellerOrder.settledViaConnect.
@@ -794,12 +807,12 @@ export class OrdersService {
           sellerId: so.sellerId,
           orderId,
           saleAmount: sellerPayoutBasis(so),
-          description: `Sale — Order #${orderId}`,
+          description: `Sale â€” Order #${orderId}`,
           platformSponsoredUSD,
           campaignId: sponsoredCampaignId,
           currency: sellerPayoutCurrency(so, order),
           paymentMethodType: order.paymentType,
-          fulfillmentMode: so.fulfillmentMode,
+          fulfillmentMode: cashMode(so),
           shippingCredit: shippingCreditFor(order, so),
           feeItems: feeItemsFor(so),
           fxSnapshots: (order.fxSnapshots as any) ?? [],
@@ -820,8 +833,8 @@ export class OrdersService {
       category: 'orders',
       action: status === 'shipped' ? 'order_fulfilled' : `order_${status}`,
       description: tracking
-        ? `Order #${orderId} — shipped via ${tracking.carrier ?? tracking}`
-        : `Order #${orderId} — status changed to ${status}`,
+        ? `Order #${orderId} â€” shipped via ${tracking.carrier ?? tracking}`
+        : `Order #${orderId} â€” status changed to ${status}`,
       actorId: sellerId,
       actorRole: isAdmin ? 'admin' : 'seller',
       targetId: orderId,
@@ -865,22 +878,27 @@ export class OrdersService {
     return { success: true, message: `Order status updated to ${status}` };
   }
 
-  async markPaid(orderId: string, actor: { userId: string; role: string }) {
+  async markPaid(orderId: string, actor: { userId: string; role: string }, storeId?: string) {
     const { orderModel } = this.databaseService.repositories;
 
     const order = await orderModel.findOne({ _id: orderId, isDelete: false });
     if (!order) throw new NotFoundException('Order not found');
     if (order.isPaid) throw new BadRequestException('Order is already paid');
 
+    // Several sellers on one COD order: every package is collected and confirmed on its own.
+    if (order.paymentType === 'cash_on_delivery' && order.sellerOrders.length > 1) {
+      return this.markPackagePaid(order, actor, storeId);
+    }
+
     // A seller may only confirm payment on an order made up entirely of their
-    // own sub-orders — marking paid credits every seller in the order's
+    // own sub-orders â€” marking paid credits every seller in the order's
     // ledger, so one seller must never be able to do it for another's sale.
     // A multi-store order has to be confirmed by an admin.
     // Cash collected by Edudeen's own couriers (fulfillmentMode 'platform') is
-    // confirmed by the Edudeen team only — a seller must never be able to book
+    // confirmed by the Edudeen team only â€” a seller must never be able to book
     // a credit for money the platform has not yet received.
-    if (actor.role !== 'admin' && order.sellerOrders.some((so: any) => so.fulfillmentMode === 'platform')) {
-      throw new ForbiddenException('Payment on Edudeen-fulfilled orders is confirmed by the Edudeen team');
+    if (actor.role !== 'admin' && order.sellerOrders.some((so: any) => cashMode(so) === 'platform')) {
+      throw new ForbiddenException('Payment on Edudeen-collected orders is confirmed by the Edudeen team');
     }
     if (actor.role !== 'admin') {
       const ownsAll =
@@ -891,7 +909,7 @@ export class OrdersService {
       }
     }
 
-    // Only money collected offline is confirmed by hand — a Stripe charge is
+    // Only money collected offline is confirmed by hand â€” a Stripe charge is
     // confirmed by Stripe itself, and a bank transfer goes through the admin
     // proof-review flow (manual-payments), so a seller only confirms COD.
     if (order.paymentType === 'stripe') {
@@ -932,7 +950,7 @@ export class OrdersService {
       });
     });
 
-    // Atomic isPaid:false guard — two concurrent calls (double-click, retry)
+    // Atomic isPaid:false guard â€” two concurrent calls (double-click, retry)
     // must not both get past the check above and double-credit the ledger.
     const claimed = await orderModel.findOneAndUpdate(
       { _id: orderId, isPaid: { $ne: true }, isDelete: false },
@@ -940,7 +958,7 @@ export class OrdersService {
     );
     if (!claimed) throw new BadRequestException('Order is already paid');
 
-    // Record sale in finance ledger for each store's sub-order — skipping
+    // Record sale in finance ledger for each store's sub-order â€” skipping
     // any that settled directly via Stripe Connect (see the same guard/
     // comment in the status-transition branch above).
     let creditStatus: 'credited' | 'pending' = 'credited';
@@ -955,12 +973,12 @@ export class OrdersService {
         sellerId: so.sellerId,
         orderId,
         saleAmount: sellerPayoutBasis(so),
-        description: `Sale — Order #${orderId}`,
+        description: `Sale â€” Order #${orderId}`,
         platformSponsoredUSD,
         campaignId: sponsoredCampaignId,
         currency: sellerPayoutCurrency(so, order),
         paymentMethodType: order.paymentType,
-        fulfillmentMode: so.fulfillmentMode,
+        fulfillmentMode: cashMode(so),
         shippingCredit: shippingCreditFor(order, so),
         feeItems: feeItemsFor(so),
         fxSnapshots: (order.fxSnapshots as any) ?? [],
@@ -987,6 +1005,106 @@ export class OrdersService {
       .catch(() => {});
 
     return { success: true, message: 'Order marked as paid', creditStatus };
+  }
+
+  /**
+   * COD on a multi-seller order: marks ONE package (sellerOrder) as cash-collected and credits only that store.
+   * The order itself becomes 'partially_paid' until every live package is paid, then 'paid'.
+   * A seller may confirm only their own package (and only once it is shipped/delivered); a package fulfilled by
+   * Edudeen ('platform') is confirmed by an admin only.
+   */
+  private async markPackagePaid(order: any, actor: { userId: string; role: string }, storeId?: string) {
+    const { orderModel } = this.databaseService.repositories;
+    const orderId = String(order._id);
+    if (!storeId) throw new BadRequestException('storeId is required: say which seller package the cash was collected for');
+    const idx = order.sellerOrders.findIndex((so: any) => so.storeId === storeId);
+    if (idx === -1) throw new NotFoundException('That seller is not part of this order');
+    const so = order.sellerOrders[idx];
+    const isAdmin = actor.role === 'admin';
+    if (!isAdmin && so.sellerId !== actor.userId) throw new ForbiddenException('You can only mark your own packages as paid');
+    if (!isAdmin && cashMode(so) === 'platform') {
+      throw new ForbiddenException('Payment on Edudeen-collected orders is confirmed by the Edudeen team');
+    }
+    if (so.isPaid) throw new BadRequestException('This package is already marked as paid');
+    if (so.status === 'cancelled' || so.status === 'refunded') throw new BadRequestException('This package was cancelled');
+    if (!isAdmin && so.status !== 'shipped' && so.status !== 'delivered') {
+      throw new BadRequestException('Cash can only be marked as collected after the package is shipped or delivered');
+    }
+
+    const now = new Date();
+    const set: any = {
+      [`sellerOrders.${idx}.isPaid`]: true,
+      [`sellerOrders.${idx}.paidAt`]: now,
+      [`sellerOrders.${idx}.status`]: 'completed',
+      [`sellerOrders.${idx}.deliveredAt`]: now,
+    };
+    so.items.forEach((_: any, itemIndex: number) => {
+      set[`sellerOrders.${idx}.items.${itemIndex}.status`] = 'completed';
+    });
+    // Atomic: two concurrent calls for the same package must not both credit the ledger.
+    const claimed = await orderModel.findOneAndUpdate(
+      {
+        _id: orderId,
+        isDelete: false,
+        sellerOrders: { $elemMatch: { storeId, isPaid: { $ne: true }, status: { $nin: ['cancelled', 'refunded'] } } },
+      },
+      { $set: set },
+    );
+    if (!claimed) throw new BadRequestException('This package is already marked as paid');
+
+    // The package's own COD payment row (written per package at checkout when the order has 2+ packages).
+    try {
+      await this.databaseService.repositories.paymentTransactionModel.updateOne(
+        { orderIds: orderId, paymentType: 'cash_on_delivery', storeId, status: 'pending', isDelete: false },
+        { $set: { status: 'completed', paidAt: now } },
+      );
+    } catch { /* bookkeeping only - the sale itself is already claimed and credited below */ }
+
+    let creditStatus: 'credited' | 'pending' = 'credited';
+    if (!so.settledViaConnect) {
+      const sponsoredCampaignId = so.items.find((i: any) => i.campaignSponsorType === 'platform')?.campaignId ?? null;
+      const credit = await this.financeService.recordSaleDurable({
+        storeId: so.storeId,
+        sellerId: so.sellerId,
+        orderId,
+        saleAmount: sellerPayoutBasis(so),
+        description: `Sale â€” Order #${orderId}`,
+        platformSponsoredUSD: so.platformSponsoredDiscountUSD ?? 0,
+        campaignId: sponsoredCampaignId,
+        currency: sellerPayoutCurrency(so, order),
+        paymentMethodType: order.paymentType,
+        fulfillmentMode: cashMode(so),
+        shippingCredit: shippingCreditFor(order, so),
+        feeItems: feeItemsFor(so),
+        fxSnapshots: (order.fxSnapshots as any) ?? [],
+      });
+      if (credit?.creditStatus === 'pending') creditStatus = 'pending';
+    }
+    this.awardLoyaltyPoints(so.storeId, order.userId, orderId, so.subtotal).catch(() => {});
+
+    // Roll the packages up into the order: paid once every live package is paid, otherwise partially paid.
+    const fresh: any = await orderModel.findById(orderId).lean();
+    const live = (fresh?.sellerOrders ?? []).filter((p: any) => p.status !== 'cancelled' && p.status !== 'refunded');
+    const allPaid = live.length > 0 && live.every((p: any) => p.isPaid === true);
+    await orderModel.updateOne(
+      { _id: orderId },
+      allPaid
+        ? { $set: { isPaid: true, paymentStatus: 'paid', paidAt: now, orderStatus: live.every((p: any) => p.status === 'completed') ? 'completed' : fresh.orderStatus } }
+        : { $set: { paymentStatus: 'partially_paid' } },
+    );
+
+    this.notificationsService
+      .notify({
+        recipientId: order.userId,
+        recipientRole: 'user',
+        type: NOTIFICATION_TYPES.PAYMENT_SUCCESS,
+        title: 'Payment received',
+        body: `We've received your cash payment for a package of order #${order.orderNumber ?? orderId}.`,
+        data: { orderId, orderNumber: order.orderNumber, link: `/account/orders/${orderId}` },
+      })
+      .catch(() => {});
+
+    return { success: true, message: allPaid ? 'Order marked as paid' : 'Package marked as paid', creditStatus, orderPaid: allPaid };
   }
 
   async cancelOrder(userId: string, orderId: string, body: any) {
@@ -1035,18 +1153,18 @@ export class OrdersService {
           );
         if (BLOCKED.includes(found.item.status))
           throw new BadRequestException(
-            `Item "${found.item.name}" cannot be cancelled — status: ${found.item.status}`,
+            `Item "${found.item.name}" cannot be cancelled â€” status: ${found.item.status}`,
           );
         targetItems.push(found);
       }
     } else {
-      // full order cancel — koi bhi item shipped nahi honi chahiye
+      // full order cancel â€” koi bhi item shipped nahi honi chahiye
       const blockedItem = allItems.find(({ item }) =>
         BLOCKED.slice(0, 3).includes(item.status),
       );
       if (blockedItem)
         throw new BadRequestException(
-          `Cannot cancel order — "${blockedItem.item.name}" is already ${blockedItem.item.status}`,
+          `Cannot cancel order â€” "${blockedItem.item.name}" is already ${blockedItem.item.status}`,
         );
       targetItems = allItems.filter(({ item }) => item.status !== 'cancelled');
     }
@@ -1060,7 +1178,7 @@ export class OrdersService {
       const digital = targetItems.find(({ item }) => item.type === 'digital');
       if (digital) {
         throw new BadRequestException(
-          `"${digital.item.name}" has already been delivered — please request a refund instead`,
+          `"${digital.item.name}" has already been delivered â€” please request a refund instead`,
         );
       }
     }
@@ -1098,7 +1216,7 @@ export class OrdersService {
           stripePaymentIntentId: { $ne: null },
           isDelete: false,
         });
-        if (!tx) throw new BadRequestException('Payment record not found — please contact support to cancel this order');
+        if (!tx) throw new BadRequestException('Payment record not found â€” please contact support to cancel this order');
         const refundable = round((tx.amount ?? 0) - (tx.amountRefunded ?? 0));
         const amount = Math.min(refundAmount, refundable);
         if (amount > 0) {
@@ -1108,11 +1226,11 @@ export class OrdersService {
             amount,
             `cancel-${orderId}-${itemKey}`,
           );
-          if (!refund) throw new BadRequestException('Online refunds are not available right now — please contact support');
+          if (!refund) throw new BadRequestException('Online refunds are not available right now â€” please contact support');
         }
         refundedViaStripe = true;
       } else if (refundAmount > 0) {
-        // Bank transfer / COD: there's no API to send the money back — flag it. (A free order
+        // Bank transfer / COD: there's no API to send the money back â€” flag it. (A free order
         // refunds 0: nothing to send, only the items are cancelled.)
         manualRefundNeeded = true;
       }
@@ -1133,7 +1251,7 @@ export class OrdersService {
         ] = item.totalPrice;
       }
 
-      // physical item — stock wapas restore (skip unlimited-stock variants)
+      // physical item â€” stock wapas restore (skip unlimited-stock variants)
       if (item.type === 'physical' && item.variantId) {
         await productVariantModel.updateOne(
           { _id: item.variantId, unlimitedStock: { $ne: true } },
@@ -1166,6 +1284,19 @@ export class OrdersService {
       updateData.orderStatus = 'cancelled';
     }
 
+    // Multi-seller COD: cancelling the last UNPAID package leaves only collected ones, so the order is now fully paid.
+    if (order.paymentType === 'cash_on_delivery' && !order.isPaid && order.sellerOrders.length > 1) {
+      const live = order.sellerOrders.filter((so: any, soIndex: number) => {
+        const st = updateData[`sellerOrders.${soIndex}.status`] ?? so.status;
+        return st !== 'cancelled' && st !== 'refunded';
+      });
+      if (live.length > 0 && live.every((so: any) => so.isPaid === true)) {
+        updateData.isPaid = true;
+        updateData.paymentStatus = 'paid';
+        updateData.paidAt = now;
+      }
+    }
+
     // Only claim 'refunded' once the money actually went back (whole order).
     if (refundedViaStripe && updateData.orderStatus === 'cancelled') {
       updateData.paymentStatus = 'refunded';
@@ -1173,7 +1304,7 @@ export class OrdersService {
 
     await orderModel.findByIdAndUpdate(orderId, { $set: updateData });
 
-    // Items paid (partly) with a gift card: that part goes back on the card — the buyer's money refund
+    // Items paid (partly) with a gift card: that part goes back on the card â€” the buyer's money refund
     // above only covers what they paid otherwise. Idempotent per cancel request.
     const cancelRefKey = `cancel-${orderId}-${targetItems.map(({ item }) => item._id.toString()).sort().join(',')}`;
     for (const soIndex of new Set(targetItems.map((t) => t.soIndex))) {
@@ -1190,7 +1321,7 @@ export class OrdersService {
         storeId: order.sellerOrders[targetItems[0].soIndex].storeId,
         category: 'finance',
         action: 'manual_refund_required',
-        description: `Buyer cancelled paid bank-transfer order #${orderId} — refund must be sent manually`,
+        description: `Buyer cancelled paid bank-transfer order #${orderId} â€” refund must be sent manually`,
         actorId: userId,
         actorRole: 'user',
         isSecurityAlert: true,
@@ -1211,7 +1342,7 @@ export class OrdersService {
           recipientRole: 'seller',
           type: NOTIFICATION_TYPES.ORDER_CANCELLED,
           title: 'Order cancelled by buyer',
-          body: `Order #${orderId} was cancelled by the buyer — ${reason}`,
+          body: `Order #${orderId} was cancelled by the buyer â€” ${reason}`,
           data: { orderId },
         })
         .catch(() => {});
@@ -1302,7 +1433,7 @@ export class OrdersService {
       )
       .reduce((sum, { item }) => sum + (item.refundedAmount || 0), 0);
 
-    // ?q= — narrows the list (not the stats) by order number, item name, or
+    // ?q= â€” narrows the list (not the stats) by order number, item name, or
     // buyer name/email; case-insensitive, regex-escaped.
     let listItems = returnItems;
     const q = searchTerm(query.q);
@@ -1424,7 +1555,7 @@ export class OrdersService {
     for (const { item, so } of targetItems) {
       if (item.type === 'digital')
         throw new BadRequestException(
-          `"${item.name}" is a digital product — cannot be returned`,
+          `"${item.name}" is a digital product â€” cannot be returned`,
         );
       if (!['delivered', 'completed'].includes(so.status))
         throw new BadRequestException(`"${item.name}" is not yet delivered`);
@@ -1620,7 +1751,7 @@ export class OrdersService {
     }
 
     // Claim the return atomically FIRST: only the request that flips these
-    // items requested→approved/rejected may move money, so a double-click or
+    // items requestedâ†’approved/rejected may move money, so a double-click or
     // retry can't refund (and restock) twice. If the buyer refund below fails,
     // the claim is rolled back so the return stays pending, as before.
     const claimFilter: Record<string, any> = { _id: orderId, isDelete: false };
@@ -1645,7 +1776,7 @@ export class OrdersService {
     // Send the buyer's money back, and only keep the approval if that worked.
     let manualRefundNeeded = false;
     try {
-      if (action === 'approve' && order.isPaid) {
+      if (action === 'approve' && isPackagePaid(order, sellerOrder)) {
         const buyerRefund = round(
           targetItems.reduce((sum, t) => sum + (t.item.totalPrice || 0), 0),
         );
@@ -1657,7 +1788,7 @@ export class OrdersService {
             stripePaymentIntentId: { $ne: null },
             isDelete: false,
           });
-          if (!tx) throw new BadRequestException('Payment record not found — contact support to refund this return');
+          if (!tx) throw new BadRequestException('Payment record not found â€” contact support to refund this return');
           const amount = Math.min(buyerRefund, round((tx.amount ?? 0) - (tx.amountRefunded ?? 0)));
           if (amount > 0) {
             const itemKey = targetItems.map((t) => t.item._id.toString()).sort().join(',');
@@ -1666,7 +1797,7 @@ export class OrdersService {
               amount,
               `return-${orderId}-${itemKey}`,
             );
-            if (!refund) throw new BadRequestException('Online refunds are not available right now — try again later');
+            if (!refund) throw new BadRequestException('Online refunds are not available right now â€” try again later');
           }
         } else if (buyerRefund > 0) {
           // COD / bank transfer: the cash has to be returned by hand.
@@ -1706,7 +1837,7 @@ export class OrdersService {
         storeId,
         category: 'finance',
         action: 'manual_refund_required',
-        description: `Return approved on ${order.paymentType} order #${orderId} — refund the buyer manually`,
+        description: `Return approved on ${order.paymentType} order #${orderId} â€” refund the buyer manually`,
         actorId: sellerId,
         actorRole: 'seller',
         isSecurityAlert: true,
@@ -1716,7 +1847,7 @@ export class OrdersService {
     }
 
     let refundProcessed = false;
-    if (action === 'approve' && order.isPaid) {
+    if (action === 'approve' && isPackagePaid(order, sellerOrder)) {
       const refundAmount = round(targetItems.reduce(
         (sum, t) => sum + (t.item.totalPrice || 0),
         0,
@@ -1724,9 +1855,9 @@ export class OrdersService {
       if (refundAmount > 0) {
         try {
           // item.totalPrice is in the ORDER currency; the seller's wallet is in
-          // their settlement currency — convert with the order's own frozen FX
+          // their settlement currency â€” convert with the order's own frozen FX
           // snapshots (never a live rate) and debit the matching wallet. It used
-          // to debit the raw number from the USD wallet (PKR 28000 → $28000).
+          // to debit the raw number from the USD wallet (PKR 28000 â†’ $28000).
           const buyerCurrency = order.currency || 'USD';
           const settlementCurrency = sellerOrder.settlementCurrency ?? buyerCurrency;
           const sellerDebit = this.exchangeRateService.convertWithSnapshots(
@@ -1742,12 +1873,12 @@ export class OrdersService {
             sellerDebitAmount: sellerDebit,
             refKey: `return-${orderId}-${targetItems.map((t) => t.item._id.toString()).sort().join(',')}`,
             currency: settlementCurrency,
-            description: `Approved return — Order #${order.orderNumber ?? orderId}`,
+            description: `Approved return â€” Order #${order.orderNumber ?? orderId}`,
             actorId: sellerId, actorRole: 'seller',
           });
           refundProcessed = true;
         } catch (e) {
-          // The buyer has already been (or must be) refunded — a failed ledger
+          // The buyer has already been (or must be) refunded â€” a failed ledger
           // debit must never be swallowed silently.
           await this.activityLogService.log({
             storeId,
@@ -1779,7 +1910,7 @@ export class OrdersService {
           type: action === 'approve' ? NOTIFICATION_TYPES.RETURN_APPROVED : NOTIFICATION_TYPES.RETURN_REJECTED,
           title: action === 'approve' ? 'Return approved' : 'Return not approved',
           body: action === 'approve'
-            ? `Your return for ${n} item(s) from order #${num} was approved.${order.isPaid ? ' Your refund is on its way.' : ''}`
+            ? `Your return for ${n} item(s) from order #${num} was approved.${isPackagePaid(order, sellerOrder) ? ' Your refund is on its way.' : ''}`
             : `Your return for ${n} item(s) from order #${num} was not approved.${rejectReason ? ` Reason: ${String(rejectReason).slice(0, 200)}` : ''}`,
           data: { orderId, orderNumber: String(num), link: `/account/orders/${orderId}` },
         })
@@ -1790,7 +1921,7 @@ export class OrdersService {
       storeId,
       category: 'orders',
       action: action === 'approve' ? 'return_approved' : 'return_rejected',
-      description: `Order #${orderId} — ${targetItems.length} item(s) return ${action === 'approve' ? 'approved' : 'rejected'}`,
+      description: `Order #${orderId} â€” ${targetItems.length} item(s) return ${action === 'approve' ? 'approved' : 'rejected'}`,
       actorId: sellerId,
       actorRole: 'seller',
       targetId: orderId,
@@ -1815,7 +1946,7 @@ export class OrdersService {
   }
 
 
-  // ───────────────────────── Digital delivery ─────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Digital delivery â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   //
   // Every download path (signed-URL list, single link, token redeem, stamped
   // PDF with or without token) goes through resolveDigitalAccess(), so the
@@ -1855,13 +1986,13 @@ export class OrdersService {
       throw new BadRequestException('Digital product not found in this order');
     const item: any = order.sellerOrders[soIndex].items[itemIndex];
 
-    // Refund / cancel revokes access — otherwise "buy, download, refund" keeps the file.
+    // Refund / cancel revokes access â€” otherwise "buy, download, refund" keeps the file.
     if (['cancelled', 'refunded'].includes(item.status)) {
-      throw new ForbiddenException('This item was cancelled or refunded — access has been revoked');
+      throw new ForbiddenException('This item was cancelled or refunded â€” access has been revoked');
     }
 
     // A purchase stays downloadable even if the seller later deletes the
-    // listing (standard on TPT/Gumroad/Udemy) — but not after an admin
+    // listing (standard on TPT/Gumroad/Udemy) â€” but not after an admin
     // takedown (policy/copyright), which is recorded separately.
     const product = await productModel.findOne({ _id: productId });
     if (!product || (product as any).removedByAdmin)

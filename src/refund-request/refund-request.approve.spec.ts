@@ -183,6 +183,18 @@ describe('RefundRequestService.approve', () => {
     );
   });
 
+  it('multi-seller COD: a PAID package of a partially_paid order is refundable (package state, not order state)', async () => {
+    const { svc, finance } = build({ isPaid: false, paymentStatus: 'partially_paid' }, { isPaid: true });
+    await svc.approve('admin-1', 'admin', 'req-1');
+    expect(finance.recordRefund).toHaveBeenCalledWith('store-1', 'seller-1', ORDER_ID, 20, 'admin-1', 'admin', expect.anything());
+  });
+
+  it('multi-seller COD: an UNPAID package of a partially_paid order is not refunded', async () => {
+    const { svc, finance } = build({ isPaid: false, paymentStatus: 'partially_paid' }, { isPaid: false });
+    await expect(svc.approve('admin-1', 'admin', 'req-1')).rejects.toThrow(/not been paid/);
+    expect(finance.recordRefund).not.toHaveBeenCalled();
+  });
+
   it('a failure before the ledger debit returns the request to pending instead of stranding it approved', async () => {
     const { svc, model, finance } = build({}, {}, true);
     await expect(svc.approve('admin-1', 'admin', 'req-1')).rejects.toThrow(

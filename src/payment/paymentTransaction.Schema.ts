@@ -81,6 +81,10 @@ export class PaymentTransaction {
   @Prop({ type: Date, default: null })
   paidAt: Date | null;
 
+  // Cash-on-delivery with 2+ packages: one row per package (this is that package's store). null otherwise.
+  @Prop({ type: String, default: null })
+  storeId: string | null;
+
   // Cumulative amount refunded against this charge so far (Stripe's
   // `charge.amount_refunded` is itself cumulative) — tracked so a repeated
   // `charge.refunded` webhook delivery (or a second partial refund) only

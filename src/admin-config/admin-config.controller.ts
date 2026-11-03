@@ -17,6 +17,7 @@ import { UpdateManualPaymentConfigDto } from './dto/update-manual-payment-config
 import { UpdateFxConfigDto } from './dto/update-fx-config.dto';
 import { UpdateSocialLinksDto } from './dto/update-social-links.dto';
 import { UpdatePlatformFeesDto } from './dto/update-platform-fees.dto';
+import { UpdateCodConfigDto } from './dto/update-cod-config.dto';
 
 @ApiTags('Admin Platform Config')
 @ApiBearerAuth()
@@ -109,6 +110,22 @@ export class AdminConfigController {
   @Put('platform-fees')
   updatePlatformFees(@Req() req: any, @Body() dto: UpdatePlatformFeesDto) {
     return this.adminConfigService.updatePlatformFees(dto, {
+      adminId: req.user.userId,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+  }
+
+  @Get('cod')
+  getCodConfig() {
+    return this.adminConfigService.getCodConfigView();
+  }
+
+  @UseGuards(AdminReauthGuard)
+  @RequireReauth()
+  @Put('cod')
+  updateCodConfig(@Req() req: any, @Body() dto: UpdateCodConfigDto) {
+    return this.adminConfigService.updateCodConfig(dto, {
       adminId: req.user.userId,
       ip: req.ip,
       userAgent: req.headers['user-agent'],

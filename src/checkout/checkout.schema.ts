@@ -222,11 +222,17 @@ export class Checkout {
   // shipping subscriber benefit; `discountPercent` the benefit applied (0 = none).
   // Empty on checkouts created before per-store shipping existed.
   @Prop({
-    type: [{ _id: false, storeId: String, fee: Number, baseFee: Number, discountPercent: Number, giftWrapFee: Number }],
+    type: [{ _id: false, storeId: String, fee: Number, baseFee: Number, discountPercent: Number, giftWrapFee: Number, courier: String, service: String, etaDays: Number, source: String }],
     default: [],
   })
   // `giftWrapFee` = that seller's gift-wrap charge (already inside `fee`), 0 when the buyer didn't ask for wrapping.
-  shippingByStore: { storeId: string; fee: number; baseFee: number; discountPercent: number; giftWrapFee?: number }[];
+  // courier/service/etaDays/source = how `baseFee` was priced (source: live | slab | zone | self); absent on old checkouts.
+  shippingByStore: { storeId: string; fee: number; baseFee: number; discountPercent: number; giftWrapFee?: number; courier?: string | null; service?: string | null; etaDays?: number | null; source?: string }[];
+
+  // Sum of the admin's per-package Cash-on-Delivery fee already folded into `shippingByStore` / `shippingFee` /
+  // `totalAmount` (set once, when the buyer places a COD order). > 0 means "applied" - it is never added twice.
+  @Prop({ default: 0 })
+  codFeeTotal: number;
 
   @Prop({ default: 0 })
   taxAmount: number;

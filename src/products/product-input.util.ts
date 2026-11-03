@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { cleanClassRange } from './class-levels';
+import { cleanDimensions, ParcelType, PARCEL_TYPES } from '../checkout/shipping-rate.util';
 import { CURRICULA, DELIVERY_FORMATS, DeliveryFormat, DownloadLimit, LicenseType, LICENSE_OPTION_LABEL, LICENSE_OPTION_NAME } from './schemas/product.schema';
 
 /** 'single_classroom' etc. for a variant that carries a "License" option. */
@@ -7,6 +8,20 @@ export function licenseFromVariant(variant: any): string | null {
   const label = (variant?.options ?? []).find((o: any) => o?.name === LICENSE_OPTION_NAME)?.value;
   if (!label) return null;
   return Object.entries(LICENSE_OPTION_LABEL).find(([, l]) => l === label)?.[0] ?? null;
+}
+
+/** Physical parcel info for the delivery charge. `forCreate` always sets a parcelType ('standard' when not sent);
+ *  otherwise only keys present in the request are returned. Throws 400 on a bad type or size. */
+export function cleanParcelMeta(body: Record<string, unknown>, forCreate: boolean): { parcelType?: ParcelType; packageCm?: { l: number; w: number; h: number } | null } {
+  const out: { parcelType?: ParcelType; packageCm?: { l: number; w: number; h: number } | null } = {};
+  if (body.parcelType !== undefined && body.parcelType !== null && body.parcelType !== '') {
+    if (!PARCEL_TYPES.includes(body.parcelType as ParcelType)) throw new BadRequestException('parcelType must be document, standard, fragile or bulky');
+    out.parcelType = body.parcelType as ParcelType;
+  } else if (forCreate) out.parcelType = 'standard';
+  if (body.packageCm !== undefined) {
+    try { out.packageCm = cleanDimensions(body.packageCm); } catch (e: any) { throw new BadRequestException(e?.message ?? 'Invalid package size'); }
+  }
+  return out;
 }
 
 /** Board/syllabus list and age range shared by every product type. Only keys

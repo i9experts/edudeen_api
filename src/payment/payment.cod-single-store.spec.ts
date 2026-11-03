@@ -95,16 +95,11 @@ function makeService(items: any[], opts: { inactive?: boolean } = {}) {
   return { svc, repos };
 }
 
-describe('Cash on Delivery requires all physical items from ONE store (enforced server-side)', () => {
-  it('codPayment: physical items from two stores are rejected and nothing is placed', async () => {
+describe('Cash on Delivery works per package (several sellers allowed, each store must allow COD)', () => {
+  it('codPayment: physical items from two stores are placed (each package is its own cash collection)', async () => {
     const { svc } = makeService([physical('A', 1), physical('B', 2)]);
-    await expect(svc.codPayment('u1', { checkoutId: 'c1' })).rejects.toThrow(
-      /only available when all physical items are from one store/,
-    );
-    await expect(
-      svc.codPayment('u1', { checkoutId: 'c1' }),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    expect(svc.createOrder).not.toHaveBeenCalled();
+    await expect(svc.codPayment('u1', { checkoutId: 'c1' })).resolves.toBeDefined();
+    expect(svc.createOrder).toHaveBeenCalledTimes(1);
   });
 
   it('codPayment: several items from a single store still work (regression)', async () => {
@@ -115,19 +110,17 @@ describe('Cash on Delivery requires all physical items from ONE store (enforced 
     expect(svc.createOrder).toHaveBeenCalledTimes(1);
   });
 
-  it("initiatePayment 'split': physical items from two stores are rejected before any Stripe call", async () => {
-    // assertStripeConfigured is the first call in initiatePayment; make it harmless so the split check is reachable
+  it("initiatePayment 'split': physical items from two stores pass the COD check (not rejected for it)", async () => {
     const { svc } = makeService([
       physical('A', 1),
       physical('B', 2),
       digital('C', 3),
     ]);
     svc.assertStripeConfigured = jest.fn(() => ({}));
-    await expect(
-      svc.initiatePayment('u1', { checkoutId: 'c1', paymentMode: 'split' }),
-    ).rejects.toThrow(
-      /only available when all physical items are from one store/,
-    );
+    const err: any = await svc
+      .initiatePayment('u1', { checkoutId: 'c1', paymentMode: 'split' })
+      .catch((e: any) => e);
+    expect(String(err?.message)).not.toMatch(/Cash on Delivery/);
   });
 
   it("initiatePayment 'split': a single physical store plus digital passes the COD check (and is not rejected for it)", async () => {

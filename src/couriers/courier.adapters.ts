@@ -1,7 +1,20 @@
-﻿import { DEFAULT_HTTP_REQUEST, type CourierAdapter, type CourierEvent, type EnvLike, type HttpRequest, type ShipmentInput, type ShipmentResult } from './courier.types';
+﻿import { DEFAULT_HTTP_REQUEST, type CourierAdapter, type CourierEvent, type EnvLike, type HttpRequest, type QuoteInput, type QuoteResult, type ShipmentInput, type ShipmentResult } from './courier.types';
 import { parseGenericWebhook } from './courier-status';
 
 const trim = (v: string | undefined) => (v ?? '').trim();
+
+/** Max wait for a live rate call at checkout. */
+export const QUOTE_TIMEOUT_MS = 3000;
+
+/**
+ * Shared quote stub. No courier's rate-API request/response shape is documented in this codebase, so a configured
+ * courier still answers "quote not available yet" instead of guessing a price.
+ * TODO(owner): implement per courier once the merchant agreement / sandbox gives the rate endpoint and response shape
+ * (wrap the call in a QUOTE_TIMEOUT_MS abort and return { ok:true, feePKR, service, etaDays }).
+ */
+function quoteUnavailable(configured: boolean, _input: QuoteInput): Promise<QuoteResult> {
+  return Promise.resolve({ ok: false, error: configured ? 'quote not available yet' : 'not configured' });
+}
 
 /** Leopards Courier merchant API (bookPacket). Env: LEOPARDS_API_KEY, LEOPARDS_API_PASSWORD, LEOPARDS_ENV=sandbox|live, LEOPARDS_ORIGIN_CITY, LEOPARDS_WEBHOOK_SECRET.
  * TODO(owner): Leopards books by city ID; map consignee.city through their getAllCities API (or pass IDs). */
@@ -11,6 +24,7 @@ export class LeopardsCourier implements CourierAdapter {
   constructor(private readonly env: EnvLike, private readonly http: HttpRequest = DEFAULT_HTTP_REQUEST) {}
 
   isConfigured() { return !!(trim(this.env.LEOPARDS_API_KEY) && trim(this.env.LEOPARDS_API_PASSWORD)); }
+  quote(input: QuoteInput) { return quoteUnavailable(this.isConfigured(), input); }
   webhookSecret() { return trim(this.env.LEOPARDS_WEBHOOK_SECRET) || null; }
   trackingUrl(tn: string) { return `https://www.leopardscourier.com/tracking?cn=${encodeURIComponent(tn)}`; }
   parseWebhook(body: any): CourierEvent[] { return parseGenericWebhook(body); }
@@ -55,6 +69,7 @@ export class PostExCourier implements CourierAdapter {
   constructor(private readonly env: EnvLike, private readonly http: HttpRequest = DEFAULT_HTTP_REQUEST) {}
 
   isConfigured() { return !!trim(this.env.POSTEX_API_TOKEN); }
+  quote(input: QuoteInput) { return quoteUnavailable(this.isConfigured(), input); }
   webhookSecret() { return trim(this.env.POSTEX_WEBHOOK_SECRET) || null; }
   trackingUrl(tn: string) { return `https://postex.pk/tracking?cn=${encodeURIComponent(tn)}`; }
   parseWebhook(body: any): CourierEvent[] { return parseGenericWebhook(body); }
@@ -102,6 +117,7 @@ export class TcsCourier implements CourierAdapter {
   constructor(private readonly env: EnvLike, private readonly http: HttpRequest = DEFAULT_HTTP_REQUEST) {}
 
   isConfigured() { return !!(trim(this.env.TCS_API_URL) && trim(this.env.TCS_API_TOKEN)); }
+  quote(input: QuoteInput) { return quoteUnavailable(this.isConfigured(), input); }
   webhookSecret() { return trim(this.env.TCS_WEBHOOK_SECRET) || null; }
   trackingUrl(tn: string) { return `https://www.tcsexpress.com/track/${encodeURIComponent(tn)}`; }
   parseWebhook(body: any): CourierEvent[] { return parseGenericWebhook(body); }

@@ -346,6 +346,16 @@ export class Store {
   @Prop({ type: Object, default: null })
   deliverySettings: { enabled: boolean; fee: number; freeOverAmount: number | null } | null;
 
+  // How this store delivers: 'self' (own flat fee), a courier id (Edudeen books it, buyer pays that courier's quote),
+  // 'auto' (cheapest available courier) or null = the platform default (rate table / zone fee).
+  @Prop({ type: String, default: null })
+  deliveryMethod: 'self' | 'tcs' | 'leopards' | 'postex' | 'auto' | null;
+
+  // Where this store's parcels leave from. Used to work out the delivery charge route (same city / province / rest).
+  // null = unknown, charged at the nationwide rate.
+  @Prop({ type: Object, default: null })
+  shipFrom: { city: string; province: string | null } | null;
+
   // Gift wrap the seller offers on physical orders (store currency). null = offered for free (the original behaviour).
   @Prop({ type: Object, default: null })
   giftWrap: { enabled: boolean; fee: number } | null;

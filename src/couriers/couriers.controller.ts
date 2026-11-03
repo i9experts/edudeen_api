@@ -15,6 +15,14 @@ export class CouriersController {
     return this.service.listCouriers();
   }
 
+  // Which delivery methods a seller may pick (self always; a courier only when admin-enabled AND configured).
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Get('options')
+  options() {
+    return this.service.deliveryOptions();
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Post('shipments')

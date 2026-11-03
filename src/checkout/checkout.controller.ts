@@ -91,6 +91,7 @@ import {
   Controller,
   Post,
   Patch,
+  Put,
   Delete,
   Param,
   Req,
@@ -105,10 +106,14 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { IdempotencyInterceptor } from '../common/idempotency.interceptor';
 import { CheckoutService } from './checkout.service';
+import { ShippingRatesService } from './shipping-rates.service';
 
 @Controller('api/checkout')
 export class CheckoutController {
-  constructor(private readonly checkoutService: CheckoutService) {}
+  constructor(
+    private readonly checkoutService: CheckoutService,
+    private readonly shippingRates: ShippingRatesService,
+  ) {}
 
   // Idempotency-Key header (already-proven interceptor, used elsewhere in
   // this codebase) prevents a double-tap/retry from creating two separate
@@ -172,6 +177,35 @@ return this.checkoutService.adminSeedDefaultShippingZones();
   @Delete('admin/shipping-zones/:id')
   async adminDeleteShippingZone(@Param('id') id: string) {
     return this.checkoutService.adminDeleteShippingZone(id);
+  }
+
+  // ── Admin: weight-based delivery rate table (off until enabled; see shipping-rate.util.ts) ──
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Get('admin/shipping-rates')
+  async adminGetShippingRates() {
+    return { success: true, data: await this.shippingRates.get() };
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Put('admin/shipping-rates')
+  async adminSaveShippingRates(@Body() body: any) {
+    return { success: true, data: await this.shippingRates.save(body) };
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Get('admin/shipping-rates/couriers')
+  async adminGetCourierSettings() {
+    return { success: true, data: await this.shippingRates.getCourierSettings() };
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Put('admin/shipping-rates/couriers')
+  async adminSaveCourierSettings(@Body() body: any) {
+    return { success: true, data: await this.shippingRates.saveCourierSettings(body) };
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

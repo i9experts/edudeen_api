@@ -4,7 +4,7 @@ import { Cron } from '@nestjs/schedule';
 import { DatabaseService } from 'src/database/databaseservice';
 import { UploadService } from 'src/upload/upload.service';
 import { PaymentService } from 'src/payment/payment.service';
-import { FinanceService, shippingCreditFor, feeItemsFor } from 'src/finance/finance.service';
+import { FinanceService, shippingCreditFor, feeItemsFor, cashMode } from 'src/finance/finance.service';
 import { AdminConfigService } from 'src/admin-config/admin-config.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
@@ -350,7 +350,7 @@ export class ManualPaymentsService {
           description: `Sale — Order #${order._id} (manual bank transfer, verified)`,
           platformSponsoredUSD, campaignId: sponsoredCampaignId, currency: sellerPayoutCurrency(so, order),
           paymentMethodType: order.paymentType || 'manual_bank_transfer',
-          fulfillmentMode: so.fulfillmentMode, shippingCredit: shippingCreditFor(order, so), feeItems: feeItemsFor(so),
+          fulfillmentMode: cashMode(so), shippingCredit: shippingCreditFor(order, so), feeItems: feeItemsFor(so),
           fxSnapshots: (order.fxSnapshots as any) ?? [],
         });
         if (credit?.creditStatus === 'pending') creditStatus = 'pending';

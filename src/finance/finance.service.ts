@@ -51,6 +51,13 @@ export function isSellerCollectedCod(paymentType: string | null | undefined, sel
   return paymentType === 'cash_on_delivery' && sellerOrder?.fulfillmentMode !== 'platform';
 }
 
+/** Who handles the CASH of a sub-order: its snapshotted COD collector, else (old orders) the fulfillment mode,
+ *  else 'seller'. Use this wherever the cash side matters; shipping permissions keep using `fulfillmentMode`. */
+export function cashMode(so: { codCollector?: string | null; fulfillmentMode?: string | null } | null | undefined): 'seller' | 'platform' {
+  const m = so?.codCollector ?? so?.fulfillmentMode ?? 'seller';
+  return m === 'platform' ? 'platform' : 'seller';
+}
+
 /** The shipping line a store is credited for a sub-order, in the seller's settlement currency.
  *  Only a store that ships its own physical orders ('seller' fulfillment) is paid for shipping, and only
  *  when the platform collected that money (card / bank transfer): on COD the seller's courier collects
@@ -61,6 +68,8 @@ export function shippingCreditFor(
 ): number {
   if (sellerOrder.fulfillmentType !== 'physical') return 0;
   if (sellerOrder.fulfillmentMode === 'platform') return 0;
+  // Edudeen's courier delivers and keeps the delivery charge (+ COD fee) on its own COD packages.
+  if (order.paymentType === 'cash_on_delivery' && (sellerOrder as any).codCollector === 'platform') return 0;
   if (order.paymentType === 'cash_on_delivery') return 0;
   return sellerOrder.settlementShippingFee ?? 0;
 }
@@ -2385,13 +2394,13 @@ export class FinanceService {
    */
   async recordRefundForSellerOrder(args: {
     order: { paymentType?: string | null };
-    sellerOrder: { fulfillmentMode?: string | null };
+    sellerOrder: { fulfillmentMode?: string | null; codCollector?: string | null };
     storeId: string; sellerId: string; orderId: string;
     refundedBuyerAmount: number; sellerOrderTotal: number; sellerDebitAmount: number;
     refKey: string; currency: string; description: string;
     actorId?: string; actorRole?: string; targetType?: string;
   }) {
-    if (isSellerCollectedCod(args.order.paymentType, args.sellerOrder) && (await this.findCodCommissionDebit(args.storeId, args.orderId))) {
+    if (isSellerCollectedCod(args.order.paymentType, { fulfillmentMode: cashMode(args.sellerOrder) }) && (await this.findCodCommissionDebit(args.storeId, args.orderId))) {
       const fraction = args.sellerOrderTotal > 0 ? Math.min(1, args.refundedBuyerAmount / args.sellerOrderTotal) : 1;
       return this.reverseCodCommission(args.storeId, args.sellerId, args.orderId, args.refKey, fraction, args.currency);
     }

@@ -199,6 +199,11 @@ export class PlatformConfig {
   @Prop({ type: Object, default: null })
   platformFees: { digital?: { mode: 'percentage' | 'fixed'; value: number }; physical?: { mode: 'percentage' | 'fixed'; value: number } } | null;
 
+  // Cash-on-delivery guard rails (PKR, per PACKAGE = one seller's items + its shipping).
+  // maxPerPackagePKR null = no limit; feePerPackagePKR 0 = no fee. null object = nothing configured.
+  @Prop({ type: Object, default: null })
+  cod: { maxPerPackagePKR?: number | null; feePerPackagePKR?: number } | null;
+
   // Admin-editable homepage copy (hero text/image, promise strip, trust items).
   // Free-form object; admin-config.service sanitises it on write.
   @Prop({ type: Object, default: () => ({}) })

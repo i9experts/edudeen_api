@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { isValidObjectId } from 'mongoose';
+import { courierDeliveryEnabled } from 'src/checkout/courier-settings.util';
 import { getDescendantIds } from '../categories/category-tree.util';
 import { sanitizeDigitalForPublicView, clampInt, queryString } from 'src/products/product-public-view.util';
 import { assertSafePublicJson, escapeRegex, searchTerm } from 'src/common/query-safety.util';
@@ -754,6 +755,24 @@ export class StoreService {
           fee: money(ds.fee ?? 0, 'Delivery charge'),
           freeOverAmount: ds.freeOverAmount == null || ds.freeOverAmount === '' ? null : money(ds.freeOverAmount, 'Free delivery amount'),
         };
+      }
+    }
+    if (body.deliveryMethod !== undefined) {
+      const dm = body.deliveryMethod;
+      if (dm === null || dm === '') updateData.deliveryMethod = null;
+      else if (typeof dm === 'string' && ['tcs', 'leopards', 'postex', 'auto'].includes(dm) && !courierDeliveryEnabled()) {
+        throw new BadRequestException('Courier delivery (TCS, Leopards, PostEx) is coming soon. Choose "I deliver myself" for now.');
+      } else if (typeof dm === 'string' && ['self', 'tcs', 'leopards', 'postex', 'auto'].includes(dm)) updateData.deliveryMethod = dm;
+      else throw new BadRequestException('deliveryMethod must be self, tcs, leopards, postex, auto or empty');
+    }
+    if (body.shipFrom !== undefined) {
+      const sf = body.shipFrom;
+      if (sf === null || (typeof sf === 'object' && !String(sf?.city ?? '').trim())) updateData.shipFrom = null;
+      else {
+        if (typeof sf !== 'object' || Array.isArray(sf)) throw new BadRequestException('shipFrom must be an object');
+        const city = String(sf.city).trim().slice(0, 60);
+        const province = sf.province == null || String(sf.province).trim() === '' ? null : String(sf.province).trim().slice(0, 60);
+        updateData.shipFrom = { city, province };
       }
     }
     if (body.giftWrap !== undefined) {

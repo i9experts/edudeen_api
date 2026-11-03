@@ -1,3 +1,4 @@
+process.env.COURIER_DELIVERY_ENABLED = 'true'; // these specs cover the courier-on paths (the switch is off by default)
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/require-await -- mock-heavy tests */
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { StoreService } from './store.service';
@@ -197,6 +198,18 @@ describe('updateStore', () => {
     await expect(
       svc.updateStore('seller1', OID, { contactEmail: 'nope' }),
     ).rejects.toThrow(/valid email/);
+  });
+
+  it('deliveryMethod accepts self/courier/auto/null and rejects anything else', async () => {
+    const { svc, repos } = make({ store: liveStore() });
+    await expect(svc.updateStore('seller1', OID, { deliveryMethod: 'dhl' })).rejects.toThrow(/deliveryMethod must be/);
+    await expect(svc.updateStore('seller1', OID, { deliveryMethod: { $ne: 1 } })).rejects.toThrow(/deliveryMethod must be/);
+    for (const ok of ['self', 'tcs', 'leopards', 'postex', 'auto', null]) {
+      repos.storeModel.findByIdAndUpdate.mockClear();
+      await svc.updateStore('seller1', OID, { deliveryMethod: ok });
+      const call = repos.storeModel.findByIdAndUpdate.mock.calls[0];
+      expect(JSON.stringify(call)).toContain(ok === null ? '"deliveryMethod":null' : `"deliveryMethod":"${ok}"`);
+    }
   });
 
   it('the store category is locked once the store has products (products denormalise it)', async () => {

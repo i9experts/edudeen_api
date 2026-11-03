@@ -31,7 +31,7 @@ import { splitEditForReview, overlayPendingEdit } from './product-edit-review.ut
 import { NotificationsService } from '../notifications/notifications.service';
 import { notifyPublishRequest, pktLabel } from './product-schedule-notify.util';
 import { NOTIFICATION_TYPES } from '../notifications/notification.types';
-import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, sellerSkipsListingReview, cleanLearningMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
+import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, sellerSkipsListingReview, cleanLearningMeta, cleanParcelMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
 import { allocateSkus, cleanSku } from './sku.util';
 import { generateProductSlug, nextPreviousSlugs } from 'src/common/slug.util';
 import { assertClassRangeRule, assertTitleRule, normalizeTitle, productWarnings } from './product-quality.util';
@@ -1641,6 +1641,7 @@ export class ProductsService {
       digital: null,
       isListedOnEdudeen: isListedOnEdudeen ?? false,
       ...learnMeta,
+      ...cleanParcelMeta(body, true),
       // A first publish goes to admin review (see resolveSellerPublishStatus).
       status: finalStatus,
       scheduledAt: scheduledDate,
@@ -2073,6 +2074,7 @@ export class ProductsService {
       productUpdate.digital = await this.buildDigitalConfig(sellerId, digital, product.digital ?? null);
     }
     Object.assign(productUpdate, cleanLearningMeta(body));
+    if (product.type === 'physical') Object.assign(productUpdate, cleanParcelMeta(body, false));
     if (product.type === 'digital') {
       Object.assign(productUpdate, cleanDeliveryFormat(body, product as any));
       await this.assertCourseReady(productId, productUpdate.deliveryFormat ?? (product as any).deliveryFormat, productUpdate.status ?? (productUpdate.deliveryFormat ? product.status : null));

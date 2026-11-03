@@ -18,6 +18,7 @@ import { UpdateManualPaymentConfigDto } from './dto/update-manual-payment-config
 import { UpdateFxConfigDto } from './dto/update-fx-config.dto';
 import { UpdateSocialLinksDto } from './dto/update-social-links.dto';
 import { UpdatePlatformFeesDto } from './dto/update-platform-fees.dto';
+import { UpdateCodConfigDto } from './dto/update-cod-config.dto';
 import { SOCIAL_LINK_KEYS } from './schemas/platform-config.schema';
 import { sanitizeSellerPage } from './seller-page.util';
 import { effectiveChatbot, sanitizeChatbot } from '../chatbot/chatbot.config';
@@ -315,6 +316,36 @@ export class AdminConfigService {
     return { success: true, message: 'Platform fees updated', data: config };
   }
 
+  /** COD guard rails (PKR, per package). Defaults = no limit, no fee, so nothing changes until an admin sets them. */
+  async getCodConfig(): Promise<{ maxPerPackagePKR: number | null; feePerPackagePKR: number }> {
+    const raw: any = (await this.getRawConfig()).cod;
+    const max = raw && Number.isFinite(raw.maxPerPackagePKR) && raw.maxPerPackagePKR > 0 ? Number(raw.maxPerPackagePKR) : null;
+    const fee = raw && Number.isFinite(raw.feePerPackagePKR) && raw.feePerPackagePKR > 0 ? Number(raw.feePerPackagePKR) : 0;
+    return { maxPerPackagePKR: max, feePerPackagePKR: fee };
+  }
+
+  async getCodConfigView() {
+    return { success: true, data: { cod: await this.getCodConfig() } };
+  }
+
+  async updateCodConfig(dto: UpdateCodConfigDto, meta: AuditMeta) {
+    const set: Record<string, unknown> = {};
+    if (dto.maxPerPackagePKR !== undefined) set['cod.maxPerPackagePKR'] = dto.maxPerPackagePKR;
+    if (dto.feePerPackagePKR !== undefined) set['cod.feePerPackagePKR'] = dto.feePerPackagePKR;
+    if (!Object.keys(set).length) throw new BadRequestException('Send maxPerPackagePKR and/or feePerPackagePKR');
+    const before = await this.currentSection('cod');
+    // A null/non-object cod cannot take dotted $set paths - normalise it first.
+    await this.model.updateOne({ $or: [{ cod: null }, { cod: { $exists: false } }] }, { $set: { cod: {} } });
+    const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });
+    this.invalidateCache();
+    const after = { maxPerPackagePKR: (config as any).cod?.maxPerPackagePKR ?? null, feePerPackagePKR: (config as any).cod?.feePerPackagePKR ?? 0 };
+    await this.logChange('cod_config_updated', `Cash on delivery settings updated: max per package ${after.maxPerPackagePKR ?? 'no limit'}, fee per package ${after.feePerPackagePKR}`, meta, {
+      before: { maxPerPackagePKR: before?.maxPerPackagePKR ?? null, feePerPackagePKR: before?.feePerPackagePKR ?? 0 },
+      after,
+    });
+    return { success: true, message: 'Cash on delivery settings updated', data: { cod: await this.getCodConfig() } };
+  }
+
   async updateFxConfig(dto: UpdateFxConfigDto, meta: AuditMeta) {
     // Validate the band as it will be AFTER this partial update, not just the fields sent.
     if (dto.sanityBandMinPKR !== undefined || dto.sanityBandMaxPKR !== undefined) {
@@ -449,7 +480,7 @@ export class AdminConfigService {
         socialLinks,
         homeContent: publicHomeContent((config as any).homeContent),
         // Real, derived facts the homepage trust points may claim (never invented).
-        commerce: { codAvailable: await this.isCodOffered(), paymentMethods: await this.publicPaymentMethods(config) },
+        commerce: { codAvailable: await this.isCodOffered(), paymentMethods: await this.publicPaymentMethods(config), cod: await this.getCodConfig() },
         sellerPage: (config as any).sellerPage ?? {},
         chatbot: effectiveChatbot((config as any).chatbot),
         payout: {

@@ -243,6 +243,12 @@ export class SellerOrder {
   @Prop({ type: String, enum: ['seller', 'platform', null], default: null })
   fulfillmentMode: string | null;
 
+  // Who collects the COD cash of this package (snapshot at order time): 'platform' = Edudeen's courier
+  // (TCS/Leopards/PostEx), 'seller' = the seller's own rider. null = not COD / old order -> falls back to
+  // fulfillmentMode (see cashMode in finance.service.ts). Does NOT decide who may ship.
+  @Prop({ type: String, enum: ['seller', 'platform', null], default: null })
+  codCollector: string | null;
+
   // This store's own shipping line (sellers ship separately), in the ORDER's
   // currency, and the same amount in the seller's settlement currency. The
   // physical Order.shippingFee is the sum over its sellerOrders. 0 on digital
@@ -252,6 +258,18 @@ export class SellerOrder {
 
   @Prop({ type: Number, default: 0 })
   settlementShippingFee: number;
+
+  // Per-package cash on delivery (multi-seller COD orders): each package is collected and confirmed on its own.
+  // Absent/false on every order placed before this existed - readers then fall back to the order-level isPaid.
+  // codAmount = this package's items + its own shipping (what the rider collects), in the order's currency.
+  @Prop({ type: Boolean, default: false })
+  isPaid: boolean;
+
+  @Prop({ type: Date, default: null })
+  paidAt: Date | null;
+
+  @Prop({ type: Number, default: 0 })
+  codAmount: number;
 
   @Prop({ type: [OrderItemSchema], required: true })
   items: OrderItem[];
@@ -313,6 +331,11 @@ export class SellerOrder {
 
   @Prop({ type: CourierShipmentSchema, default: null })
   shipment: CourierShipment | null;
+
+  // How this package's delivery charge was worked out at checkout (null on older orders / flat zone fee).
+  // `courier` is the courier it was priced for; booking is locked to it. source: live | slab | zone | self.
+  @Prop({ type: Object, default: null })
+  shippingCourier: { courier: string | null; service: string | null; etaDays: number | null; source: string } | null;
 
   @Prop({ type: [TrackingEventSchema], default: [] })
   trackingEvents: TrackingEvent[];
@@ -501,7 +524,8 @@ export class Order {
   // 'pending_verification' — manual bank-transfer order awaiting an admin to
   // review the buyer's uploaded proof (see manual-payments module). Never
   // set for stripe/COD orders.
-  @Prop({ enum: ['unpaid', 'pending_verification', 'paid', 'failed', 'refunded'], default: 'unpaid' })
+  // 'partially_paid' - multi-seller COD where some packages were collected and others are still due.
+  @Prop({ enum: ['unpaid', 'pending_verification', 'paid', 'partially_paid', 'failed', 'refunded'], default: 'unpaid' })
   paymentStatus: string;
 
   @Prop({ default: false })

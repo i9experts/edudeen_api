@@ -14,7 +14,11 @@
 // export class checkoutModule {}
 
 import { Module } from '@nestjs/common';
+import { MongooseModule } from '@nestjs/mongoose';
 import { CheckoutService } from './checkout.service';
+import { ShippingRatesService } from './shipping-rates.service';
+import { ShippingQuoteService } from './shipping-quote.service';
+import { ShippingRateTable, ShippingRateTableSchema } from './shipping.schema';
 import { CheckoutController } from './checkout.controller';
 import { AuthModule } from 'src/auth/auth.module';
 import { RedisModule } from 'src/redis/redis.module';
@@ -25,9 +29,12 @@ import { GiftCardsModule } from 'src/gift-cards/gift-cards.module';
 import { DiscountsModule } from 'src/discounts/discounts.module';
 
 @Module({
-  imports: [AuthModule, RedisModule, MarketingModule, AdminConfigModule, ExchangeRateModule, GiftCardsModule, DiscountsModule],
+  imports: [
+    AuthModule, RedisModule, MarketingModule, AdminConfigModule, ExchangeRateModule, GiftCardsModule, DiscountsModule,
+    MongooseModule.forFeature([{ name: ShippingRateTable.name, schema: ShippingRateTableSchema }]),
+  ],
   controllers: [CheckoutController],
-  providers: [CheckoutService],
-  exports: [CheckoutService],
+  providers: [CheckoutService, ShippingRatesService, ShippingQuoteService],
+  exports: [CheckoutService, ShippingRatesService, ShippingQuoteService],
 })
 export class CheckoutModule {}

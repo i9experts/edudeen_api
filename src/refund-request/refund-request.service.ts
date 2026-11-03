@@ -13,6 +13,7 @@ import { PaymentService } from 'src/payment/payment.service';
 import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { verifyStoreOwnershipOrForbidden } from 'src/common/store-ownership.util';
+import { isPackagePaid } from 'src/orders/package-paid.util';
 import { CreateRefundRequestDto } from './dto/refund-request.dto';
 
 @Injectable()
@@ -92,7 +93,7 @@ export class RefundRequestService {
         // OrdersService.consumeDownload); a seller or admin can refund at
         // any time, e.g. for a broken or misdescribed resource. Approval
         // marks the item 'refunded', which revokes download access.
-        if (!order.isPaid) {
+        if (!isPackagePaid(order, sellerOrder)) {
           throw new BadRequestException(`"${item.name}" has not been paid for`);
         }
         if (role === 'user' && (item.downloadCount ?? 0) > 0) {
@@ -261,7 +262,7 @@ export class RefundRequestService {
 
       // Never refund (or debit a seller for) money that was never collected — e.g.
       // an unpaid COD order a seller marked delivered.
-      if (!order.isPaid) throw new BadRequestException('This order has not been paid — there is nothing to refund');
+      if (!isPackagePaid(order, sellerOrder)) throw new BadRequestException('This order has not been paid — there is nothing to refund');
 
       items = (sellerOrder.items as any[]).filter((i: any) => request.itemIds.includes(i._id.toString()));
       // State may have changed since the request was filed.

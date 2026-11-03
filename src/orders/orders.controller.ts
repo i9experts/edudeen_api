@@ -74,9 +74,11 @@ export class OrdersController {
   @RequireReauth()
   @Roles('seller', 'admin')
   @Put('mark-paid/:orderId')
-  async markPaid(@Req() req: any, @Param('orderId') orderId: string) {
+  async markPaid(@Req() req: any, @Param('orderId') orderId: string, @Body() body: any) {
     const { userId, role } = req.user;
-    return this.ordersService.markPaid(orderId, { userId, role });
+    // storeId = which package's cash was collected (required for a multi-seller COD order).
+    const storeId = typeof body?.storeId === 'string' && body.storeId ? body.storeId : undefined;
+    return this.ordersService.markPaid(orderId, { userId, role }, storeId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

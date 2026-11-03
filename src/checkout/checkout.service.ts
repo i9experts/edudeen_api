@@ -17,8 +17,14 @@ import { SUPPORTED_CURRENCIES, FxSnapshot } from 'src/exchange-rate/schemas/exch
 import { GiftCardsService } from 'src/gift-cards/gift-cards.service';
 import { DiscountsService } from 'src/discounts/discounts.service';
 import { configuredHostedProviderIds } from 'src/payment/providers/hosted-providers.registry';
+import { evaluateCod } from 'src/payment/cod-rules.util';
 import { DEFAULT_PK_ZONES, missingDefaultZones } from './default-pk-zones';
 import { sanitizeGiftOptions } from './gift-options.util';
+import { quoteRate, routeClass } from './shipping-rate.util';
+import { parcelTotals } from './parcel-totals.util';
+import { ShippingRatesService } from './shipping-rates.service';
+import { ShippingQuoteService } from './shipping-quote.service';
+import { parseDeliveryMethod } from './courier-settings.util';
 import { PremiumEntitlementsService } from 'src/premium/premium-entitlements.service';
 import { applyPremiumToLine, DEFAULT_PREMIUM_TERMS, premiumPercentFor } from 'src/premium/premium.util';
 
@@ -45,6 +51,8 @@ export class CheckoutService {
     private readonly discountsService: DiscountsService,
     // Edudeen Premium (member price + campaign early access). Optional: absent = everything behaves as before.
     @Optional() private readonly premium?: PremiumEntitlementsService,
+    @Optional() private readonly shippingRates?: ShippingRatesService,
+    @Optional() private readonly shippingQuotes?: ShippingQuoteService,
   ) {}
 
   private round(n: number) {
@@ -671,12 +679,10 @@ export class CheckoutService {
     const physicalStoreIds = [
       ...new Set(checkoutItems.filter((i) => i.type === 'physical').map((i) => i.storeId)),
     ];
-    // COD is also only offered when all physical items come from ONE store: the
-    // cash is collected per seller, so a multi-seller COD order has no single
-    // party to collect and confirm it (see PaymentService.codPayment).
+    // COD works for several sellers: each package is its own cash collection at the door
+    // (SellerOrder.isPaid / codAmount, OrdersService.markPaid per package). Every store must allow COD.
     const codEligible = hasPhysical
-      ? physicalStoreIds.length <= 1 &&
-        physicalStoreIds
+      ? physicalStoreIds
           .map((id) => storeDocById.get(String(id)))
           .filter(Boolean)
           .every((s: any) => s.codEnabled !== false)
@@ -699,6 +705,7 @@ export class CheckoutService {
     let shippingFee = 0;
     let finalTotal = totalAmount;
     let finalCheckout: any = checkout;
+    let shippingLinesForCod: any[] = [];
     if (hasPhysical && body.shippingZoneId) {
       if (typeof body.shippingZoneId !== 'string' || !isValidObjectId(body.shippingZoneId)) {
         throw new BadRequestException('Invalid shippingZoneId');
@@ -710,16 +717,62 @@ export class CheckoutService {
       );
       shippingFee = added.data.shippingFee;
       finalTotal = added.data.totalAmount;
+      shippingLinesForCod = (added.data as any).shippingByStore ?? [];
       // Reuse the document we just created instead of re-reading it.
       checkout.set({ shippingZoneId: body.shippingZoneId, shippingFee, totalAmount: finalTotal, shippingEstimate: added.data.shippingEstimate ?? null });
       finalCheckout = checkout;
     }
+
+    // Admin guard rails for Cash on Delivery (limit + fee per package, PKR). Nothing configured = no change.
+    // Advisory here (shipping may still change); PaymentService.codPayment re-checks it before the order is placed.
+    const codCfg = hasPhysical
+      ? (typeof (this.adminConfigService as any)?.getCodConfig === 'function'
+        ? await this.adminConfigService.getCodConfig().catch(() => ({ maxPerPackagePKR: null, feePerPackagePKR: 0 }))
+        : { maxPerPackagePKR: null, feePerPackagePKR: 0 })
+      : null;
+    // The COD fee is charged only on packages whose cash goes to Edudeen's courier (same rule as PaymentService).
+    let codFeeStoreIds: string[] | undefined;
+    if (codCfg && codCfg.feePerPackagePKR > 0) {
+      const physIds = [...new Set((checkoutItems as any[]).filter((i: any) => i.type === 'physical').map((i: any) => String(i.storeId)))];
+      let collectors = new Map<string, string>();
+      try {
+        const docs: any[] = await this.databaseService.repositories.storeModel.find({ _id: { $in: physIds } }).select('deliveryMethod fulfillmentMode').lean();
+        const settings = this.shippingRates ? await this.shippingRates.getCourierSettings() : null;
+        collectors = this.shippingQuotes && settings
+          ? this.shippingQuotes.codCollectors(docs, settings)
+          : new Map(docs.map((s: any) => [String(s._id), s.fulfillmentMode === 'platform' ? 'platform' : 'seller']));
+      } catch { /* unreadable: no fee anywhere rather than a wrong one */ }
+      codFeeStoreIds = physIds.filter((id) => collectors.get(id) === 'platform');
+    }
+    const codInfo = hasPhysical && codCfg
+      ? evaluateCod(
+          { items: checkoutItems, currency: checkoutCurrency, fxSnapshots, shippingByStore: shippingLinesForCod, shippingFee },
+          codCfg,
+          (n, from, to) => this.exchangeRateService.convertWithSnapshots(n, from, to, fxSnapshots as any),
+          codFeeStoreIds,
+        )
+      : null;
+    const codOffered = codEligible && (codInfo?.available ?? true);
 
     return {
       success: true,
       message: 'Checkout created successfully',
       data: {
         checkout: finalCheckout,
+        ...(codInfo
+          ? {
+              cod: {
+                available: codEligible && codInfo.available,
+                reason: !codEligible ? 'A seller in this order does not accept Cash on Delivery.' : codInfo.reason,
+                maxPerPackage: codInfo.maxPerPackage,
+                feePerPackage: codInfo.feePerPackage,
+                packageCount: codInfo.packageCount,
+                feeTotal: codInfo.feeTotal,
+                // storeId -> fee (checkout currency) for packages carried by Edudeen's courier only.
+                feeByStore: codInfo.feeByStore,
+              },
+            }
+          : {}),
         // A mixed cart can either pay everything online ('stripe') or split
         // it — digital online now, physical via COD on delivery ('split').
         // Digital-only carts never get COD; physical-only carts keep both
@@ -730,8 +783,8 @@ export class CheckoutService {
           ? ['free'] // nothing to pay: confirm via POST /api/payment/free-checkout
           : [
               ...(hasDigital
-                ? withManualTransfer(hasPhysical && codEligible ? ['stripe', 'split'] : ['stripe'])
-                : withManualTransfer(codEligible ? ['stripe', 'cash_on_delivery'] : ['stripe'])),
+                ? withManualTransfer(hasPhysical && codOffered ? ['stripe', 'split'] : ['stripe'])
+                : withManualTransfer(codOffered ? ['stripe', 'cash_on_delivery'] : ['stripe'])),
               // JazzCash / Easypaisa: only when configured via env AND the checkout is PKR.
               ...configuredHostedProviderIds(checkoutCurrency),
             ],
@@ -750,6 +803,19 @@ export class CheckoutService {
         // Lines skipped because their store is not active (unified checkout only); still in the cart.
         unavailableItems,
       },
+    };
+  }
+
+  /** productId/variantId -> weight, size and parcel type for the physical lines of a checkout. */
+  private async loadParcelInfo(physicalItems: any[]) {
+    const { productModel, productVariantModel } = this.databaseService.repositories;
+    const [products, variants] = await Promise.all([
+      productModel.find({ _id: { $in: [...new Set(physicalItems.map((i) => String(i.productId)))] } }).select('parcelType packageCm').lean(),
+      productVariantModel.find({ _id: { $in: [...new Set(physicalItems.map((i) => String(i.variantId)))] } }).select('shippingWeight').lean(),
+    ]);
+    return {
+      products: new Map<string, any>((products as any[]).map((p) => [String(p._id), p])),
+      variants: new Map<string, any>((variants as any[]).map((v) => [String(v._id), v])),
     };
   }
 
@@ -811,18 +877,63 @@ export class CheckoutService {
     // with no physical items (digital only) has no shipping at all.
     const items = checkout.items as any[];
     const physicalStoreIds = [...new Set(items.filter((i) => i.type === 'physical').map((i) => i.storeId))];
-    const shippingByStore: { storeId: string; fee: number; baseFee: number; discountPercent: number; giftWrapFee?: number }[] = [];
+    const shippingByStore: { storeId: string; fee: number; baseFee: number; discountPercent: number; giftWrapFee?: number; courier?: string | null; service?: string | null; etaDays?: number | null; source?: string }[] = [];
     const sellerStores: any[] = physicalStoreIds.length
-      ? await this.databaseService.repositories.storeModel.find({ _id: { $in: physicalStoreIds } }).select('deliverySettings giftWrap baseCurrency').lean()
+      ? await this.databaseService.repositories.storeModel.find({ _id: { $in: physicalStoreIds } }).select('deliverySettings giftWrap baseCurrency shipFrom deliveryMethod').lean()
       : [];
     const snaps = (checkout.fxSnapshots as any) ?? [];
+    // Weight-based rates (admin table). Off by default: the flat zone fee / seller fee below stays in charge until it is enabled.
+    const rateTable = this.shippingRates ? await this.shippingRates.get() : null;
+    const useRates = rateTable?.enabled === true;
+    // Per-store delivery method (null = the platform default below, exactly as before).
+    const methodOf = (s: any) => (this.shippingQuotes ? parseDeliveryMethod(s?.deliveryMethod) : null);
+    const needsCourierQuote = sellerStores.some((s) => { const m = methodOf(s); return m != null && m !== 'self'; });
+    const courierSettings = needsCourierQuote && this.shippingRates ? await this.shippingRates.getCourierSettings() : null;
+    const parcels = useRates || needsCourierQuote ? await this.loadParcelInfo(items.filter((i) => i.type === 'physical')) : null;
     for (const storeId of physicalStoreIds) {
       const sellerStore = sellerStores.find((s) => String(s._id) === String(storeId));
       const storeCcy = sellerStore?.baseCurrency ?? checkout.currency;
+      const method = methodOf(sellerStore);
+      let quoteMeta: { courier: string | null; service: string | null; etaDays: number | null; source: string } | null = null;
       // The seller's own delivery charge replaces the platform zone fee (the zone still decides WHERE we deliver).
       let storeBaseFee = baseFee;
+      if (method == null && useRates && rateTable && parcels) {
+        const storeItems = items.filter((i) => i.type === 'physical' && String(i.storeId) === String(storeId));
+        const route = routeClass(sellerStore?.shipFrom ?? {}, { city: shippingZone.city, province: shippingZone.province });
+        const q = quoteRate(rateTable, { route, ...parcelTotals(storeItems, parcels, rateTable.volumetricDivisor) });
+        storeBaseFee = this.round(this.exchangeRateService.convertWithSnapshots(q.feePKR, SHIPPING_ZONE_CURRENCY, checkout.currency, snaps));
+      }
+      if (method != null && method !== 'self' && this.shippingQuotes && courierSettings && parcels) {
+        // Edudeen courier: live quote -> slab table -> zone fee (see ShippingQuoteService).
+        const storeItems = items.filter((i) => i.type === 'physical' && String(i.storeId) === String(storeId));
+        const route = routeClass(sellerStore?.shipFrom ?? {}, { city: shippingZone.city, province: shippingZone.province });
+        const totals = parcelTotals(storeItems, parcels, rateTable?.volumetricDivisor ?? 5000);
+        const q = await this.shippingQuotes.resolve({
+          method, originCity: sellerStore?.shipFrom?.city ?? null, destCity: shippingZone.city ?? '', route,
+          billableKg: totals.billableKg, fragile: totals.fragile, rateTable, settings: courierSettings,
+        });
+        if (q.feePKR != null) storeBaseFee = this.round(this.exchangeRateService.convertWithSnapshots(q.feePKR, SHIPPING_ZONE_CURRENCY, checkout.currency, snaps));
+        quoteMeta = { courier: q.courier, service: q.service, etaDays: q.etaDays, source: q.source };
+      }
       const ds = sellerStore?.deliverySettings;
-      if (ds?.enabled) {
+      if (method === 'self') {
+        // Seller delivers: their own flat fee / free-over (the pre-rate-table behaviour), else the platform zone fee.
+        quoteMeta = { courier: null, service: null, etaDays: null, source: ds?.enabled ? 'self' : 'zone' };
+        if (ds?.enabled) {
+          const storeSubtotal = this.convertedSubtotal(items.filter((i) => i.storeId === storeId), checkout.currency, snaps);
+          const freeOver = ds.freeOverAmount != null ? this.exchangeRateService.convertWithSnapshots(ds.freeOverAmount, storeCcy, checkout.currency, snaps) : null;
+          storeBaseFee = freeOver != null && freeOver > 0 && storeSubtotal >= freeOver
+            ? 0
+            : this.round(this.exchangeRateService.convertWithSnapshots(ds.fee || 0, storeCcy, checkout.currency, snaps));
+        }
+      } else if (method != null) {
+        // Courier methods charge the courier's price; the seller's flat fee does not apply.
+      } else if (ds?.enabled && useRates) {
+        // With rates on, the seller's flat fee no longer replaces the quote; only their 'free over' threshold still applies.
+        const storeSubtotal = this.convertedSubtotal(items.filter((i) => i.storeId === storeId), checkout.currency, snaps);
+        const freeOver = ds.freeOverAmount != null ? this.exchangeRateService.convertWithSnapshots(ds.freeOverAmount, storeCcy, checkout.currency, snaps) : null;
+        if (freeOver != null && freeOver > 0 && storeSubtotal >= freeOver) storeBaseFee = 0;
+      } else if (ds?.enabled) {
         const storeSubtotal = this.convertedSubtotal(items.filter((i) => i.storeId === storeId), checkout.currency, snaps);
         const freeOver = ds.freeOverAmount != null ? this.exchangeRateService.convertWithSnapshots(ds.freeOverAmount, storeCcy, checkout.currency, snaps) : null;
         storeBaseFee = freeOver != null && freeOver > 0 && storeSubtotal >= freeOver
@@ -839,6 +950,7 @@ export class CheckoutService {
         discountPercent,
         fee: this.round(storeBaseFee * (1 - discountPercent / 100) + giftWrapFee),
         giftWrapFee,
+        ...(quoteMeta ? quoteMeta : {}),
       });
     }
     const shippingFee = this.round(shippingByStore.reduce((sum, l) => sum + l.fee, 0));

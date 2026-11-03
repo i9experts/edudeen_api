@@ -1,7 +1,10 @@
-﻿import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+﻿import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { courierDeliveryEnabled, DEFAULT_COURIER_SETTINGS, DELIVERY_COURIER_IDS } from 'src/checkout/courier-settings.util';
+import { ShippingRatesService } from 'src/checkout/shipping-rates.service';
 import { timingSafeEqual } from 'crypto';
 import { DatabaseService } from 'src/database/databaseservice';
 import { OrdersService } from 'src/orders/orders.service';
+import { parseWeightKg } from 'src/products/price-rules.util';
 import { buildCouriers } from './courier.adapters';
 import type { CourierAdapter, CourierId, ShipmentInput } from './courier.types';
 
@@ -18,7 +21,37 @@ export class CouriersService {
   constructor(
     private readonly db: DatabaseService,
     private readonly ordersService: OrdersService,
+    @Optional() private readonly shippingRates?: ShippingRatesService,
   ) {}
+
+  /** Delivery methods a seller may choose, each with a reason when it is not selectable. */
+  async deliveryOptions() {
+    const settings = this.shippingRates ? await this.shippingRates.getCourierSettings() : DEFAULT_COURIER_SETTINGS;
+    const adapters = this.adapters();
+    const switchedOn = courierDeliveryEnabled();
+    const couriers = DELIVERY_COURIER_IDS.map((id) => {
+      const a = adapters.find((x) => x.id === id);
+      const configured = !!a?.isConfigured();
+      const enabled = settings.enabled[id] === true;
+      const available = switchedOn && enabled && configured;
+      return {
+        id,
+        label: a?.label ?? id,
+        available,
+        reason: available ? null : !switchedOn ? 'Coming soon' : !enabled ? 'Not offered by Edudeen yet' : 'Edudeen has not connected this courier yet',
+      };
+    });
+    const anyCourier = couriers.some((c) => c.available);
+    return {
+      success: true,
+      data: {
+        self: { available: true, reason: null },
+        couriers,
+        auto: { available: anyCourier, reason: anyCourier ? null : switchedOn ? 'No courier is available yet' : 'Coming soon' },
+        useLiveRates: settings.useLiveRates,
+      },
+    };
+  }
 
   private adapters(): CourierAdapter[] { return buildCouriers(process.env); }
   private adapter(id: string): CourierAdapter | null { return this.adapters().find((c) => c.id === (id as CourierId)) ?? null; }
@@ -30,34 +63,65 @@ export class CouriersService {
 
   private async loadSellerOrder(sellerId: string, storeId: string, orderId: string) {
     const { orderModel, storeModel } = this.db.repositories;
-    const store = await storeModel.findOne({ _id: storeId, sellerId, isDelete: false }).select('_id').lean();
+    const store: any = await storeModel.findOne({ _id: storeId, sellerId, isDelete: false }).select('_id deliveryMethod').lean();
     if (!store) throw new ForbiddenException('Store not found or unauthorized');
     const order: any = await orderModel.findOne({ _id: orderId, isDelete: false });
     if (!order) throw new NotFoundException('Order not found');
     const idx = order.sellerOrders.findIndex((so: any) => so.storeId === storeId && so.sellerId === sellerId);
     if (idx === -1) throw new ForbiddenException('Unauthorized');
-    return { order, idx, so: order.sellerOrders[idx] };
+    return { order, idx, so: order.sellerOrders[idx], store };
+  }
+
+  /**
+   * The courier this package must be booked with, or null when the seller is free to choose.
+   * Store method 'self'/none = free choice. A specific courier (or 'auto' that already priced a courier) locks it.
+   */
+  requiredCourier(store: { deliveryMethod?: string | null } | null, so: any): CourierId | null {
+    const m = courierDeliveryEnabled() ? store?.deliveryMethod : null;
+    if (m !== 'tcs' && m !== 'leopards' && m !== 'postex' && m !== 'auto') return null;
+    const quoted = so?.shippingCourier?.courier;
+    if (quoted === 'tcs' || quoted === 'leopards' || quoted === 'postex') return quoted;
+    return m === 'auto' ? null : m;
   }
 
   /** Books a shipment with the chosen courier and stores the tracking number (order status is NOT changed; the seller still marks it shipped). */
   async createShipment(sellerId: string, body: { orderId?: string; storeId?: string; courier?: string; weightKg?: number }) {
     const { orderId, storeId } = body ?? {};
-    if (!orderId || !storeId || !body?.courier) throw new BadRequestException('orderId, storeId and courier are required');
-    const adapter = this.adapter(body.courier);
-    if (!adapter || !adapter.isConfigured()) throw new BadRequestException('This courier is not set up yet');
+    if (!orderId || !storeId) throw new BadRequestException('orderId and storeId are required');
 
-    const { order, idx, so } = await this.loadSellerOrder(sellerId, storeId, orderId);
+    const { order, idx, so, store } = await this.loadSellerOrder(sellerId, storeId, orderId);
+    // Store method / quoted courier decides the courier; the seller cannot book a different one.
+    const required = this.requiredCourier(store, so);
+    const courierId = body.courier || required;
+    if (!courierId) throw new BadRequestException('orderId, storeId and courier are required');
+    if (required && body.courier && body.courier !== required) {
+      throw new BadRequestException(`This package was priced for ${this.adapter(required)?.label ?? required}, so it must be booked with that courier`);
+    }
+    const adapter = this.adapter(courierId);
+    if (!adapter || !adapter.isConfigured()) throw new BadRequestException('This courier is not set up yet');
     if (so.fulfillmentType === 'digital') throw new BadRequestException('Digital orders are not shipped');
     if (!['pending', 'processing'].includes(so.status)) throw new BadRequestException(`This order is already ${so.status}`);
     if (so.shipment?.trackingNumber) throw new BadRequestException('A shipment is already booked for this order');
     const a = order.shippingAddress;
     if (!a?.addressLine1 || !a?.city || !a?.phoneNumber) throw new BadRequestException('The delivery address is incomplete');
 
-    const isCod = order.paymentType === 'cash_on_delivery' && !order.isPaid;
+    // Per-package paid state wins on a multi-seller COD order (this package may already be collected).
+    const isCod = order.paymentType === 'cash_on_delivery' && !order.isPaid && so.isPaid !== true;
     if (isCod && order.currency !== 'PKR') throw new BadRequestException('Cash on delivery bookings need a PKR order');
     // One seller on the order: the buyer pays the whole total (incl. shipping) at the door; otherwise only this store's items.
-    const codAmount = isCod ? Math.round(order.sellerOrders.length === 1 ? order.totalAmount : so.subtotal) : 0;
-    const weight = Number(body.weightKg);
+    // A multi-seller order stores each package's amount (items + its own shipping); older orders fall back to the subtotal.
+    const codAmount = isCod
+      ? Math.round(order.sellerOrders.length === 1 ? order.totalAmount : (so.codAmount > 0 ? so.codAmount : so.subtotal))
+      : 0;
+    let weight = Number(body.weightKg);
+    if (!(Number.isFinite(weight) && weight > 0 && weight <= 100)) {
+      // Seller left the weight blank: use the products' own weights (same rule checkout uses) before falling back to 0.5 kg.
+      const ids = [...new Set((so.items ?? []).map((i: any) => String(i.variantId)).filter((v: string) => v && v !== 'null' && v !== 'undefined'))] as string[];
+      const variants: any[] = ids.length ? await this.db.repositories.productVariantModel.find({ _id: { $in: ids } }).select('shippingWeight').lean() : [];
+      const byId = new Map(variants.map((v) => [String(v._id), v]));
+      const sum = (so.items ?? []).reduce((n: number, i: any) => n + (parseWeightKg(byId.get(String(i.variantId))?.shippingWeight) ?? 0) * (i.quantity || 1), 0);
+      weight = sum > 0 ? Math.round(sum * 1000) / 1000 : 0;
+    }
     const input: ShipmentInput = {
       orderRef: String(order.orderNumber ?? order._id),
       consignee: {
@@ -67,7 +131,7 @@ export class CouriersService {
         city: a.city,
       },
       pieces: Math.max(1, so.items.reduce((n: number, i: any) => n + (i.quantity || 1), 0)),
-      weightKg: Number.isFinite(weight) && weight > 0 && weight <= 100 ? weight : 0.5,
+      weightKg: weight > 0 ? weight : 0.5,
       codAmount,
       description: so.items.map((i: any) => i.name).join(', ').slice(0, 150),
       remarks: `Edudeen order ${order.orderNumber ?? ''}`.trim(),

@@ -319,7 +319,7 @@ describe('createCheckout — unavailable stores (D3) and limits (D4)', () => {
   });
 });
 
-describe('createCheckout — Cash on Delivery only for single-store physical carts (D2a)', () => {
+describe('createCheckout — Cash on Delivery per package for multi-store physical carts', () => {
   const methods = async (seeds: Seed[]) =>
     (await create(world(seeds))).data.allowedPaymentMethods as string[];
 
@@ -332,22 +332,22 @@ describe('createCheckout — Cash on Delivery only for single-store physical car
     ).toContain('cash_on_delivery');
   });
 
-  it('omits COD when physical items come from two stores', async () => {
+  it('offers COD when physical items come from two stores (each package is collected on its own)', async () => {
     const m = await methods([
       { storeId: 'A', productId: 'p1', type: 'physical' },
       { storeId: 'B', productId: 'p2', type: 'physical' },
     ]);
-    expect(m).not.toContain('cash_on_delivery');
+    expect(m).toContain('cash_on_delivery');
     expect(m).toContain('stripe');
   });
 
-  it("omits 'split' (digital online + physical COD) when the physical items span two stores, but not for one", async () => {
+  it("offers 'split' (digital online + physical COD) for one store and for several", async () => {
     const two = await methods([
       { storeId: 'A', productId: 'p1', type: 'physical' },
       { storeId: 'B', productId: 'p2', type: 'physical' },
       { storeId: 'C', productId: 'p3', type: 'digital' },
     ]);
-    expect(two).not.toContain('split');
+    expect(two).toContain('split');
     const one = await methods([
       { storeId: 'A', productId: 'p1', type: 'physical' },
       { storeId: 'C', productId: 'p3', type: 'digital' },

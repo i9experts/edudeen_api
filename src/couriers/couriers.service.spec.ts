@@ -1,4 +1,5 @@
-﻿/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call -- mock-heavy tests */
+process.env.COURIER_DELIVERY_ENABLED = 'true'; // these specs cover the courier-on paths (the switch is off by default)
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call -- mock-heavy tests */
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { CouriersService } from './couriers.service';
 
@@ -41,6 +42,42 @@ describe('CouriersService', () => {
     expect(update.$set['sellerOrders.0.tracking']).toMatchObject({ carrier: 'PostEx', trackingNumber: 'PX1' });
     expect(update.$set['sellerOrders.0.status']).toBeUndefined();
     fetchMock.mockRestore();
+  });
+
+  it('a store on a specific courier cannot book a different one; the quoted courier is preselected', async () => {
+    const order = baseOrder();
+    (order.sellerOrders[0] as any).shippingCourier = { courier: 'postex', service: 'Std', etaDays: 3, source: 'live' };
+    const { svc, orderModel } = make(order);
+    (orderModel as any);
+    const store = { _id: 's1', deliveryMethod: 'tcs' };
+    (svc as any).db.repositories.storeModel.findOne = jest.fn(() => ({ select: () => ({ lean: () => Promise.resolve(store) }) }));
+    await expect(svc.createShipment('sel1', { orderId: 'o1', storeId: 's1', courier: 'leopards' })).rejects.toThrow(/must be booked with that courier/);
+    const fetchMock = jest.spyOn(global, 'fetch' as any).mockResolvedValue({ status: 200, json: async () => ({ statusCode: '200', dist: { trackingNumber: 'PX9' } }) } as any);
+    const res = await svc.createShipment('sel1', { orderId: 'o1', storeId: 's1' }); // courier omitted -> locked one
+    expect(res.data).toMatchObject({ courier: 'postex', trackingNumber: 'PX9' });
+    fetchMock.mockRestore();
+  });
+
+  it("'self' / unset stores may book any courier; requiredCourier rules", () => {
+    const { svc } = make(baseOrder());
+    expect(svc.requiredCourier({ deliveryMethod: 'self' }, { shippingCourier: { courier: 'tcs' } })).toBeNull();
+    expect(svc.requiredCourier(null, {})).toBeNull();
+    expect(svc.requiredCourier({ deliveryMethod: 'leopards' }, {})).toBe('leopards');
+    expect(svc.requiredCourier({ deliveryMethod: 'auto' }, {})).toBeNull();
+    expect(svc.requiredCourier({ deliveryMethod: 'auto' }, { shippingCourier: { courier: 'tcs' } })).toBe('tcs');
+  });
+
+  it('options: self always, a courier only when admin-enabled AND configured', async () => {
+    const { svc } = make(baseOrder());
+    (svc as any).shippingRates = { getCourierSettings: async () => ({ enabled: { tcs: true, leopards: true, postex: false }, useLiveRates: false, markupPct: 0, handlingFeePKR: 0 }) };
+    process.env.LEOPARDS_API_KEY = 'k'; process.env.LEOPARDS_API_PASSWORD = 'p'; // postex configured (beforeEach) but admin-disabled; tcs enabled but no credentials
+    const { data } = await svc.deliveryOptions();
+    const by: any = Object.fromEntries(data.couriers.map((c: any) => [c.id, c]));
+    expect(data.self.available).toBe(true);
+    expect(by.leopards.available).toBe(true);
+    expect(by.tcs).toMatchObject({ available: false, reason: expect.stringContaining('not connected') });
+    expect(by.postex).toMatchObject({ available: false, reason: expect.stringContaining('Not offered') });
+    expect(data.auto.available).toBe(true);
   });
 
   it('webhook needs the shared secret', async () => {
