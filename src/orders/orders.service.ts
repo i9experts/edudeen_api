@@ -16,7 +16,6 @@ import { ConfigService } from '@nestjs/config';
 import { FinanceService, shippingCreditFor, feeItemsFor } from 'src/finance/finance.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { LoyaltyService } from 'src/loyalty/loyalty.service';
-import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-benefits.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 import { round } from 'src/common/number.util';
@@ -56,32 +55,23 @@ export class OrdersService {
     private readonly financeService: FinanceService,
     private readonly activityLogService: ActivityLogService,
     private readonly loyaltyService: LoyaltyService,
-    private readonly subscriptionBenefits: SubscriptionBenefitsService,
     private readonly notificationsService: NotificationsService,
     private readonly paymentService: PaymentService,
     private readonly exchangeRateService: ExchangeRateService,
   ) {}
 
-  /** Subscribers earn points at their plan's configured multiplier (default 1x). */
-  private async awardLoyaltyPointsWithMultiplier(
+  private async awardLoyaltyPoints(
     storeId: string,
     userId: string,
     orderId: string,
     subtotal: number,
   ) {
-    const benefitsEntry = await this.subscriptionBenefits.getActiveBenefits(
-      userId,
-      storeId,
-    );
-    const multiplier = benefitsEntry
-      ? this.subscriptionBenefits.getLoyaltyMultiplier(benefitsEntry.benefits)
-      : 1;
     return this.loyaltyService.awardPurchasePoints(
       storeId,
       userId,
       orderId,
       subtotal,
-      multiplier,
+      1,
     );
   }
 
@@ -816,7 +806,7 @@ export class OrdersService {
         });
       }
 
-      this.awardLoyaltyPointsWithMultiplier(
+      this.awardLoyaltyPoints(
         so.storeId,
         order.userId,
         orderId,
@@ -977,7 +967,7 @@ export class OrdersService {
       });
       if (credit?.creditStatus === 'pending') creditStatus = 'pending';
 
-      this.awardLoyaltyPointsWithMultiplier(
+      this.awardLoyaltyPoints(
         so.storeId,
         order.userId,
         orderId,

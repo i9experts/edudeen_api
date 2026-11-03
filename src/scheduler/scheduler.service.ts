@@ -5,7 +5,6 @@ import { RealtimeService } from 'src/realtime/realtime.service';
 import { Cron } from '@nestjs/schedule';
 import { DatabaseService } from 'src/database/databaseservice';
 import { LoyaltyService } from 'src/loyalty/loyalty.service';
-import { SubscriptionsService } from 'src/subscriptions/subscriptions.service';
 import { FinanceService } from 'src/finance/finance.service';
 import { RedisService } from 'src/redis/redis.service';
 import { SellerPlatformSubscriptionsService } from 'src/platform-plans/seller-platform-subscriptions.service';
@@ -30,7 +29,6 @@ export class SchedulerService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly loyaltyService: LoyaltyService,
-    private readonly subscriptionsService: SubscriptionsService,
     private readonly financeService: FinanceService,
     private readonly redis: RedisService,
     private readonly sellerPlatformSubscriptionsService: SellerPlatformSubscriptionsService,
@@ -134,46 +132,6 @@ export class SchedulerService {
   async expireLoyaltyPoints() {
     await this.runLocked('expire-loyalty-points', 10 * 60_000, async () => {
       await this.loyaltyService.expireInactivePoints();
-    });
-  }
-
-  // Runs hourly — charges every MANUAL-provider subscription whose billing
-  // period has ended, and drives the dunning/auto-cancel state machine on
-  // failure. Stripe-backed subscriptions are billed by Stripe itself and are
-  // reconciled via webhook instead (see StripeWebhookProcessor).
-  @Cron('0 * * * *')
-  async runSubscriptionRenewals() {
-    await this.runLocked('subscription-renewals', 45 * 60_000, async () => {
-      const result = await this.subscriptionsService.processRenewals();
-      if (result.processed > 0) {
-        this.logger.log(
-          `Subscription renewals: ${result.processed} processed, ${result.succeeded} succeeded, ${result.failed} failed, ${result.canceled} auto-canceled`,
-        );
-      }
-    });
-  }
-
-  // Runs daily — finalizes subscriptions whose "cancel at period end" date has arrived.
-  @Cron('30 2 * * *')
-  async finalizeSubscriptionCancellations() {
-    await this.runLocked('finalize-subscription-cancellations', 10 * 60_000, async () => {
-      const result = await this.subscriptionsService.finalizeEndOfPeriodCancellations();
-      if (result.canceled > 0) {
-        this.logger.log(`Finalized ${result.canceled} end-of-period subscription cancellation(s)`);
-      }
-    });
-  }
-
-  // Runs every 6 hours — sends "renews in N days" reminder emails and
-  // "your card was charged N days ago, update payment info" nudges for
-  // subscriptions stuck in past_due.
-  @Cron('0 */6 * * *')
-  async sendSubscriptionReminders() {
-    await this.runLocked('subscription-reminders', 20 * 60_000, async () => {
-      const result = await this.subscriptionsService.sendRenewalReminders();
-      if (result.sent > 0) {
-        this.logger.log(`Subscription reminders: ${result.sent} renewal reminder email(s) queued`);
-      }
     });
   }
 

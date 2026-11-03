@@ -656,14 +656,8 @@ export class AnalyticsService {
     return this.cached(this.key('revenue-breakdown', this.scopeLabel(sellerId, storeId), { from, to }), async () => {
       const orderTotals = await this.periodTotals(scope, from, to);
 
-      // Subscription plans are seller-scoped, not store-scoped, in this codebase's data
-      // model — so this figure is identical whether viewing one store or every store
-      // (flagged explicitly rather than silently misattributed to a single store).
-      const subRows = await this.r.subscriptionInvoiceModel.aggregate([
-        { $match: { sellerId, status: 'paid', isDelete: false, paidAt: { $gte: from, $lte: to } } },
-        { $group: { _id: null, total: { $sum: '$amountUSD' } } },
-      ]);
-      const recurringRevenue = this.round(subRows[0]?.total ?? 0);
+      // Store memberships no longer exist; the field is kept (0) so the response shape stays stable.
+      const recurringRevenue = 0;
 
       return {
         success: true,
@@ -671,7 +665,6 @@ export class AnalyticsService {
           oneTimeOrderRevenue: orderTotals.netRevenue,
           recurringSubscriptionRevenue: recurringRevenue,
           totalRevenue: this.round(orderTotals.netRevenue + recurringRevenue),
-          note: 'Subscription revenue is scoped to the seller (not one specific store) — this codebase\'s Subscription plans are not store-attributed.',
         },
       };
     });

@@ -32,7 +32,7 @@ import { RatingModule } from './rating/rating.module';
 import { SearchModule } from './search/search.module';
 import { MessagingModule } from './messaging/messaging.module';
 import { FinanceModule } from './finance/finance.module';
-import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+import { StripeBillingModule } from './stripe-billing/stripe-billing.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { ActivityLogModule } from './activity-log/activity-log.module';
 import { MarketingModule } from './marketing/marketing.module';
@@ -129,7 +129,7 @@ import { PhoneVerificationModule } from './phone-verification/phone-verification
     CommissionRulesModule,
     ManualPaymentsModule,
     FinanceModule,
-    SubscriptionsModule,
+    StripeBillingModule,
     PlatformPlansModule,
     AiStudioModule,
     ChatbotModule,

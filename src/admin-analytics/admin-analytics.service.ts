@@ -134,7 +134,7 @@ export class AdminAnalyticsService {
    * status — clearing is about payout timing, not whether the commission was earned.
    */
   private async getPlatformEarnings(from: Date, to: Date, scope?: Record<string, any>) {
-    return getPlatformEarningsUtil(this.r.transactionModel, this.r.subscriptionInvoiceModel, from, to, {
+    return getPlatformEarningsUtil(this.r.transactionModel, from, to, {
       storeId: scope?.['sellerOrders.storeId'],
       sellerId: scope?.['sellerOrders.sellerId'],
     });

@@ -32,7 +32,7 @@ function build(over: { convs?: any[]; reports?: any[]; updated?: any; exists?: a
     userModel: { find: jest.fn(() => chain([{ _id: BUYER, name: 'Aisha', email: 'a@x.io' }])) },
     sellerModel: { find: jest.fn(() => chain([{ _id: SELLER, name: 'Bilal' }])) },
   };
-  const svc = new MessagingService({ repositories: repos } as any, {} as any, {} as any, {} as any, {} as any);
+  const svc = new MessagingService({ repositories: repos } as any, {} as any, {} as any, {} as any);
   return { svc, convModel, rptModel };
 }
 

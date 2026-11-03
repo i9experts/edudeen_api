@@ -8,7 +8,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { IdempotencyInterceptor } from '../common/idempotency.interceptor';
 import { ChangePlatformPlanDto, CancelPlatformPlanDto, BillingPortalDto, ConfirmOnboardingPaymentMethodDto, SaveOnboardingDraftDto } from './dto/subscribe-platform-plan.dto';
-import { RefundInvoiceDto } from '../subscriptions/dto/refund-invoice.dto';
+import { RefundInvoiceDto } from '../stripe-billing/dto/refund-invoice.dto';
 
 @ApiTags('Platform Plans — Seller')
 @Controller('api/platform-plans')

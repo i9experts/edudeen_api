@@ -2626,69 +2626,6 @@ export class FinanceService {
   }
 
   /**
-   * Credits a seller's balance with their share of subscription revenue
-   * collected from their own store's subscribers. Mirrors `recordSale`'s
-   * ledger shape (pending → available after CLEARING_DAYS via the same
-   * clearing cron) so subscription and order revenue behave identically
-   * from the seller's point of view. `platformCommissionUSD` is passed in
-   * already computed by the caller (SubscriptionsService), since the
-   * commission rate for subscription revenue is configured independently
-   * of the order-sale PLATFORM_FEE_RATE.
-   */
-  async recordSubscriptionRevenue(
-    storeId: string, sellerId: string, invoiceId: string,
-    sellerPayoutUSD: number, platformCommissionUSD: number, description: string,
-  ) {
-    await this.withTransaction(async (session) => {
-      // Idempotent per invoice (same reasoning as recordSale): a retried or racing call
-      // must never credit the seller twice for one subscription payment.
-      const alreadyRecorded = await this.txModel.exists({
-        storeId, referenceId: invoiceId, referenceType: 'subscription_invoice', type: 'sale',
-      }).session(session);
-      if (alreadyRecorded) {
-        this.logger.warn(`recordSubscriptionRevenue skipped — invoice ${invoiceId} / store ${storeId} already recorded`);
-        return;
-      }
-
-      const balance = await this.getOrCreateBalance(storeId, sellerId, 'USD', session);
-      const balanceBefore = balance.availableBalance;
-
-      balance.pendingBalance = this.round(balance.pendingBalance + sellerPayoutUSD);
-      balance.totalRevenue   = this.round(balance.totalRevenue + sellerPayoutUSD + platformCommissionUSD);
-      balance.totalFees      = this.round(balance.totalFees + platformCommissionUSD);
-      this.reevaluateDebtFlag(balance);
-      await balance.save({ session });
-
-      const saleTx = new this.txModel({
-        storeId, sellerId, currency: 'USD',
-        type: 'sale',
-        amount: this.round(sellerPayoutUSD + platformCommissionUSD),
-        balanceBefore,
-        balanceAfter: balance.availableBalance,
-        description,
-        referenceId: invoiceId,
-        referenceType: 'subscription_invoice',
-        status: 'pending',
-        metadata: { platformCommissionUSD, sellerPayoutUSD, clearingDays: CLEARING_DAYS, revenueType: 'subscription' },
-      });
-      await saleTx.save({ session });
-
-      const feeTx = new this.txModel({
-        storeId, sellerId, currency: 'USD',
-        type: 'fee',
-        amount: -platformCommissionUSD,
-        balanceBefore,
-        balanceAfter: balance.availableBalance,
-        description: `Platform subscription commission — invoice reference ${invoiceId}`,
-        referenceId: invoiceId,
-        referenceType: 'subscription_invoice',
-        status: 'completed',
-      });
-      await feeTx.save({ session });
-    });
-  }
-
-  /**
    * Record a refund — reverses the net sale amount from available or pending
    * balance. Call this from OrdersService when a refund is issued, or from
    * the Stripe webhook handler on `charge.refunded`/`charge.dispute.created`.

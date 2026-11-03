@@ -66,7 +66,6 @@ function build(over: { legacy?: boolean; free?: boolean } = {}) {
     {} as any,
     { log: jest.fn() } as any,
     {} as any,
-    {} as any,
     { notify: jest.fn().mockResolvedValue(undefined) } as any,
     payment,
     {} as any,

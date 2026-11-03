@@ -8,7 +8,8 @@ export type SubscriptionCounterDocument = SubscriptionCounter & Document;
  * Atomic sequence counters, scoped by key (e.g. `invoice-202607`). Backs
  * invoice-number generation with a real atomic `$inc` instead of a random
  * suffix, so `invoiceNumber` collisions are structurally impossible rather
- * than merely unlikely.
+ * than merely unlikely. Now only used for seller platform-plan invoice numbers
+ * (kept under its original name/collection so the existing sequence continues).
  */
 @Schema({ timestamps: true, collection: 'subscription_counters' })
 export class SubscriptionCounter {

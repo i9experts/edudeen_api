@@ -3,7 +3,6 @@ import { AiStudioModule } from '../ai-studio/ai-studio.module';
 import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SchedulerService } from './scheduler.service';
-import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { FinanceModule } from '../finance/finance.module';
 import { RedisModule } from '../redis/redis.module';
 import { SeoModule } from '../seo/seo.module';
@@ -14,7 +13,7 @@ import { AdminFinanceModule } from '../admin-finance/admin-finance.module';
 import { BannersModule } from '../banner/banner.module';
 
 @Module({
-  imports: [ScheduleModule.forRoot(), SubscriptionsModule, FinanceModule, RedisModule, SeoModule, AdminMarketingModule, PromotionsModule, ExchangeRateModule, AdminFinanceModule, AiStudioModule, BannersModule],
+  imports: [ScheduleModule.forRoot(), FinanceModule, RedisModule, SeoModule, AdminMarketingModule, PromotionsModule, ExchangeRateModule, AdminFinanceModule, AiStudioModule, BannersModule],
   providers: [SchedulerService],
 })
 export class SchedulerModule {}

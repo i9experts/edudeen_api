@@ -14,19 +14,14 @@ import { QUEUE_NAMES } from 'src/queues/queue.constants';
  * retry storm. BullMQ retries a throwing job with exponential backoff up to
  * the queue's configured `attempts`; once exhausted the job lands in the
  * "failed" state (see `handleFailed`), mirrored onto `WebhookEvent` as a
- * queryable dead-letter record for `GET /api/subscriptions/admin/webhooks`.
+ * queryable dead-letter record.
  *
  * Deliberately decoupled from any specific feature module: this processor
- * does not import/call `SubscriptionsService` (buyer VIP-plan billing) or
- * `SellerPlatformSubscriptionsService` (seller platform-plan billing)
- * directly — both Stripe-driven billing systems share one Stripe account
- * and therefore one webhook endpoint, but importing either feature module
- * here would create a dependency cycle (each of those modules needs
- * services this processor lives inside of). Instead it emits a generic
- * `stripe.<event.type>` event via EventEmitter2; each billing service
- * listens independently (`@OnEvent(...)`) and simply no-ops if the event's
- * subscription id doesn't belong to it. Adding a third Stripe-billed feature
- * later requires zero changes here.
+ * does not import/call `SellerPlatformSubscriptionsService` (seller
+ * platform-plan billing) directly, to avoid a dependency cycle. Instead it
+ * emits a generic `stripe.<event.type>` event via EventEmitter2; each billing
+ * service listens independently (`@OnEvent(...)`) and simply no-ops if the
+ * event's subscription id doesn't belong to it.
  */
 @Processor(QUEUE_NAMES.STRIPE_WEBHOOKS)
 export class StripeWebhookProcessor extends WorkerHost {
@@ -77,8 +72,7 @@ export class StripeWebhookProcessor extends WorkerHost {
         await this.eventEmitter.emitAsync(`stripe.${type}`, object);
       } else if (type === 'charge.refunded' || type === 'charge.dispute.created') {
         // Recorded for audit visibility; no automated state transition —
-        // disputes/refund reconciliation is reviewed by an admin (see
-        // GET /api/subscriptions/admin/webhooks).
+        // disputes/refund reconciliation is reviewed by an admin.
         this.logger.log(`Stripe event ${type} received (${eventId}) — logged for admin review, no automated action taken`);
       } else {
         await webhookEventModel.updateOne({ providerEventId: eventId }, { $set: { status: 'ignored', processedAt: new Date() } });

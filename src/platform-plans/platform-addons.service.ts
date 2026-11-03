@@ -2,7 +2,7 @@
 import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { DatabaseService } from 'src/database/databaseservice';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
-import { PaymentGatewayService } from 'src/subscriptions/payment-gateway/payment-gateway.service';
+import { PaymentGatewayService } from 'src/stripe-billing/payment-gateway/payment-gateway.service';
 import { AiCreditsService } from './ai-credits.service';
 import { verifyStoreOwnershipStrict } from 'src/common/store-ownership.util';
 import { PurchaseAddonDto } from './dto/purchase-addon.dto';

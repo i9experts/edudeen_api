@@ -12,17 +12,17 @@ import { PlatformPlanNotificationsService } from './platform-plan-notifications.
 import { AuthModule } from '../auth/auth.module';
 import { AdminReauthModule } from '../admin-reauth/admin-reauth.module';
 import { RedisModule } from '../redis/redis.module';
-import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
+import { StripeBillingModule } from '../stripe-billing/stripe-billing.module';
 import { EmailService } from '../otp/services/email.service';
 
 // @Global() so any module (Products, Employee/POS, Store, Loyalty, Finance,
 // the buyer-facing Subscriptions module) can inject EntitlementsService /
 // AiCreditsService to gate a feature behind a platform-plan tier, without
 // each of those modules needing to import this one explicitly — identical
-// reasoning to why SubscriptionsModule/ActivityLogModule are global.
+// reasoning to why ActivityLogModule is global.
 @Global()
 @Module({
-  imports: [AdminReauthModule, AuthModule, RedisModule, SubscriptionsModule],
+  imports: [AdminReauthModule, AuthModule, RedisModule, StripeBillingModule],
   // Controller order matters here — Express/Nest routing is first-match, in
   // controller-then-method declaration order (same "static-before-dynamic"
   // convention used throughout this codebase's other controllers):

@@ -14,7 +14,6 @@ import { SendMessageDto } from './dto/send-message.dto';
 import { EditMessageDto } from './dto/edit-message.dto';
 import { BlockDto } from './dto/block.dto';
 import { ReportDto } from './dto/report.dto';
-import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-benefits.service';
 import { MessagingGateway } from './messaging.gateway';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
@@ -29,7 +28,6 @@ export class MessagingService {
   constructor(
     private readonly db: DatabaseService,
     private readonly uploadService: UploadService,
-    private readonly subscriptionBenefits: SubscriptionBenefitsService,
     private readonly gateway: MessagingGateway,
     private readonly notificationsService: NotificationsService,
   ) { }
@@ -95,9 +93,6 @@ export class MessagingService {
     });
     if (block) throw new ForbiddenException('Cannot start conversation — block is in place');
 
-    const entry = await this.subscriptionBenefits.getActiveBenefits(buyerId, storeId);
-    const isPriority = !!entry && entry.benefits.some((b: any) => b.type === 'priority_support' && b.enabled !== false);
-
     const conv = await this.convModel.findOneAndUpdate(
       { buyerId, storeId },
       {
@@ -107,7 +102,6 @@ export class MessagingService {
           sellerId: store.sellerId.toString(),
           buyerUnread: 0,
           sellerUnread: 0,
-          isPriority,
         },
       },
       { upsert: true, returnDocument: 'after' },
@@ -116,13 +110,6 @@ export class MessagingService {
     // Restore if soft-deleted by buyer
     if (conv.deletedByBuyer) {
       conv.deletedByBuyer = false;
-      await conv.save();
-    }
-
-    // Keep the flag current for an existing conversation too (buyer may have
-    // subscribed/unsubscribed since the conversation was first started).
-    if (conv.isPriority !== isPriority) {
-      conv.isPriority = isPriority;
       await conv.save();
     }
 

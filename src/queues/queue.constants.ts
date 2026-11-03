@@ -1,6 +1,5 @@
 export const QUEUE_NAMES = {
   STRIPE_WEBHOOKS: 'stripe-webhooks',
-  SUBSCRIPTION_EMAILS: 'subscription-emails',
   SEO_SITEMAP: 'seo-sitemap',
   SEO_AUDIT: 'seo-audit',
   SEO_AI: 'seo-ai',
@@ -8,7 +7,6 @@ export const QUEUE_NAMES = {
 } as const;
 
 export const STRIPE_WEBHOOK_JOB = 'process-stripe-event';
-export const SUBSCRIPTION_EMAIL_JOB = 'send-subscription-email';
 export const NOTIFICATION_PUSH_JOB = 'send-notification-push';
 export const NOTIFICATION_EMAIL_JOB = 'send-notification-email';
 export const NOTIFICATION_CHANNEL_JOB = 'send-notification-channel';

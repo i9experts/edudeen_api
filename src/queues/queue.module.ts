@@ -6,11 +6,11 @@ import { QUEUE_NAMES } from './queue.constants';
 /**
  * Central BullMQ wiring — one Redis connection, shared by every named queue.
  * `@Global()` so any module can `@InjectQueue(QUEUE_NAMES.X)` without
- * re-importing this module everywhere (same pattern as SubscriptionsModule).
+ * re-importing this module everywhere (same pattern as ActivityLogModule).
  *
  * Why queues at all: Stripe expects a webhook response within ~10s or it
- * retries the delivery. Doing the real DB work (transactional subscription
- * update + seller payout credit + notification) synchronously inside the
+ * retries the delivery. Doing the real DB work (transactional plan
+ * update + notification) synchronously inside the
  * webhook request risks a timeout under load, which would cause Stripe to
  * redeliver a webhook whose side effects may have partially completed.
  * Instead the controller only verifies + persists the raw event, enqueues a
@@ -40,15 +40,6 @@ import { QUEUE_NAMES } from './queue.constants';
           backoff: { type: 'exponential', delay: 5_000 },
           removeOnComplete: { count: 1000 },
           removeOnFail: false, // keep failed jobs visible for the dead-letter view
-        },
-      },
-      {
-        name: QUEUE_NAMES.SUBSCRIPTION_EMAILS,
-        defaultJobOptions: {
-          attempts: 4,
-          backoff: { type: 'exponential', delay: 10_000 },
-          removeOnComplete: { count: 5000 },
-          removeOnFail: { count: 5000 },
         },
       },
       {

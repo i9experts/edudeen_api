@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return -- integration test */
 /**
- * Real-MongoDB tests: atomic refund reservation and atomic buyer-credit spend. Opt-in:
+ * Real-MongoDB tests: atomic invoice refund reservation. Opt-in:
  *   TEST_MONGO_URI='mongodb://127.0.0.1:27018/edudeen_refund_it?replicaSet=rs0' npx jest invoice-refund.concurrency
  */
 import mongoose from 'mongoose';
@@ -9,8 +9,6 @@ import {
   releaseInvoiceRefund,
   invoiceRefundKey,
 } from './invoice-refund.util';
-import { SubscriptionsService } from '../subscriptions/subscriptions.service';
-import { SubscriptionCreditWalletSchema } from '../subscriptions/schemas/subscription-credit-wallet.schema';
 
 const URI = process.env.TEST_MONGO_URI;
 // These suites drop their database when done — never point them at anything that isn't a throwaway test DB.
@@ -20,11 +18,10 @@ if (URI && !/(_it|test)/i.test(new URL(URI).pathname))
   );
 
 (URI ? describe : describe.skip)(
-  'atomic invoice refund + credit spend — real MongoDB',
+  'atomic invoice refund — real MongoDB',
   () => {
     let conn: mongoose.Connection,
-      Invoice: mongoose.Model<any>,
-      Wallet: mongoose.Model<any>;
+      Invoice: mongoose.Model<any>;
     beforeAll(async () => {
       conn = await mongoose.createConnection(URI!).asPromise();
       Invoice = conn.model(
@@ -37,13 +34,9 @@ if (URI && !/(_it|test)/i.test(new URL(URI).pathname))
           refundedAt: Date,
         }),
       );
-      Wallet = conn.model(
-        'SubscriptionCreditWallet',
-        SubscriptionCreditWalletSchema,
-      );
     });
     beforeEach(() =>
-      Promise.all([Invoice.deleteMany({}), Wallet.deleteMany({})]),
+      Invoice.deleteMany({}),
     );
     afterAll(async () => {
       await conn.dropDatabase();
@@ -97,51 +90,6 @@ if (URI && !/(_it|test)/i.test(new URL(URI).pathname))
         invoiceRefundKey('i1', 5, 5),
       );
       expect(invoiceRefundKey('i1', 0, 5)).toBe(invoiceRefundKey('i1', 0, 5)); // a retry maps to the same key
-    });
-
-    describe('spendCredit', () => {
-      const svc = () => {
-        const s: any = Object.create(SubscriptionsService.prototype);
-        s.db = { repositories: { subscriptionCreditWalletModel: Wallet } };
-        return s as SubscriptionsService;
-      };
-      const wallet = () =>
-        Wallet.create({
-          customerId: 'c1',
-          storeId: 's1',
-          subscriptionId: 'sub1',
-          creditType: 'download',
-          balance: 10,
-        });
-
-      it('10 concurrent spends of 3 against 10 credits: exactly 3 succeed, balance 1, never negative', async () => {
-        await wallet();
-        const s = svc();
-        const res = await Promise.allSettled(
-          Array.from({ length: 10 }, () =>
-            s.spendCredit('c1', 's1', 'download', 3, 'dl'),
-          ),
-        );
-        expect(res.filter((r) => r.status === 'fulfilled')).toHaveLength(3);
-        const w = await Wallet.findOne({ customerId: 'c1' }).lean();
-        expect(w.balance).toBe(1);
-        expect(w.totalSpent).toBe(9);
-      });
-
-      it('rejects NaN / negative / zero amounts and an unknown creditType without touching the balance', async () => {
-        await wallet();
-        const s = svc();
-        for (const bad of [NaN, -1, 0, Infinity])
-          await expect(
-            s.spendCredit('c1', 's1', 'download', bad, 'x'),
-          ).rejects.toThrow();
-        await expect(
-          s.spendCredit('c1', 's1', { $ne: null } as any, 1, 'x'),
-        ).rejects.toThrow(/Invalid creditType/);
-        expect(
-          (await Wallet.findOne({ customerId: 'c1' }).lean()).balance,
-        ).toBe(10);
-      });
     });
   },
 );

@@ -121,7 +121,7 @@ describe('admin mark-paid on a bank-transfer order', () => {
     const proofs: any = { exists: jest.fn().mockResolvedValue(proofExists ? { _id: 'p' } : null) };
     const finance: any = { recordSaleDurable: jest.fn().mockResolvedValue({ creditStatus: 'credited' }) };
     const svc = new OrdersService({ repositories: { orderModel, manualPaymentProofModel: proofs, storeModel: {} } } as any, {} as any, {} as any, {} as any, finance,
-      { log: jest.fn().mockResolvedValue(undefined) } as any, { awardPurchasePoints: jest.fn() } as any, { getActiveBenefits: jest.fn().mockResolvedValue(null), getLoyaltyMultiplier: jest.fn() } as any, { notify: jest.fn().mockResolvedValue(undefined) } as any, {} as any, {} as any);
+      { log: jest.fn().mockResolvedValue(undefined) } as any, { awardPurchasePoints: jest.fn() } as any, { notify: jest.fn().mockResolvedValue(undefined) } as any, {} as any, {} as any);
     return { svc, orderModel, finance, proofs };
   }
   it('refused without an approved proof; nothing credited', async () => {

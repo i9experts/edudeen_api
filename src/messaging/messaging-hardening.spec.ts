@@ -37,7 +37,7 @@ function build(over: { conv?: any; blocked?: any; parent?: any; store?: any; pro
     sellerModel: { exists: jest.fn().mockResolvedValue({ _id: 'x' }) },
   };
   const gateway: any = { emitNewMessage: jest.fn(), emitConversationUpdate: jest.fn(), isOnline: jest.fn().mockReturnValue(true) };
-  const svc: any = new MessagingService({ repositories: repos } as any, {} as any, { getActiveBenefits: jest.fn().mockResolvedValue(null) } as any, gateway, { notify: jest.fn().mockResolvedValue(undefined) } as any);
+  const svc: any = new MessagingService({ repositories: repos } as any, {} as any, gateway, { notify: jest.fn().mockResolvedValue(undefined) } as any);
   return { svc, repos, convModel, msgModel, blkModel, rptModel };
 }
 const dto = (over: object = {}): any => ({ type: 'text', text: 'hello', ...over });

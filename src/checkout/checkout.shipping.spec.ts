@@ -30,14 +30,12 @@ function makeService(opts: { pickedAddress?: any; zonesConfigured?: boolean } = 
       find: jest.fn(() => chain([{ _id: 's1', status: 'active', codEnabled: true, directPayment: null }])),
     },
     sellerModel: { find: jest.fn(() => chain([])) },
-    subscriptionPlanModel: { findOne: jest.fn(() => chain(null)) },
     addressModel,
     checkoutModel,
     shippingZoneModel: { exists: jest.fn().mockResolvedValue(opts.zonesConfigured ? { _id: ZONE_ID } : null) },
   };
   const svc: any = new CheckoutService(
     { repositories } as any,
-    { getActiveBenefits: jest.fn().mockResolvedValue(null), getActiveBenefitsBatch: jest.fn().mockResolvedValue(new Map()), resolveProductDiscount: jest.fn() } as any,
     { getActiveCampaignsForStores: jest.fn().mockResolvedValue(new Map()) } as any,
     { isManualPaymentEnabled: jest.fn().mockResolvedValue(false), isManualTransferAvailable: jest.fn().mockResolvedValue(false) } as any,
     { buildSnapshots: jest.fn().mockResolvedValue([]) } as any,
@@ -83,7 +81,7 @@ describe('createCheckout uses what the buyer picked', () => {
 
 describe('admin shipping zones', () => {
   const svcWith = (shippingZoneModel: any) =>
-    new CheckoutService({ repositories: { shippingZoneModel } } as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    new CheckoutService({ repositories: { shippingZoneModel } } as any, {} as any, {} as any, {} as any, {} as any, {} as any);
 
   it('creates a zone with trimmed fields and a whole-rupee price', async () => {
     const shippingZoneModel = { create: jest.fn((d: any) => Promise.resolve(d)) };

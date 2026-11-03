@@ -40,14 +40,8 @@ export { PayoutMethod, PayoutMethodDocument, PayoutMethodSchema } from '../finan
 export { PayoutSchedule, PayoutScheduleDocument, PayoutScheduleSchema } from '../finance/schemas/payout-schedule.schema';
 export { TaxReport, TaxReportDocument, TaxReportSchema } from '../finance/schemas/tax-report.schema';
 export { SaleCreditJob, SaleCreditJobDocument, SaleCreditJobSchema } from '../finance/schemas/sale-credit-job.schema';
-export { SubscriptionPlan, SubscriptionPlanDocument, SubscriptionPlanSchema } from '../subscriptions/schemas/subscription-plan.schema';
-export { Subscription, SubscriptionDocument, SubscriptionSchema } from '../subscriptions/schemas/subscription.schema';
-export { SubscriptionInvoice, SubscriptionInvoiceDocument, SubscriptionInvoiceSchema } from '../subscriptions/schemas/subscription-invoice.schema';
-export { SubscriptionPaymentAttempt, SubscriptionPaymentAttemptDocument, SubscriptionPaymentAttemptSchema } from '../subscriptions/schemas/subscription-payment-attempt.schema';
-export { SubscriptionCounter, SubscriptionCounterDocument, SubscriptionCounterSchema } from '../subscriptions/schemas/subscription-counter.schema';
-export { WebhookEvent, WebhookEventDocument, WebhookEventSchema } from '../subscriptions/schemas/webhook-event.schema';
-export { SubscriptionCreditWallet, SubscriptionCreditWalletDocument, SubscriptionCreditWalletSchema } from '../subscriptions/schemas/subscription-credit-wallet.schema';
-export { SubscriptionNotificationPreference, SubscriptionNotificationPreferenceDocument, SubscriptionNotificationPreferenceSchema } from '../subscriptions/schemas/subscription-notification-preference.schema';
+export { SubscriptionCounter, SubscriptionCounterDocument, SubscriptionCounterSchema } from '../stripe-billing/schemas/subscription-counter.schema';
+export { WebhookEvent, WebhookEventDocument, WebhookEventSchema } from '../stripe-billing/schemas/webhook-event.schema';
 export { IdempotencyRecord, IdempotencyRecordDocument, IdempotencyRecordSchema } from '../common/schemas/idempotency-key.schema';
 export { PlatformPlan, PlatformPlanDocument, PlatformPlanSchema } from '../platform-plans/schemas/platform-plan.schema';
 export { SellerPlatformSubscription, SellerPlatformSubscriptionDocument, SellerPlatformSubscriptionSchema } from '../platform-plans/schemas/seller-platform-subscription.schema';

@@ -10,7 +10,6 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { CreateContactSubmissionDto } from '../contact/dto/contact.dto';
 import { CreatePurchaseIntentDto } from '../gift-cards/dto/create-purchase-intent.dto';
 import { GiftCardsService } from '../gift-cards/gift-cards.service';
-import { SubscriptionNotificationsService } from '../subscriptions/subscription-notifications.service';
 
 describe('query-safety.util', () => {
   it('csvCell neutralises formula injection (= + - @ tab CR) and still quotes', () => {
@@ -128,15 +127,6 @@ describe('email templates escape user-controlled values', () => {
     expect(html).not.toMatch(/<script|<b>Bob|<a href/);
     expect(subject).not.toMatch(/[\r\n]/);
     expect(html).toContain('&lt;b&gt;Bob&lt;/b&gt;');
-  });
-
-  it('subscription emails escape store and customer names', async () => {
-    const svc: any = Object.create(SubscriptionNotificationsService.prototype);
-    const send = jest.fn().mockResolvedValue(undefined);
-    svc.send = send;
-    await svc.sendProrationCharged('to@x.co', { customerName: '<img src=x onerror=alert(1)>', storeName: '<a href=//evil>Shop</a>', fromPlanName: 'A', toPlanName: 'B', fromInterval: 'monthly', toInterval: 'yearly', amountUSD: 5 });
-    const html = send.mock.calls[0][2] as string;
-    expect(html).not.toMatch(/<img src=x|<a href=\/\/evil/);
   });
 });
 

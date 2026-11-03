@@ -16,7 +16,7 @@ const MEMBER = { isPremium: true, childrenLimit: 15, earlyAccessHours: 2, priori
 interface Seed { storeId: string; productId: string; price?: number; compareAt?: number | null; qty?: number; productPct?: number }
 
 /** One USD store world; the store gives premium members 20% unless `storePremium` says otherwise. */
-function world(seeds: Seed[], opts: { ent?: any; storePremium?: any; autoDiscount?: boolean; subscriberPct?: number; omitPremiumService?: boolean; platformOn?: boolean; campaignPct?: number; campaignSponsor?: 'seller' | 'platform' } = {}) {
+function world(seeds: Seed[], opts: { ent?: any; storePremium?: any; autoDiscount?: boolean; omitPremiumService?: boolean; platformOn?: boolean; campaignPct?: number; campaignSponsor?: 'seller' | 'platform' } = {}) {
   const userId = 'u1';
   const stores = new Map<string, any>();
   const carts: any[] = [];
@@ -56,7 +56,6 @@ function world(seeds: Seed[], opts: { ent?: any; storePremium?: any; autoDiscoun
     },
     sellerModel: { find: jest.fn(() => chain([])) },
     shippingZoneModel: { exists: jest.fn().mockResolvedValue(null) },
-    subscriptionPlanModel: { findOne: jest.fn(() => chain(null)) },
     addressModel: { findOne: jest.fn(() => chain(null)) },
     userModel: { findById: jest.fn(() => chain({ currencyPreference: 'USD' })) },
     checkoutModel: { create: jest.fn(async (doc: any) => { const d = { _id: `co${created.length + 1}`, ...doc }; created.push(d); return d; }) },
@@ -66,12 +65,6 @@ function world(seeds: Seed[], opts: { ent?: any; storePremium?: any; autoDiscoun
   const campaignsMock = jest.fn().mockResolvedValue(opts.campaignPct
     ? new Map([...stores.keys()].map((id) => [id, [{ campaignId: 'c1', name: 'Flash', discountType: 'percentage', discountValue: opts.campaignPct, currency: null, endDate: new Date(Date.now() + 1e7), sponsorType: opts.campaignSponsor ?? 'platform' }]]))
     : new Map());
-  const subscriberPct = opts.subscriberPct;
-  const benefits = {
-    getActiveBenefits: jest.fn().mockResolvedValue(null),
-    getActiveBenefitsBatch: jest.fn().mockResolvedValue(subscriberPct ? new Map([...stores.keys()].map((id) => [id, { benefits: [{}], planName: 'Gold' }])) : new Map()),
-    resolveProductDiscount: jest.fn((_b: any, _p: any, price: number) => subscriberPct ? { subscriberPrice: Math.round(price * (1 - subscriberPct / 100) * 100) / 100, savingsUSD: Math.round(price * subscriberPct) / 100, discountPercent: subscriberPct, minOrderValueUSD: null } : null),
-  };
   const discounts = {
     getActiveDiscountsForStores: jest.fn().mockResolvedValue(opts.autoDiscount ? new Map([...stores.keys()].map((id) => [id, [{ _id: 'd1', target: 'store', discountType: 'percentage', discountValue: 10, minOrderAmount: null }]])) : new Map()),
   };
@@ -79,7 +72,7 @@ function world(seeds: Seed[], opts: { ent?: any; storePremium?: any; autoDiscoun
   // platform offer is OFF unless a test turns it on, so the plain seller-percent cases stay easy to read (default admin setting is ON 5%).
   const getTerms = jest.fn().mockResolvedValue(termsFromSettings({ platformDiscount: { enabled: !!opts.platformOn, percent: 5 } }));
   const svc = new CheckoutService(
-    { repositories: repos } as any, benefits as any,
+    { repositories: repos } as any,
     { getActiveCampaignsForStores: campaignsMock } as any,
     { isManualPaymentEnabled: jest.fn().mockResolvedValue(false), isManualTransferAvailable: jest.fn().mockResolvedValue(false) } as any,
     fx, {} as any, discounts as any,
@@ -127,8 +120,8 @@ describe('Premium member price in createCheckout (owner rules R1-R4)', () => {
   });
 
   it('a NON-member pays exactly the same as without the premium module (identical items, no premium fields)', async () => {
-    const withSvc = world([{ storeId: 'A', productId: 'pa', price: 100, compareAt: 120, qty: 2 }], { ent: NON_PREMIUM, autoDiscount: true, subscriberPct: 10 });
-    const without = world([{ storeId: 'A', productId: 'pa', price: 100, compareAt: 120, qty: 2 }], { omitPremiumService: true, autoDiscount: true, subscriberPct: 10 });
+    const withSvc = world([{ storeId: 'A', productId: 'pa', price: 100, compareAt: 120, qty: 2 }], { ent: NON_PREMIUM, autoDiscount: true });
+    const without = world([{ storeId: 'A', productId: 'pa', price: 100, compareAt: 120, qty: 2 }], { omitPremiumService: true, autoDiscount: true });
     const a = (await create(withSvc)).data;
     const b = (await create(without)).data;
     const strip = (it: any) => ({ price: it.price, totalPrice: it.totalPrice, originalPrice: it.originalPrice, premium: it.premiumDiscountUSD, auto: it.autoDiscountUSD, sub: it.subscriberDiscountUSD, platform: it.premiumPlatformDiscountUSD, fee: it.premiumFeePercent });
@@ -155,18 +148,6 @@ describe('Premium member price in createCheckout (owner rules R1-R4)', () => {
     expect(i.totalPrice).toBe(80); // premium price only
     const normal = (await create(world([{ storeId: 'A', productId: 'pa', price: 100 }], { ent: NON_PREMIUM, autoDiscount: true }))).data.checkout.items[0];
     expect(normal.totalPrice).toBe(90);
-  });
-
-  it('R1: a store-subscriber price is replaced by a better premium price; a better subscriber price stays (never charged more)', async () => {
-    const worse = world([{ storeId: 'A', productId: 'pa', price: 100 }], { ent: MEMBER, subscriberPct: 5 });
-    const a = (await create(worse)).data;
-    expect(a.checkout.items[0].totalPrice).toBe(80);
-    expect(a.checkout.items[0].subscriberDiscountUSD).toBe(0);
-    expect(a.summary.subscriberSavingsUSD).toBe(0); // the replaced subscriber saving is not double counted
-    const better = world([{ storeId: 'A', productId: 'pa', price: 100 }], { ent: MEMBER, subscriberPct: 30 });
-    const b = (await create(better)).data;
-    expect(b.checkout.items[0].totalPrice).toBe(70);
-    expect(b.checkout.items[0].premiumDiscountUSD ?? 0).toBe(0);
   });
 
   it('the premium fee % is frozen on the line from the admin setting at checkout time', async () => {
@@ -233,7 +214,7 @@ function couponCtx(c: any, ent: any = MEMBER) {
   };
   const update = jest.fn().mockResolvedValue({});
   const repos: any = { checkoutModel: { findOne: jest.fn().mockResolvedValue(checkout), findByIdAndUpdate: update }, couponModel: { findOne: jest.fn().mockResolvedValue(c) }, rewardVoucherModel: { findOne: jest.fn().mockResolvedValue(null) } };
-  const svc = new CheckoutService({ repositories: repos } as any, {} as any, {} as any, {} as any, new ExchangeRateService({} as any, {} as any, {} as any), {} as any, {} as any, { getEntitlements: jest.fn().mockResolvedValue(ent) } as any);
+  const svc = new CheckoutService({ repositories: repos } as any, {} as any, {} as any, new ExchangeRateService({} as any, {} as any, {} as any), {} as any, {} as any, { getEntitlements: jest.fn().mockResolvedValue(ent) } as any);
   return { svc, checkout };
 }
 

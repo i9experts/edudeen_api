@@ -16,7 +16,6 @@ import { courseTotals } from '../classroom/course.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { ProductType as StoreProductType } from 'src/store/schemas/store.schema';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
-import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-benefits.service';
 import { EntitlementsService } from 'src/platform-plans/entitlements.service';
 import { MarketingService } from 'src/marketing/marketing.service';
 import { ActiveCampaignForStore, applyCampaignsToVariants, pickBestCampaignForLine, pickPrimaryCampaignForBadge } from 'src/marketing/campaign-pricing.util';
@@ -71,7 +70,6 @@ export class ProductsService {
   constructor(
     private databaseService: DatabaseService,
     private activityLogService: ActivityLogService,
-    private subscriptionBenefits: SubscriptionBenefitsService,
     private entitlementsService: EntitlementsService,
     private marketingService: MarketingService,
     private uploadService: UploadService,
@@ -158,59 +156,6 @@ export class ProductsService {
   /** Edudeen Premium decoration (no-op when the premium module is absent). See PremiumEntitlementsService.decorateProducts. */
   private async withPremium<T extends Record<string, any>>(products: T[], customerId?: string | null): Promise<T[]> {
     return this.premiumService ? this.premiumService.decorateProducts(products, customerId ?? null) : products;
-  }
-
-  /** Stamps a fresh product with an early-access window if the store has any active plan configuring one — non-subscribers can't see it until this passes. */
-  private async applyEarlyAccessWindow(product: any) {
-    const hours = await this.subscriptionBenefits.getStoreEarlyAccessHours(
-      product.storeId,
-    );
-    if (!hours) return;
-    product.earlyAccessUntil = new Date(Date.now() + hours * 60 * 60 * 1000);
-    await product.save();
-  }
-
-  /** True if this product should stay hidden from this requester right now (still in its early-access window and the requester isn't a subscriber with early_access). */
-  private async isHiddenByEarlyAccess(
-    product: any,
-    customerId?: string | null,
-  ): Promise<boolean> {
-    if (!product.earlyAccessUntil || product.earlyAccessUntil <= new Date())
-      return false;
-    if (!customerId) return true;
-    const entry = await this.subscriptionBenefits.getActiveBenefits(
-      customerId,
-      product.storeId,
-    );
-    return !entry || !this.subscriptionBenefits.hasEarlyAccess(entry.benefits);
-  }
-
-  // Attaches subscriberPrice/youSaveUSD/discountPercent/planName to each
-  // variant when the requester has an active, discount-granting subscription
-  // to the product's store. Never hides or restricts the product itself —
-  // this only ever adds optional pricing metadata.
-  private applySubscriberPricing(
-    variants: any[],
-    product: { _id: any; categoryId?: string; subCategoryId?: string | null },
-    benefitsEntry: { benefits: any[]; planName: string } | undefined,
-  ) {
-    if (!benefitsEntry) return variants;
-    return variants.map((v: any) => {
-      const discount = this.subscriptionBenefits.resolveProductDiscount(
-        benefitsEntry.benefits,
-        product as any,
-        v.price,
-      );
-      if (!discount) return v;
-      return {
-        ...v,
-        subscriberPrice: discount.subscriberPrice,
-        youSaveUSD: discount.savingsUSD,
-        discountPercent: discount.discountPercent,
-        subscriberPlanName: benefitsEntry.planName,
-        minOrderValueUSD: discount.minOrderValueUSD,
-      };
-    });
   }
 
   // Strips the private Cloudinary file manifest (publicId/name/size/mimeType)
@@ -884,7 +829,7 @@ export class ProductsService {
 
     const productIds = products.map((p) => p._id.toString());
 
-    // 2️⃣ Variants, subscriber pricing, seller + store names: four independent
+    // 2️⃣ Variants, seller + store names: independent
     // batched lookups for the whole page, run in parallel (one round trip of latency, not four).
     const storeIds = [
       ...new Set(products.map((p) => p.storeId).filter(Boolean)),
@@ -892,7 +837,7 @@ export class ProductsService {
     const sellerIds = [
       ...new Set(products.map((p) => p.sellerId).filter(Boolean)),
     ];
-    const [variants, benefitsMap, sellers, storeNameMap] = await Promise.all([
+    const [variants, sellers, storeNameMap] = await Promise.all([
       productVariantModel
         .find({
           productId: { $in: productIds },
@@ -900,7 +845,6 @@ export class ProductsService {
           isDelete: false,
         })
         .lean(),
-      this.subscriptionBenefits.getActiveBenefitsBatch(customerId, storeIds),
       sellerModel
         .find({ _id: { $in: sellerIds } })
         .select('name isVerified')
@@ -931,11 +875,7 @@ export class ProductsService {
           sellerName: storeNameMap.get(String(p.storeId)) ?? (seller ? seller.name : null),
           storeName: storeNameMap.get(String(p.storeId)) ?? null,
           sellerVerified: seller ? !!seller.isVerified : false,
-          variants: this.applySubscriberPricing(
-            variantMap[p._id.toString()] || [],
-            p,
-            benefitsMap.get(p.storeId),
-          ),
+          variants: variantMap[p._id.toString()] || [],
         });
       }),
       customerId,
@@ -969,7 +909,7 @@ export class ProductsService {
     }
   }
 
-  /** Variants + subscriber pricing for a page of lean product docs — the same
+  /** Variants for a page of lean product docs — the same
    *  shaping `getProductsByCategoryId` does, reusable for search/recently-viewed. */
   private async attachVariantsAndPricing(
     products: any[],
@@ -997,11 +937,6 @@ export class ProductsService {
     const storeIds = [
       ...new Set(products.map((p) => p.storeId).filter(Boolean)),
     ];
-    const benefitsMap = await this.subscriptionBenefits.getActiveBenefitsBatch(
-      customerId ?? null,
-      storeIds as string[],
-    );
-
     // Batch-resolve seller name + verification badge across every distinct
     // seller present in this batch — same one-query-instead-of-N pattern as
     // getProductsByCategoryId, so search results and getShapedProductsByIds
@@ -1028,11 +963,7 @@ export class ProductsService {
           sellerName: storeNameMap.get(String(p.storeId)) ?? (seller ? seller.name : null),
           storeName: storeNameMap.get(String(p.storeId)) ?? null,
           sellerVerified: seller ? !!seller.isVerified : false,
-          variants: this.applySubscriberPricing(
-            variantMap[p._id.toString()] || [],
-            p,
-            benefitsMap.get(p.storeId),
-          ),
+          variants: variantMap[p._id.toString()] || [],
         });
       }),
       customerId,
@@ -1402,10 +1333,6 @@ export class ProductsService {
       viaPreviousSlug = !!product;
     }
 
-    if (product && (await this.isHiddenByEarlyAccess(product, customerId))) {
-      return { message: 'Product not found', success: false, data: null };
-    }
-
     if (!product || !(await this.isStoreLive(product.storeId))) {
       return {
         message: 'Product not found',
@@ -1415,8 +1342,8 @@ export class ProductsService {
     }
 
     // 2️⃣-4️⃣ Seller, store, variants (keyed off the resolved document's real _id, not the route
-    // param, which may be a slug) and subscriber benefits are independent: fetch them in parallel.
-    const [seller, store, rawVariants, benefitsEntry] = await Promise.all([
+    // param, which may be a slug) are independent: fetch them in parallel.
+    const [seller, store, rawVariants] = await Promise.all([
       sellerModel
         .findOne({ _id: product.sellerId })
         .select('name isVerified')
@@ -1432,7 +1359,6 @@ export class ProductsService {
           isDelete: false,
         })
         .lean(),
-      this.subscriptionBenefits.getActiveBenefits(customerId, product.storeId),
     ]);
 
     // A suspended/rejected store's product must not be directly viewable
@@ -1447,11 +1373,7 @@ export class ProductsService {
       };
     }
 
-    const pricedVariants = this.applySubscriberPricing(
-      rawVariants,
-      product,
-      benefitsEntry ?? undefined,
-    );
+    const pricedVariants = rawVariants;
 
     // The campaign price is computed per variant (same helper as the listings), so the variants go through the
     // badge step with the product. While a campaign's sale runs on a variant the seller's own markdown is hidden.

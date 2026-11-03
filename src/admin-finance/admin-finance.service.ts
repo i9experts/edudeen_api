@@ -85,7 +85,7 @@ export class AdminFinanceService {
         ]),
         this.r.payoutModel.aggregate([{ $group: { _id: { status: '$status', currency: '$currency' }, count: { $sum: 1 }, amount: { $sum: '$amount' } } }]),
         this.r.sellerBalanceModel.countDocuments({}),
-        getPlatformEarnings(this.r.transactionModel, this.r.subscriptionInvoiceModel, from, to),
+        getPlatformEarnings(this.r.transactionModel, from, to),
         this.r.sellerBalanceModel.countDocuments({ isFlaggedForReview: true }),
         this.r.payoutMethodModel.countDocuments({ status: 'pending_verification' }),
         this.r.manualPaymentProofModel.countDocuments({ status: 'pending' }),
@@ -567,7 +567,7 @@ export class AdminFinanceService {
             { $match: { status: { $ne: 'failed' }, createdAt: { $gte: from, $lte: to } } },
             { $group: { _id: { type: '$type', currency: '$currency' }, total: { $sum: { $abs: '$amount' } } } },
           ]),
-          getPlatformEarnings(this.r.transactionModel, this.r.subscriptionInvoiceModel, from, to),
+          getPlatformEarnings(this.r.transactionModel, from, to),
         ]);
 
         const currencies = new Set<string>(SUPPORTED_CURRENCIES as readonly string[]);
@@ -685,7 +685,6 @@ export class AdminFinanceService {
         { label: `GMV (${c.currency})`, value: c.gmv.toFixed(2) },
         { label: `Net Revenue (${c.currency})`, value: c.netRevenue.toFixed(2) },
         { label: `Platform Commission (${c.currency})`, value: c.platformCommission.toFixed(2) },
-        { label: `Subscription Revenue (${c.currency})`, value: c.subscriptionRevenue.toFixed(2) },
         { label: `Total Available owed (${c.currency})`, value: c.sellerBalances.totalAvailable.toFixed(2) },
         { label: `Total Pending owed (${c.currency})`, value: c.sellerBalances.totalPending.toFixed(2) },
       ]);

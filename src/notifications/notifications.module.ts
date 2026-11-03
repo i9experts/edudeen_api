@@ -16,7 +16,7 @@ import { RedisModule } from '../redis/redis.module';
 
 // Global so OrdersService/PaymentService/MessagingService/LoyaltyService/etc.
 // can inject NotificationsService directly without importing this module
-// everywhere (same pattern as SubscriptionsModule/LoyaltyModule).
+// everywhere (same pattern as LoyaltyModule).
 //
 // AuthModule + RedisModule are required here even though this module doesn't
 // call AuthService directly — JwtAuthGuard (used on NotificationsController)

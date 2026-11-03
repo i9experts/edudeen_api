@@ -19,7 +19,6 @@ import { UploadService } from 'src/upload/upload.service';
 import { SUPPORTED_CURRENCIES } from 'src/exchange-rate/schemas/exchange-rate.schema';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { UpdateStoreCustomerDto } from './dto/update-store-customer.dto';
-import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-benefits.service';
 import { EntitlementsService } from 'src/platform-plans/entitlements.service';
 import { SellerPlatformSubscriptionsService } from 'src/platform-plans/seller-platform-subscriptions.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
@@ -58,7 +57,6 @@ export class StoreService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly activityLogService: ActivityLogService,
-    private readonly subscriptionBenefits: SubscriptionBenefitsService,
     private readonly entitlementsService: EntitlementsService,
     private readonly sellerPlatformSubscriptionsService: SellerPlatformSubscriptionsService,
     private readonly notificationsService: NotificationsService,
@@ -1266,8 +1264,6 @@ export class StoreService {
       .select('name isVerified')
       .lean();
 
-    const benefits = await this.subscriptionBenefits.getActiveBenefits(customerId, storeId);
-
     // Every product on this page belongs to the same store, so this is one
     // lookup for the whole page, not per-product — same active-campaign
     // resolution checkout pricing uses.
@@ -1305,15 +1301,6 @@ export class StoreService {
         activeCampaign:      activeCampaignBadge,
         ...(applied.appliedPrice != null ? { campaignPrice: applied.appliedPrice } : {}),
       };
-      if (variant && benefits) {
-        const discount = this.subscriptionBenefits.resolveProductDiscount(benefits.benefits, p, variant.price);
-        if (discount) {
-          base.subscriberPrice = discount.subscriberPrice;
-          base.youSaveUSD = discount.savingsUSD;
-          base.discountPercent = discount.discountPercent;
-          base.subscriberPlanName = benefits.planName;
-        }
-      }
       return sanitizeDigitalForPublicView(base);
     });
 

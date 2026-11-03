@@ -12,7 +12,7 @@ function make(orders: any[], products: any[]) {
     categoryModel: { find: jest.fn(() => lean([{ _id: 'c1', name: 'Mathematics' }, { _id: 'c11', name: 'Algebra' }])) },
     storeModel: { find: jest.fn(() => lean([{ _id: 's1', name: 'Uzair Book Center', slug: 'uzair' }])) },
   };
-  const svc = new OrdersService({ repositories: repos } as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+  const svc = new OrdersService({ repositories: repos } as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
   return { svc };
 }
 

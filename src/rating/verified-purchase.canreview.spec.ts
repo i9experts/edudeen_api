@@ -107,7 +107,6 @@ describe('canReview is exactly the rule RatingService.addReview enforces', () =>
         {} as any,
         {} as any,
         {} as any,
-        {} as any,
       );
       const list = await ordersSvc.getOrdersByUserId('u1', {});
       const byId = await ordersSvc.getOrderById('u1', 'order-1');
@@ -181,7 +180,6 @@ describe('canReview is exactly the rule RatingService.addReview enforces', () =>
     const sellerModel: any = { find: jest.fn(() => chain([])) };
     const svc = new OrdersService(
       { repositories: { orderModel, sellerModel } } as any,
-      {} as any,
       {} as any,
       {} as any,
       {} as any,

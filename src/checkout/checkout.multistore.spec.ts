@@ -136,7 +136,6 @@ function world(seeds: Seed[], opts: { userId?: string } = {}) {
     },
     sellerModel: { find: jest.fn(() => chain([])) },
     shippingZoneModel: { exists: jest.fn().mockResolvedValue(null) },
-    subscriptionPlanModel: { findOne: jest.fn(() => chain(null)) },
     addressModel: {
       findOne: jest.fn(() => ({
         ...Promise.resolve({ _id: 'addr1', isDefault: true }),
@@ -170,11 +169,6 @@ function world(seeds: Seed[], opts: { userId?: string } = {}) {
   );
   const svc = new CheckoutService(
     { repositories: repos } as any,
-    {
-      getActiveBenefits: jest.fn().mockResolvedValue(null),
-      getActiveBenefitsBatch: jest.fn().mockResolvedValue(new Map()),
-      resolveProductDiscount: jest.fn(),
-    } as any,
     {
       getActiveCampaignsForStores: jest.fn().mockResolvedValue(new Map()),
     } as any,

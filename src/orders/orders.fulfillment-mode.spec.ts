@@ -44,10 +44,6 @@ function build(sellerOrder: any, orderOver: any = {}) {
     finance,
     activity,
     { awardPurchasePoints: jest.fn() } as any,
-    {
-      getActiveBenefits: jest.fn().mockResolvedValue(null),
-      getLoyaltyMultiplier: jest.fn(),
-    } as any,
     notifications,
     {} as any,
     {} as any,

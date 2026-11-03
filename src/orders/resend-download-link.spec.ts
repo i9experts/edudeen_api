@@ -10,7 +10,7 @@ function make(order: any, product: any) {
     productModel: { findOne: jest.fn(() => Promise.resolve(product)) },
   };
   const notify = jest.fn(() => Promise.resolve());
-  const svc = new OrdersService({ repositories: repos } as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, { notify } as any, {} as any, {} as any);
+  const svc = new OrdersService({ repositories: repos } as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, { notify } as any, {} as any, {} as any);
   return { svc, notify };
 }
 const order = (extra: any = {}) => ({

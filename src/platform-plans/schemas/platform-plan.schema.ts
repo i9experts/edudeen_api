@@ -48,7 +48,7 @@ export class PlatformPlan {
       customDomainAllowed: false,
       whiteLabelAllowed: false,
       loyaltyProgramAllowed: false,
-      subscriptionProductsAllowed: false, // gates the buyer-facing VIP-plan module
+      subscriptionProductsAllowed: false, // legacy flag (buyer memberships were removed); unused
       advancedAnalyticsAllowed: false,
       abandonedCartRecoveryAllowed: false,
       emailCampaignsAllowed: false,

@@ -8,7 +8,6 @@ import {
 import { isValidObjectId } from 'mongoose';
 import { licenseFromVariant } from 'src/products/product-input.util';
 import { DatabaseService } from 'src/database/databaseservice';
-import { SubscriptionBenefitsService } from 'src/subscriptions/subscription-benefits.service';
 import { MarketingService } from 'src/marketing/marketing.service';
 import { campaignsForProduct } from 'src/marketing/campaign-eligibility.util';
 import { campaignsInCurrency, pickBestCampaignForLine } from 'src/marketing/campaign-pricing.util';
@@ -39,7 +38,6 @@ export const MAX_CHECKOUT_LINES = 100;
 export class CheckoutService {
   constructor(
     private readonly databaseService: DatabaseService,
-    private readonly subscriptionBenefits: SubscriptionBenefitsService,
     private readonly marketingService: MarketingService,
     private readonly adminConfigService: AdminConfigService,
     private readonly exchangeRateService: ExchangeRateService,
@@ -222,15 +220,6 @@ export class CheckoutService {
     const checkoutItems: any[] = [];
     let hasPhysical = false;
 
-    // Cache one lookup per store so a multi-item cart from the same store
-    // doesn't re-query the buyer's subscription per item.
-    // Pre-filled in ONE batched query below (was one per store, plus again for shipping).
-    const benefitsCache = new Map<
-      string,
-      { benefits: any[]; planName: string } | null
-    >();
-    const getBenefits = async (storeId: string) => benefitsCache.get(storeId) ?? null;
-
     let subscriberSavingsUSD = 0;
 
     // Store docs (status, COD flag, direct-payment details) for every store in the
@@ -242,13 +231,7 @@ export class CheckoutService {
     };
 
     // Pass 1: resolve product/variant, validate stock, and compute each
-    // store's RAW (pre-discount) subtotal. A discount benefit's
-    // `minOrderValueUSD` must be checked against the order value, but the
-    // order value isn't known until every line in the cart has been priced —
-    // so resolving and applying the discount in a single pass (as before)
-    // meant `minOrderValueUSD` was accepted by the API/DTO but never actually
-    // enforced; every subscriber discount applied unconditionally regardless
-    // of cart size.
+    // store's RAW (pre-discount) subtotal.
     const rawItems: Array<{ product: any; variant: any; cartItem: any }> = [];
     const unavailableItems: Array<{ productId: string; variantId: string; storeId: string; name: string; reason: string }> = [];
     const storeSubtotals = new Map<string, number>();
@@ -266,15 +249,13 @@ export class CheckoutService {
     // not one per store / per line).
     const prefetchStoreIds = [...new Set([...pricedProducts.map((p: any) => String(p.storeId)), String(storeId)])];
     const sellerIds = [...new Set(pricedProducts.map((p: any) => p.sellerId).filter(Boolean))];
-    const [storeDocs, benefitsByStore, sellers] = await Promise.all([
+    const [storeDocs, sellers] = await Promise.all([
       storeModel.find({ _id: { $in: prefetchStoreIds } }).select('status isDelete codEnabled directPayment name slug premiumDiscount').lean(),
-      this.subscriptionBenefits.getActiveBenefitsBatch(userId, prefetchStoreIds),
       sellerIds.length
         ? this.databaseService.repositories.sellerModel.find({ _id: { $in: sellerIds } }).select('name isVerified').lean()
         : Promise.resolve([] as any[]),
     ]);
     for (const s of storeDocs as any[]) storeDocById.set(String(s._id), s);
-    for (const sid of prefetchStoreIds) benefitsCache.set(sid, benefitsByStore.get(sid) ?? null);
 
     for (const cartItem of selectedItems) {
       // Defense in depth: carts saved before quantity validation existed may
@@ -362,33 +343,8 @@ export class CheckoutService {
     // the product listing endpoints.
     const sellerMap = new Map(sellers.map((s: any) => [s._id.toString(), s]));
 
-    // Pass 2: resolve subscriber pricing now that each store's raw subtotal is known.
+    // Pass 2: build the checkout lines at the variant's selling price.
     for (const { product, variant, cartItem } of rawItems) {
-      // Subscriber pricing is resolved server-side only — the client never
-      // supplies a discount, it can only ever be computed from the buyer's
-      // real active subscription to this product's store.
-      const benefitsEntry = await getBenefits(product.storeId);
-      let discount = benefitsEntry
-        ? this.subscriptionBenefits.resolveProductDiscount(
-            benefitsEntry.benefits,
-            product,
-            variant.price,
-          )
-        : null;
-
-      if (
-        discount?.minOrderValueUSD != null &&
-        (storeSubtotals.get(product.storeId) ?? 0) < discount.minOrderValueUSD
-      ) {
-        discount = null; // cart doesn't meet this store's minimum order value for the discount
-      }
-
-      const unitPrice = discount?.subscriberPrice ?? variant.price;
-      const lineDiscount = discount
-        ? this.round(discount.savingsUSD * cartItem.quantity)
-        : 0;
-      subscriberSavingsUSD += lineDiscount;
-
       const seller = sellerMap.get(product.sellerId?.toString());
 
       // Live classes are retired: an old listing that still carries that format can no longer be bought.
@@ -415,10 +371,10 @@ export class CheckoutService {
         // Falls back to 'PKR' only for a legacy variant somehow still
         // missing the field despite the Phase 1 backfill.
         currency: variant.currency ?? 'PKR',
-        price: unitPrice,
-        totalPrice: this.round(unitPrice * cartItem.quantity),
-        originalPrice: discount ? variant.price : null,
-        subscriberDiscountUSD: lineDiscount,
+        price: variant.price,
+        totalPrice: this.round(variant.price * cartItem.quantity),
+        originalPrice: null,
+        subscriberDiscountUSD: 0,
       });
     }
 
@@ -651,53 +607,6 @@ export class CheckoutService {
     const taxAmount = 0; // no tax system exists yet — explicitly out of scope, not invented here
     const totalAmount = this.round(subtotal + taxAmount);
 
-    // Checkout-time upsell: for any store in this cart the buyer is NOT
-    // subscribed to, but which has an active plan offering a discount,
-    // surface what they'd have saved — the highest-intent moment to convert.
-    const subscriptionSavingsHints: Array<{
-      storeId: string;
-      storeName: string;
-      storeSlug: string;
-      planId: string;
-      planName: string;
-      potentialSavingsUSD: number;
-    }> = [];
-    const storeIdsInCart = [...new Set(checkoutItems.map((i) => i.storeId))];
-    for (const sid of storeIdsInCart) {
-      if (benefitsCache.get(sid)) continue; // already subscribed here
-      const plan = await this.databaseService.repositories.subscriptionPlanModel
-        .findOne({
-          storeId: sid,
-          status: 'active',
-          isDelete: false,
-          'benefits.type': 'discount',
-        })
-        .sort({ monthlyPriceUSD: 1 })
-        .lean();
-      if (!plan) continue;
-      const storeItems = checkoutItems.filter((i) => i.storeId === sid);
-      let potentialSavings = 0;
-      for (const item of storeItems) {
-        const d = this.subscriptionBenefits.resolveProductDiscount(
-          (plan as any).benefits,
-          { _id: item.productId } as any,
-          item.price,
-        );
-        if (d) potentialSavings += this.round(d.savingsUSD * item.quantity);
-      }
-      if (potentialSavings > 0) {
-        const store = storeDocById.get(String(sid)) ?? null;
-        subscriptionSavingsHints.push({
-          storeId: sid,
-          storeName: (store as any)?.name ?? 'this store',
-          storeSlug: (store as any)?.slug ?? '',
-          planId: (plan as any)._id.toString(),
-          planName: (plan as any).name,
-          potentialSavingsUSD: this.round(potentialSavings),
-        });
-      }
-    }
-
     // Client-reported attribution — a mobile app has no meaningful
     // Referer/UTM headers, so this can only ever be as good as what the app
     // itself reports (e.g. "opened via a shared product link"). Unknown or
@@ -797,7 +706,7 @@ export class CheckoutService {
       const added = await this.addShippingInCheckout(
         userId,
         { checkoutId: checkout._id.toString(), shippingZoneId: body.shippingZoneId },
-        { checkout, benefitsByStore: benefitsCache },
+        { checkout },
       );
       shippingFee = added.data.shippingFee;
       finalTotal = added.data.totalAmount;
@@ -837,7 +746,6 @@ export class CheckoutService {
           ...(isPremiumBuyer ? { premiumDiscountUSD: premiumSavingsUSD, premiumPlatformDiscountUSD: premiumPlatformSavingsUSD } : {}),
           ...this.splitSubtotalsByType(checkoutItems),
         },
-        subscriptionSavingsHints,
         appliedCampaigns,
         // Lines skipped because their store is not active (unified checkout only); still in the cart.
         unavailableItems,
@@ -848,7 +756,7 @@ export class CheckoutService {
   async addShippingInCheckout(
     userId: string,
     body: any,
-    preloaded?: { checkout: any; benefitsByStore?: Map<string, { benefits: any[]; planName: string } | null> },
+    preloaded?: { checkout: any },
   ) {
     const { checkoutId, shippingZoneId } = body;
 
@@ -899,7 +807,7 @@ export class CheckoutService {
 
     // Sellers ship separately, so every store with PHYSICAL items gets its own
     // shipping line (the platform zone fee), and each store's free/discounted
-    // shipping subscriber benefit applies to that store's line only. A checkout
+    // shipping line applies to that store's line only. A checkout
     // with no physical items (digital only) has no shipping at all.
     const items = checkout.items as any[];
     const physicalStoreIds = [...new Set(items.filter((i) => i.type === 'physical').map((i) => i.storeId))];
@@ -924,25 +832,7 @@ export class CheckoutService {
       const giftWrapFee = checkout.giftWrap && sellerStore?.giftWrap?.enabled !== false && (sellerStore?.giftWrap?.fee ?? 0) > 0
         ? this.round(this.exchangeRateService.convertWithSnapshots(sellerStore.giftWrap.fee, storeCcy, checkout.currency, snaps))
         : 0;
-      let discountPercent = 0;
-      const benefitsEntry = preloaded?.benefitsByStore?.has(storeId)
-        ? preloaded.benefitsByStore.get(storeId)
-        : await this.subscriptionBenefits.getActiveBenefits(userId, storeId);
-      if (benefitsEntry) {
-        const shippingBenefit = this.subscriptionBenefits.resolveShippingBenefit(benefitsEntry.benefits);
-        const storeSubtotal = this.convertedSubtotal(
-          items.filter((i) => i.storeId === storeId),
-          checkout.currency,
-          (checkout.fxSnapshots as any) ?? [],
-        );
-        if (
-          shippingBenefit &&
-          (shippingBenefit.minOrderValueForShippingUSD == null ||
-            storeSubtotal >= shippingBenefit.minOrderValueForShippingUSD)
-        ) {
-          discountPercent = shippingBenefit.discountPercent;
-        }
-      }
+      const discountPercent = 0;
       shippingByStore.push({
         storeId,
         baseFee: storeBaseFee,

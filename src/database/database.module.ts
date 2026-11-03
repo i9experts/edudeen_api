@@ -57,31 +57,10 @@ import { DatabaseService } from './databaseservice';
       { name: schema.TaxReport.name, schema: schema.TaxReportSchema },
       { name: schema.SaleCreditJob.name, schema: schema.SaleCreditJobSchema },
       {
-        name: schema.SubscriptionPlan.name,
-        schema: schema.SubscriptionPlanSchema,
-      },
-      { name: schema.Subscription.name, schema: schema.SubscriptionSchema },
-      {
-        name: schema.SubscriptionInvoice.name,
-        schema: schema.SubscriptionInvoiceSchema,
-      },
-      {
-        name: schema.SubscriptionPaymentAttempt.name,
-        schema: schema.SubscriptionPaymentAttemptSchema,
-      },
-      {
         name: schema.SubscriptionCounter.name,
         schema: schema.SubscriptionCounterSchema,
       },
       { name: schema.WebhookEvent.name, schema: schema.WebhookEventSchema },
-      {
-        name: schema.SubscriptionCreditWallet.name,
-        schema: schema.SubscriptionCreditWalletSchema,
-      },
-      {
-        name: schema.SubscriptionNotificationPreference.name,
-        schema: schema.SubscriptionNotificationPreferenceSchema,
-      },
       {
         name: schema.IdempotencyRecord.name,
         schema: schema.IdempotencyRecordSchema,

@@ -88,7 +88,6 @@ function build(orders: any[], opts: { storeIds?: string[] } = {}) {
     {} as any,
     {} as any,
     {} as any,
-    {} as any,
   );
   return { svc, orderModel };
 }
@@ -185,7 +184,6 @@ describe('seller order list rows', () => {
     };
     const svc = new OrdersService(
       { repositories: repos } as any,
-      {} as any,
       {} as any,
       {} as any,
       {} as any,

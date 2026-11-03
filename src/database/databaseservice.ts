@@ -98,29 +98,11 @@ export class DatabaseService {
     @InjectModel(schema.SaleCreditJob.name)
     private saleCreditJobModel: Model<schema.SaleCreditJobDocument>,
 
-    @InjectModel(schema.SubscriptionPlan.name)
-    private subscriptionPlanModel: Model<schema.SubscriptionPlanDocument>,
-
-    @InjectModel(schema.Subscription.name)
-    private subscriptionModel: Model<schema.SubscriptionDocument>,
-
-    @InjectModel(schema.SubscriptionInvoice.name)
-    private subscriptionInvoiceModel: Model<schema.SubscriptionInvoiceDocument>,
-
-    @InjectModel(schema.SubscriptionPaymentAttempt.name)
-    private subscriptionPaymentAttemptModel: Model<schema.SubscriptionPaymentAttemptDocument>,
-
     @InjectModel(schema.SubscriptionCounter.name)
     private subscriptionCounterModel: Model<schema.SubscriptionCounterDocument>,
 
     @InjectModel(schema.WebhookEvent.name)
     private webhookEventModel: Model<schema.WebhookEventDocument>,
-
-    @InjectModel(schema.SubscriptionCreditWallet.name)
-    private subscriptionCreditWalletModel: Model<schema.SubscriptionCreditWalletDocument>,
-
-    @InjectModel(schema.SubscriptionNotificationPreference.name)
-    private subscriptionNotificationPreferenceModel: Model<schema.SubscriptionNotificationPreferenceDocument>,
 
     @InjectModel(schema.IdempotencyRecord.name)
     private idempotencyRecordModel: Model<schema.IdempotencyRecordDocument>,
@@ -335,14 +317,8 @@ export class DatabaseService {
       payoutScheduleModel: this.payoutScheduleModel,
       taxReportModel: this.taxReportModel,
       saleCreditJobModel: this.saleCreditJobModel,
-      subscriptionPlanModel: this.subscriptionPlanModel,
-      subscriptionModel: this.subscriptionModel,
-      subscriptionInvoiceModel: this.subscriptionInvoiceModel,
-      subscriptionPaymentAttemptModel: this.subscriptionPaymentAttemptModel,
       subscriptionCounterModel: this.subscriptionCounterModel,
       webhookEventModel: this.webhookEventModel,
-      subscriptionCreditWalletModel: this.subscriptionCreditWalletModel,
-      subscriptionNotificationPreferenceModel: this.subscriptionNotificationPreferenceModel,
       idempotencyRecordModel: this.idempotencyRecordModel,
       platformPlanModel: this.platformPlanModel,
       sellerPlatformSubscriptionModel: this.sellerPlatformSubscriptionModel,

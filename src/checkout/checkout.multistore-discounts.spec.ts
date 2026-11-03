@@ -60,7 +60,6 @@ function setup(opts: { coupon?: any; giftCards?: Record<string, any> } = {}) {
     { repositories: repos } as any,
     {} as any,
     {} as any,
-    {} as any,
     new ExchangeRateService({} as any, {} as any, {} as any),
     giftCards,
     {} as any,

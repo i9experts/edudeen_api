@@ -5,7 +5,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { DatabaseService } from 'src/database/databaseservice';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { PlatformPlanNotificationsService } from './platform-plan-notifications.service';
-import { PaymentGatewayService } from 'src/subscriptions/payment-gateway/payment-gateway.service';
+import { PaymentGatewayService } from 'src/stripe-billing/payment-gateway/payment-gateway.service';
 import { verifyStoreOwnershipStrict } from 'src/common/store-ownership.util';
 import { SubscribePlatformPlanDto, ChangePlatformPlanDto } from './dto/subscribe-platform-plan.dto';
 import { NotificationsService } from 'src/notifications/notifications.service';
@@ -427,9 +427,7 @@ export class SellerPlatformSubscriptionsService {
 
   /**
    * Upgrade/downgrade/first-paid-purchase for a store's platform plan.
-   * Mirrors the buyer-facing `SubscriptionsService.changePlan()` proration
-   * math exactly (unused-time credit + net-due charge or credit carryover) —
-   * same engine, different collection.
+   * Proration math: unused-time credit + net-due charge or credit carryover.
    */
   async changePlan(sellerId: string, storeId: string, dto: ChangePlatformPlanDto | SubscribePlatformPlanDto, idempotencyKey?: string) {
     await this.verifyStoreOwnership(storeId, sellerId);
@@ -759,7 +757,7 @@ export class SellerPlatformSubscriptionsService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // Billing automation — mirrors SubscriptionsService.processRenewals()
+  // Billing automation (renewals)
   // ═══════════════════════════════════════════════════════════════════════
 
   async processRenewals(): Promise<{ processed: number; succeeded: number; failed: number }> {
@@ -1060,7 +1058,7 @@ export class SellerPlatformSubscriptionsService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // Stripe webhook handlers — same shape as SubscriptionsService's
+  // Stripe webhook handlers
   // ═══════════════════════════════════════════════════════════════════════
 
   @OnEvent('stripe.invoice.payment_succeeded')

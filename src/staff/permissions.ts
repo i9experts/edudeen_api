@@ -116,7 +116,7 @@ const RULES: Rule[] = [
   { re: /^\/api\/categories(\/|$)/i, write: 'categories.manage' },
   { re: /^\/api\/admin\/seo(\/|$)/i, read: 'seo.view', write: 'seo.manage' },
   { re: /^\/api\/admin\/ai-studio(\/|$)/i, read: 'ai.manage', write: 'ai.manage' },
-  { re: /^\/api\/(platform-plans\/admin|subscriptions\/admin|admin\/premium)(\/|$)/i, read: 'plans.view', write: 'plans.manage' },
+  { re: /^\/api\/(platform-plans\/admin|admin\/premium)(\/|$)/i, read: 'plans.view', write: 'plans.manage' },
   { re: /^\/api\/checkout\/admin(\/|$)/i, read: 'config.view', write: 'config.manage' },
   { re: /^\/api\/admin\/analytics(\/|$)/i, read: 'analytics.view', write: 'analytics.view' },
   { re: /^\/api\/admin\/activity-log(\/|$)/i, read: 'activity.view', write: 'activity.view' },
