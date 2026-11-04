@@ -416,10 +416,10 @@ export class AdminConfigService {
       set['homeContent.about'] = about;
     }
     if (src.legalPages && typeof src.legalPages === 'object') {
-      for (const key of ['privacy-policy', 'terms-of-service', 'cookie-policy']) {
+      for (const key of ['privacy-policy', 'terms-of-service', 'cookie-policy', 'returns']) {
         const page = (src.legalPages as Record<string, any>)[key];
         if (page === undefined) continue;
-        set[`homeContent.legalPages.${key}`] = { text: str(page?.text, 40000), lastUpdated: str(page?.lastUpdated, 40) };
+        set[`homeContent.legalPages.${key}`] = { text: str(page?.text, 40000), textUr: str(page?.textUr, 40000), lastUpdated: str(page?.lastUpdated, 40) };
       }
     }
     const config = await this.model.findOneAndUpdate({}, { $set: set }, { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true });

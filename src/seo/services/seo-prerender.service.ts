@@ -40,6 +40,7 @@ export const STATIC_PAGES: Record<string, { path: string; title: string; h1: str
   'privacy-policy': { path: '/privacy-policy', title: 'Privacy Policy | Edudeen', h1: 'Privacy Policy', description: 'How Edudeen collects, uses and protects your personal information.', intro: 'How Edudeen collects, uses and protects your personal information.' },
   'terms-of-service': { path: '/terms-of-service', title: 'Terms of Service | Edudeen', h1: 'Terms of Service', description: 'The terms that apply when you buy or sell on Edudeen.', intro: 'The terms that apply when you buy or sell on Edudeen.' },
   'cookie-policy': { path: '/cookie-policy', title: 'Cookie Policy | Edudeen', h1: 'Cookie Policy', description: 'How Edudeen uses cookies and similar technologies.', intro: 'How Edudeen uses cookies and similar technologies.' },
+  returns: { path: '/returns', title: 'Returns policy | Edudeen', h1: 'Returns policy', description: 'When you can ask for a refund on Edudeen digital downloads and physical products.', intro: 'When you can ask for a refund on Edudeen digital downloads and physical products.' },
 };
 
 /**
