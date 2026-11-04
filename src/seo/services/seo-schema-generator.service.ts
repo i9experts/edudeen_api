@@ -41,6 +41,7 @@ export class SeoSchemaGeneratorService {
         priceCurrency: input.currency ?? 'USD',
         availability: `https://schema.org/${input.availability ?? 'InStock'}`,
         url: `${PLATFORM_ORIGIN}/product/${input.slug}`,
+        ...(input.storeName ? { seller: { '@type': 'Organization', name: input.storeName } } : {}),
       };
     }
     if (input.storeName) {

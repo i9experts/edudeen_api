@@ -131,7 +131,7 @@ export class SeoResolutionService {
       ?? categorySeo.metaDescription
       ?? storeSeo.metaDescription
       ?? renderTemplate(template?.descriptionTemplate, { productName: product.name, storeName })
-      ?? truncate(product.description, 160);
+      ?? truncate(plainText(product.description), 160);
 
     const ogImage = seo.ogImage ?? product.images?.[0] ?? storeSeo.ogImage ?? null;
     const canonicalUrl = seo.canonicalUrlOverride ?? `${PLATFORM_ORIGIN}/product/${product.slug}`;
@@ -140,7 +140,7 @@ export class SeoResolutionService {
       this.schemaGenerator.buildProductSchema({
         productId: product._id.toString(),
         name: product.name,
-        description: product.description,
+        description: plainText(product.description),
         images: product.images ?? [],
         slug: product.slug,
         price: defaultVariant?.price ?? null,
@@ -267,6 +267,16 @@ export class SeoResolutionService {
 function renderTemplate(template: string | undefined | null, tokens: Record<string, string | undefined>): string | null {
   if (!template) return null;
   return template.replace(/\{\{(\w+)\}\}/g, (_match, key) => tokens[key] ?? '');
+}
+
+/** Seller descriptions may hold HTML/entities: meta and JSON-LD need one line of plain text. */
+export function plainText(text: string | null | undefined): string {
+  if (!text) return '';
+  return String(text)
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function truncate(text: string | null | undefined, maxLength: number): string {
