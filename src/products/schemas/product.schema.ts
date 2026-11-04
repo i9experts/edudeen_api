@@ -205,6 +205,10 @@ export class Product {
   @Prop({ type: String, default: null })
   classTo: string | null;
 
+  // Optional language of the content (shown in the product-page facts row). null = not stated (all old products).
+  @Prop({ type: String, enum: ['ur', 'en', 'ar', 'mixed'], default: null })
+  language: 'ur' | 'en' | 'ar' | 'mixed' | null;
+
   // How the product card is drawn: 'book' (book-cover shape) or 'flat' (plain photo, e.g. toys, stationery).
   // null = legacy listing, shown as a book like before. Required to publish new listings.
   @Prop({ type: String, enum: ['book', 'flat'], default: null })

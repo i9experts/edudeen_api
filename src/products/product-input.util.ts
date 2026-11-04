@@ -26,8 +26,15 @@ export function cleanParcelMeta(body: Record<string, unknown>, forCreate: boolea
 
 /** Board/syllabus list and age range shared by every product type. Only keys
  *  present in the request are returned, so an edit leaves the rest alone. */
-export function cleanLearningMeta(body: Record<string, unknown>): { curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null; coverStyle?: 'book' | 'flat' | null } {
-  const out: { curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null; coverStyle?: 'book' | 'flat' | null } = {};
+export const PRODUCT_LANGUAGES = ['ur', 'en', 'ar', 'mixed'] as const;
+
+export function cleanLearningMeta(body: Record<string, unknown>): { curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null; coverStyle?: 'book' | 'flat' | null; language?: 'ur' | 'en' | 'ar' | 'mixed' | null } {
+  const out: { curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null; coverStyle?: 'book' | 'flat' | null; language?: 'ur' | 'en' | 'ar' | 'mixed' | null } = {};
+  if (body.language !== undefined) {
+    if (body.language === null || body.language === '') out.language = null;
+    else if ((PRODUCT_LANGUAGES as readonly unknown[]).includes(body.language)) out.language = body.language as 'ur' | 'en' | 'ar' | 'mixed';
+    else throw new BadRequestException(`language must be one of: ${PRODUCT_LANGUAGES.join(', ')}`);
+  }
   if (body.curricula !== undefined) {
     if (!Array.isArray(body.curricula) || body.curricula.length > CURRICULA.length) {
       throw new BadRequestException('curricula must be a list of boards');

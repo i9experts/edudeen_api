@@ -18,6 +18,19 @@ describe('learning metadata', () => {
   });
 });
 
+describe('product language', () => {
+  it('accepts the 4 languages, clears on null/empty, ignores when not sent', () => {
+    for (const l of ['ur', 'en', 'ar', 'mixed']) expect(cleanLearningMeta({ language: l })).toEqual({ language: l });
+    expect(cleanLearningMeta({ language: null })).toEqual({ language: null });
+    expect(cleanLearningMeta({ language: '' })).toEqual({ language: null });
+    expect(cleanLearningMeta({})).toEqual({});
+  });
+  it('rejects anything else with 400', () => {
+    expect(() => cleanLearningMeta({ language: 'fr' })).toThrow(BadRequestException);
+    expect(() => cleanLearningMeta({ language: 5 })).toThrow(/language/);
+  });
+});
+
 describe('license tiers', () => {
   it('validates each license once with a real price', () => {
     expect(cleanLicenseTiers([{ license: 'single_classroom', price: 1500 }, { license: 'school', price: 6000, compareAtPrice: 8000 }]))

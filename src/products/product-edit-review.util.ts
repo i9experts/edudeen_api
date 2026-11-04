@@ -53,7 +53,7 @@ export function overlayPendingEdit<T extends Record<string, any>>(product: T): T
 const LABELS: Record<string, string> = {
   name: 'Title', description: 'Description', images: 'Photos', tags: 'Tags', categoryId: 'Category', subCategoryId: 'Subcategory',
   educationLevel: 'Education level', customLevel: 'Custom level', digital: 'Files & delivery settings', classFrom: 'Class from', classTo: 'Class to',
-  ageMin: 'Age from', ageMax: 'Age to', curricula: 'Curricula', deliveryFormat: 'Delivery format',
+  ageMin: 'Age from', ageMax: 'Age to', curricula: 'Curricula', language: 'Language', deliveryFormat: 'Delivery format',
 };
 const HIDDEN = new Set(['slug', 'previousSlugs', 'normalizedCustomLevel', 'flags', 'contactMatches', 'flagReason']);
 
