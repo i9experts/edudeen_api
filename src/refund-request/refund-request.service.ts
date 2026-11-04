@@ -14,7 +14,9 @@ import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { verifyStoreOwnershipOrForbidden } from 'src/common/store-ownership.util';
 import { isPackagePaid } from 'src/orders/package-paid.util';
+import { RedisService } from 'src/redis/redis.service';
 import { CreateRefundRequestDto } from './dto/refund-request.dto';
+import { cleanRefundEvidence, REFUND_REASON_CODES } from './refund-evidence.util';
 
 @Injectable()
 export class RefundRequestService {
@@ -25,6 +27,7 @@ export class RefundRequestService {
     private readonly exchangeRateService: ExchangeRateService,
     private readonly activityLogService: ActivityLogService,
     @Optional() private readonly notificationsService?: NotificationsService,
+    @Optional() private readonly redis?: RedisService,
   ) {}
 
   /** Best-effort notice; a notification problem must never fail the refund flow. */
@@ -108,32 +111,54 @@ export class RefundRequestService {
       }
     }
 
-    const existingPending = await this.model.findOne({
-      sellerOrderId: dto.sellerOrderId,
-      itemIds: { $in: dto.itemIds },
-      status: 'pending',
-      isDelete: false,
-    });
-    if (existingPending) {
-      throw new BadRequestException('A refund request for one of these items is already pending review');
-    }
+    const evidence = cleanRefundEvidence(dto, items.map((i) => String(i.type)));
+    const reason = (dto.reason ?? (evidence.reasonCode ? REFUND_REASON_CODES[evidence.reasonCode] : '')).trim();
+    if (reason.length < 3) throw new BadRequestException('Please choose a reason');
 
-    const created = await this.model.create({
-      orderId: dto.orderId,
-      sellerOrderId: dto.sellerOrderId,
-      storeId: sellerOrder.storeId,
-      itemIds: dto.itemIds,
-      requestedBy: userId,
-      requestedByRole: role,
-      reason: dto.reason,
-      status: 'pending',
-    });
+    // One open request per order item. Check + create run under a per-seller-order
+    // lock so two parallel submits cannot both pass the check. (No Redis = the
+    // plain check below, as before.)
+    const createIfNoneOpen = async () => {
+      const existingPending = await this.model.findOne({
+        sellerOrderId: dto.sellerOrderId,
+        itemIds: { $in: dto.itemIds },
+        status: 'pending',
+        isDelete: false,
+      });
+      if (existingPending) {
+        throw new BadRequestException('A refund request for one of these items is already pending review');
+      }
+      return this.model.create({
+        orderId: dto.orderId,
+        sellerOrderId: dto.sellerOrderId,
+        storeId: sellerOrder.storeId,
+        itemIds: dto.itemIds,
+        requestedBy: userId,
+        requestedByRole: role,
+        reason,
+        ...(evidence.reasonCode ? { reasonCode: evidence.reasonCode, note: evidence.note, evidenceImages: evidence.evidenceImages } : {}),
+        status: 'pending',
+      });
+    };
+    let created: any;
+    if (this.redis?.isConnected) {
+      let failure: unknown = null;
+      const outcome = await this.redis.withLock(`refund-claim:${dto.sellerOrderId}`, 15000, async () => {
+        try { created = await createIfNoneOpen(); } catch (e) { failure = e; }
+      });
+      if (outcome === 'lock_not_acquired') {
+        throw new BadRequestException('A refund request for one of these items is already being submitted');
+      }
+      if (failure) throw failure;
+    } else {
+      created = await createIfNoneOpen();
+    }
 
     await this.activityLogService.log({
       storeId: sellerOrder.storeId,
       category: 'orders',
       action: 'refund_requested',
-      description: `Refund requested for ${items.length} item(s) on order #${order.orderNumber} — ${dto.reason}`,
+      description: `Refund requested for ${items.length} item(s) on order #${order.orderNumber} — ${reason}`,
       actorId: userId,
       actorRole: role,
       targetId: created._id.toString(),
@@ -147,7 +172,7 @@ export class RefundRequestService {
       this.tell(
         store?.sellerId ?? sellerOrder.sellerId, 'seller', NOTIFICATION_TYPES.REFUND_REQUESTED,
         'New refund request',
-        `A buyer asked for a refund on ${items.length} item(s) of order #${order.orderNumber} - ${String(dto.reason).slice(0, 200)}`,
+        `A buyer asked for a refund on ${items.length} item(s) of order #${order.orderNumber} - ${reason.slice(0, 200)}`,
         { orderId: dto.orderId, orderNumber: String(order.orderNumber ?? ''), storeId: sellerOrder.storeId, link: `/store/${sellerOrder.storeId}/returns` },
       );
     }

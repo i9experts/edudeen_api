@@ -35,6 +35,16 @@ export class RefundRequest {
   @Prop({ type: String, required: true })
   reason: string;
 
+  // Optional evidence added later; old requests simply have none of these.
+  @Prop({ type: String, default: null })
+  reasonCode: string | null;
+
+  @Prop({ type: String, default: null })
+  note: string | null;
+
+  @Prop({ type: [String], default: [] })
+  evidenceImages: string[];
+
   @Prop({
     type: String,
     enum: ['pending', 'approved', 'rejected'],
