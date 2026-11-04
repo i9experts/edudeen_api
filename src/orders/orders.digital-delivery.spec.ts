@@ -8,7 +8,7 @@ const USER = 'buyer-1';
 
 function makeOrder(itemOverrides: Record<string, any> = {}, orderOverrides: Record<string, any> = {}) {
   return {
-    _id: 'order-1',
+    _id: '64b000000000000000000001',
     userId: USER,
     isPaid: true,
     paidAt: new Date(),
@@ -68,7 +68,7 @@ describe('OrdersService — digital delivery', () => {
 
   it('issues typed download tokens for a paid, active item', async () => {
     setup(makeOrder(), makeProduct());
-    const res = await service.getDownloadUrls(USER, 'order-1', 'p1');
+    const res = await service.getDownloadUrls(USER, '64b000000000000000000001', 'p1');
     const payload: any = jwt.verify(res.data.files[0].token, { secret: SECRET });
     expect(payload.typ).toBe('download');
     expect(res.data.remaining).toBe('unlimited');
@@ -76,43 +76,43 @@ describe('OrdersService — digital delivery', () => {
 
   it('revokes access once the item is refunded', async () => {
     setup(makeOrder({ status: 'refunded' }), makeProduct());
-    await expect(service.getDownloadUrls(USER, 'order-1', 'p1')).rejects.toThrow(/revoked/);
+    await expect(service.getDownloadUrls(USER, '64b000000000000000000001', 'p1')).rejects.toThrow(/revoked/);
   });
 
   it('revokes access once the item is cancelled', async () => {
     setup(makeOrder({ status: 'cancelled' }), makeProduct());
-    await expect(service.getDownloadLink(USER, 'order-1', 'p1', 0)).rejects.toThrow(/revoked/);
+    await expect(service.getDownloadLink(USER, '64b000000000000000000001', 'p1', 0)).rejects.toThrow(/revoked/);
   });
 
   it('rejects another user', async () => {
     setup(makeOrder(), makeProduct());
-    await expect(service.getDownloadUrls('someone-else', 'order-1', 'p1')).rejects.toThrow(/Unauthorized/);
+    await expect(service.getDownloadUrls('someone-else', '64b000000000000000000001', 'p1')).rejects.toThrow(/Unauthorized/);
   });
 
   it('keeps access after the seller deletes the listing', async () => {
     setup(makeOrder(), makeProduct({}, { isDelete: true }));
-    await expect(service.getDownloadUrls(USER, 'order-1', 'p1')).resolves.toBeDefined();
+    await expect(service.getDownloadUrls(USER, '64b000000000000000000001', 'p1')).resolves.toBeDefined();
   });
 
   it('blocks access after an admin takedown', async () => {
     setup(makeOrder(), makeProduct({}, { isDelete: true, removedByAdmin: true }));
-    await expect(service.getDownloadUrls(USER, 'order-1', 'p1')).rejects.toThrow(/no longer available/);
+    await expect(service.getDownloadUrls(USER, '64b000000000000000000001', 'p1')).rejects.toThrow(/no longer available/);
   });
 
   it('enforces link expiry on the single-link path too', async () => {
     const paidAt = new Date(Date.now() - 10 * 86_400_000);
     setup(makeOrder({}, { paidAt }), makeProduct({ linkExpiryDays: 3 }));
-    await expect(service.getDownloadLink(USER, 'order-1', 'p1', 0)).rejects.toThrow(/expired/);
+    await expect(service.getDownloadLink(USER, '64b000000000000000000001', 'p1', 0)).rejects.toThrow(/expired/);
   });
 
   it('enforces the download limit before issuing links', async () => {
     setup(makeOrder({ downloadCount: 3 }), makeProduct({ downloadLimit: '3' }));
-    await expect(service.getDownloadUrls(USER, 'order-1', 'p1')).rejects.toThrow(/limit reached/);
+    await expect(service.getDownloadUrls(USER, '64b000000000000000000001', 'p1')).rejects.toThrow(/limit reached/);
   });
 
   it('refuses an access token replayed as a download token', async () => {
     setup(makeOrder(), makeProduct());
-    const accessLike = jwt.sign({ sub: USER, typ: 'access', userId: USER, orderId: 'order-1', productId: 'p1', fileIndex: 0 });
+    const accessLike = jwt.sign({ sub: USER, typ: 'access', userId: USER, orderId: '64b000000000000000000001', productId: 'p1', fileIndex: 0 });
     await expect(service.downloadByToken(accessLike)).rejects.toThrow(/expired or invalid/);
   });
 
@@ -121,7 +121,7 @@ describe('OrdersService — digital delivery', () => {
       pdfStampingEnabled: true,
       files: [{ url: 'x', name: 'book.pdf', mimeType: 'application/pdf' }],
     }));
-    const { data } = await service.getDownloadLink(USER, 'order-1', 'p1', 0);
+    const { data } = await service.getDownloadLink(USER, '64b000000000000000000001', 'p1', 0);
     expect(data.endpoint).toBe('/api/orders/stream-pdf-token');
     await expect(service.downloadByToken(data.token)).rejects.toThrow(/stamped/);
   });
@@ -131,11 +131,11 @@ describe('OrdersService — digital delivery', () => {
     jest.spyOn(global, 'fetch').mockResolvedValue(
       new Response('file-bytes', { status: 200, headers: { 'content-length': '10' } }) as any,
     );
-    const { data } = await service.getDownloadLink(USER, 'order-1', 'p1', 0);
+    const { data } = await service.getDownloadLink(USER, '64b000000000000000000001', 'p1', 0);
     const out = await service.downloadByToken(data.token);
     expect(out.contentLength).toBe(10);
     expect(orderModel.updateOne).toHaveBeenCalledWith(
-      { _id: 'order-1' },
+      { _id: '64b000000000000000000001' },
       { $inc: { 'sellerOrders.0.items.0.downloadCount': 1 } },
     );
   });
@@ -144,10 +144,10 @@ describe('OrdersService — digital delivery', () => {
     // updateOne reports nothing modified → another request consumed the last slot
     setup(makeOrder({ downloadCount: 2 }), makeProduct({ downloadLimit: '3' }), 0);
     jest.spyOn(global, 'fetch').mockResolvedValue(new Response('x', { status: 200 }) as any);
-    const { data } = await service.getDownloadLink(USER, 'order-1', 'p1', 0);
+    const { data } = await service.getDownloadLink(USER, '64b000000000000000000001', 'p1', 0);
     await expect(service.downloadByToken(data.token)).rejects.toThrow(/limit reached/);
     expect(orderModel.updateOne).toHaveBeenCalledWith(
-      { _id: 'order-1', 'sellerOrders.0.items.0.downloadCount': { $lt: 3 } },
+      { _id: '64b000000000000000000001', 'sellerOrders.0.items.0.downloadCount': { $lt: 3 } },
       { $inc: { 'sellerOrders.0.items.0.downloadCount': 1 } },
     );
   });

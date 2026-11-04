@@ -14,14 +14,14 @@ function make(order: any, product: any) {
   return { svc, notify };
 }
 const order = (extra: any = {}) => ({
-  _id: 'o1', orderNumber: 'ED-1', userId: 'u1', isPaid: true, paidAt: new Date(),
+  _id: '64b000000000000000000b01', orderNumber: 'ED-1', userId: 'u1', isPaid: true, paidAt: new Date(),
   sellerOrders: [{ items: [{ productId: P1, type: 'digital', status: 'completed' }] }], ...extra,
 });
 
 describe('resendDownloadLink', () => {
   it('notifies the owner with an email pointing at My Library (no file token)', async () => {
     const { svc, notify } = make(order(), { name: 'Algebra Pack', digital: { files: [{ name: 'a.pdf' }] } });
-    const res: any = await svc.resendDownloadLink('u1', 'o1', P1);
+    const res: any = await svc.resendDownloadLink('u1', '64b000000000000000000b01', P1);
     expect(res.success).toBe(true);
     const arg = (notify.mock.calls[0] as any[])[0];
     expect(arg).toMatchObject({ recipientId: 'u1', recipientRole: 'user', type: 'download_link_resent' });
@@ -31,15 +31,15 @@ describe('resendDownloadLink', () => {
 
   it('refuses another buyer\'s order', async () => {
     const { svc, notify } = make(order({ userId: 'someone-else' }), { name: 'X', digital: { files: [{ name: 'a.pdf' }] } });
-    await expect(svc.resendDownloadLink('u1', 'o1', P1)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.resendDownloadLink('u1', '64b000000000000000000b01', P1)).rejects.toBeInstanceOf(ForbiddenException);
     expect(notify).not.toHaveBeenCalled();
   });
 
   it('refuses a refunded item and an admin takedown', async () => {
     const refunded = make(order({ sellerOrders: [{ items: [{ productId: P1, type: 'digital', status: 'refunded' }] }] }), { name: 'X', digital: { files: [{}] } });
-    await expect(refunded.svc.resendDownloadLink('u1', 'o1', P1)).rejects.toBeDefined();
+    await expect(refunded.svc.resendDownloadLink('u1', '64b000000000000000000b01', P1)).rejects.toBeDefined();
     const removed = make(order(), { name: 'X', removedByAdmin: true, digital: { files: [{}] } });
-    await expect(removed.svc.resendDownloadLink('u1', 'o1', P1)).rejects.toBeDefined();
+    await expect(removed.svc.resendDownloadLink('u1', '64b000000000000000000b01', P1)).rejects.toBeDefined();
     expect(refunded.notify).not.toHaveBeenCalled();
     expect(removed.notify).not.toHaveBeenCalled();
   });

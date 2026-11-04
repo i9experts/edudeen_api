@@ -86,7 +86,7 @@ describe('ProductsService.addPhysicalProduct validation', () => {
 describe('contact info in the listing text', () => {
   it('is saved but held for review (never rejected) with the matched text', async () => {
     const svc = makeSvc();
-    const res = await svc.addPhysicalProduct('s1', body({}, { status: 'active', description: 'A wooden counting frame. Order on WhatsApp 0300-1234567' }));
+    const res = await svc.addPhysicalProduct('s1', body({}, { status: 'active', coverStyle: 'book', description: 'A wooden counting frame. Order on WhatsApp 0300-1234567' }));
     const saved = svc.databaseService.repositories.productModel.create.mock.calls[0][0];
     expect(saved.status).toBe('pending_review');
     expect(saved.flags).toEqual(['contact_info']);
@@ -96,7 +96,7 @@ describe('contact info in the listing text', () => {
   });
   it('a clean listing is untouched and a short title is refused', async () => {
     const svc = makeSvc();
-    await svc.addPhysicalProduct('s1', body({}, { status: 'active' }));
+    await svc.addPhysicalProduct('s1', body({}, { status: 'active', coverStyle: 'book' }));
     expect(svc.databaseService.repositories.productModel.create.mock.calls[0][0].flags).toEqual([]);
     await expect(makeSvc().addPhysicalProduct('s1', body({}, { name: 'Abacus' }))).rejects.toThrow(/at least 10 characters/);
   });

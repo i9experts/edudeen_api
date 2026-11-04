@@ -121,9 +121,9 @@ describe('AnalyticsService', () => {
       orderModel.aggregate = buildAggregateMock([
         [{ orderCount: 5, cancelledCount: 0, refundedCount: 0, grossRevenue: 500, refundAmount: 0, buyerIds: ['a', 'b', 'c', 'd'] }],
         [{ orderCount: 0, cancelledCount: 0, refundedCount: 0, grossRevenue: 0, refundAmount: 0, buyerIds: [] }],
-        [{ _id: 'a' }, { _id: 'b' }, { _id: 'c' }, { _id: 'd' }], // buyers in the period
-        [], // previous period buyers
-        [{ _id: 'a', orders: 2 }, { _id: 'b', orders: 1 }, { _id: 'c', orders: 1 }, { _id: 'd', orders: 1 }], // lifetime orders
+        // repeatBuyerStats: orders per buyer inside the period (repeat = 2+ orders in the period)
+        [{ _id: 'a', orders: 2 }, { _id: 'b', orders: 1 }, { _id: 'c', orders: 1 }, { _id: 'd', orders: 1 }],
+        [], // previous period (repeatBuyerPercent)
       ]);
 
       const result = await service.getOverview(SELLER_ID, STORE_ID, { range: '30d' });

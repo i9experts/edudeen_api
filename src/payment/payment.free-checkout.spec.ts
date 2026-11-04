@@ -81,7 +81,7 @@ function makeService(o: Opts = {}) {
       create: jest.fn().mockResolvedValue({}),
       countDocuments: jest.fn(async () => o.placedToday ?? 0),
     },
-    orderModel: {},
+    orderModel: { updateMany: jest.fn().mockResolvedValue({}) },
     addressModel: {},
     cartModel: {},
   };

@@ -5,11 +5,13 @@ import { DiscountsService } from '../discounts/discounts.service';
 
 const STORE = { _id: 'store-1', sellerId: 'seller-1', baseCurrency: 'PKR' };
 const activity: any = { log: jest.fn() };
+/** A plain object that also answers `toObject()` like a Mongoose document. */
+const mongooseLike = (d: any) => ({ ...d, toObject: () => ({ ...d }) });
 
 describe('MarketingService — coupon validation', () => {
   let couponModel: any, service: MarketingService;
   beforeEach(() => {
-    couponModel = { findOne: jest.fn().mockResolvedValue(null), create: jest.fn().mockImplementation(async (d: any) => ({ _id: 'c1', ...d })), findByIdAndUpdate: jest.fn().mockResolvedValue({ code: 'X' }) };
+    couponModel = { findOne: jest.fn().mockResolvedValue(null), create: jest.fn().mockImplementation(async (d: any) => mongooseLike({ _id: 'c1', ...d })), findByIdAndUpdate: jest.fn().mockResolvedValue(mongooseLike({ code: 'X' })) };
     service = new MarketingService({ repositories: { couponModel, storeModel: { findOne: jest.fn().mockResolvedValue(STORE) } } } as any, activity);
   });
   const existing = (o: any = {}) => ({ _id: 'c1', code: 'SAVE10', discountType: 'percentage', discountValue: 10, ...o });

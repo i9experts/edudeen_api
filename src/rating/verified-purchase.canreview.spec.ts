@@ -20,7 +20,7 @@ const chain = (v: any) => {
 };
 const id = (v: string) => ({ toString: () => v });
 const orderWith = (item: any, isPaid: boolean) => ({
-  _id: id('order-1'),
+  _id: id('64b000000000000000000c01'),
   userId: 'u1',
   checkoutId: 'chk',
   orderNumber: 'ORD-1',
@@ -82,7 +82,7 @@ describe('canReview is exactly the rule RatingService.addReview enforces', () =>
         'u1',
         'p1',
         null,
-        'order-1',
+        '64b000000000000000000c01',
       );
 
       // 1) the line-level flag on a buyer's order
@@ -109,7 +109,7 @@ describe('canReview is exactly the rule RatingService.addReview enforces', () =>
         {} as any,
       );
       const list = await ordersSvc.getOrdersByUserId('u1', {});
-      const byId = await ordersSvc.getOrderById('u1', 'order-1');
+      const byId = await ordersSvc.getOrderById('u1', '64b000000000000000000c01');
       const fromList = list.data.orders[0].stores[0].items[0].canReview;
       const fromById = (byId.data as any).sellerOrders[0].items[0].canReview;
 

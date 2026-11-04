@@ -783,7 +783,7 @@ describe('FinanceService', () => {
       methodModel.exists = jest.fn().mockResolvedValue(false);
       methodModel.create = jest.fn().mockResolvedValue({ _id: 'm2', currency: 'PKR', isDefault: true });
 
-      await service.addPayoutMethod(SELLER_ID, STORE_ID, { type: 'jazzcash', externalAccountId: '03001234567' } as any);
+      await service.addPayoutMethod(SELLER_ID, STORE_ID, { type: 'jazzcash', accountNumber: '03001234567' } as any);
 
       expect(methodModel.exists).toHaveBeenCalledWith({ storeId: STORE_ID, currency: 'PKR' });
       expect(methodModel.updateMany).toHaveBeenCalledWith(

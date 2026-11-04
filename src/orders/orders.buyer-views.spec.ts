@@ -131,7 +131,7 @@ describe('buyer order views — fulfillment mode and per-store shipping (additiv
         ],
       }),
     ]);
-    const { data } = await svc.getOrderById('buyer1', 'order-1');
+    const { data } = await svc.getOrderById('buyer1', '64b000000000000000000c01');
     expect(
       data.sellerOrders.map((s: any) => [
         s.storeId,
@@ -155,7 +155,7 @@ describe('buyer order views — shippingEstimate (additive)', () => {
     ]);
     const mine = await svc.getOrdersByUserId('buyer1', {});
     expect(mine.data.orders.map((o: any) => o.shippingEstimate)).toEqual(['2-3 days', null]);
-    const one = await svc.getOrderById('buyer1', 'order-1');
+    const one = await svc.getOrderById('buyer1', '64b000000000000000000c01');
     expect(one.data.shippingEstimate).toBe('2-3 days');
     const CHK = '64f0c0ffee0c0ffee0c0ff01';
     const by = await build([order('1', { checkoutId: CHK, shippingEstimate: '2-3 days' })]).svc.getOrdersByCheckout('buyer1', CHK);

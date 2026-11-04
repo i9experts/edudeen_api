@@ -31,7 +31,8 @@ describe('ActivityLogService — admin (platform-wide) surface', () => {
     it('filters by category, actorRole, and security-alert flag together', async () => {
       await service.adminFindAll({ category: 'finance', actorRole: 'admin', isSecurityAlert: 'true' });
       expect(activityLogModel.countDocuments).toHaveBeenCalledWith({
-        category: 'finance', actorRole: 'admin', isSecurityAlert: true,
+        // Platform-wide security alerts never include plain successful logins.
+        category: 'finance', actorRole: 'admin', isSecurityAlert: true, action: { $ne: 'login_success' },
       });
     });
 

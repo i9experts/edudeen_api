@@ -139,9 +139,13 @@ describe('wishlist', () => {
     const { svc, repos } = makeCart({ product: null });
     repos.wishListModel.find.mockReturnValue({
       sort: () => ({
-        limit: async () => [{ productId: PID, productVariantId: VID }],
+        limit: () => lean([{ productId: PID, productVariantId: VID }]),
       }),
     });
+    // getWishlist batches its lookups: only live products (none here) / variants / stores come back.
+    repos.productModel.find = jest.fn(() => lean([]));
+    repos.productVariantModel.find = jest.fn(() => lean([]));
+    repos.storeModel.find = jest.fn(() => ({ select: () => lean([]) }));
     const res: any = await svc.getWishlist('u1', SID);
     expect(res.data).toEqual([]);
   });

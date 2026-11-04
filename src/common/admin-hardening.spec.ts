@@ -279,6 +279,8 @@ describe('AdminMarketingService', () => {
         startDate: new Date(Date.now() - 1000), endDate: new Date(Date.now() + 86_400_000),
       }),
       findByIdAndUpdate: jest.fn(),
+      findOneAndUpdate: jest.fn().mockResolvedValue({ _id: 'camp1' }), // conditional status write succeeds
+      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }), // one-time "live" announcement claim
     };
     const storeModel = {
       find: jest.fn(() => ({ select: () => ({ lean: () => Promise.resolve([{ _id: 's1', sellerId: 'sel1' }, { _id: 's2', sellerId: 'sel2' }]) }) })),
@@ -313,6 +315,7 @@ describe('AdminConfigService cross-field validation', () => {
         repositories: {
           platformConfigModel: {
             findOneAndUpdate: jest.fn().mockResolvedValue({ fxConfig }),
+            findOne: jest.fn(() => ({ lean: () => Promise.resolve({ fxConfig }) })), // audit diff reads the current section
           },
         },
       } as any,

@@ -136,12 +136,13 @@ describe('who may update a physical sub-order, by its snapshotted fulfillmentMod
 
 describe('markPaid on COD', () => {
   it('a seller can confirm cash their own courier collected, but never cash on an Edudeen-fulfilled order', async () => {
-    const own = build({ fulfillmentMode: 'seller' });
+    // Cash can only be marked collected once the parcel is shipped/delivered.
+    const own = build({ fulfillmentMode: 'seller', status: 'shipped' });
     await expect(
       own.svc.markPaid('order-1', { userId: 'seller-1', role: 'seller' }),
     ).resolves.toBeDefined();
 
-    const platform = build({ fulfillmentMode: 'platform' });
+    const platform = build({ fulfillmentMode: 'platform', status: 'shipped' });
     await expect(
       platform.svc.markPaid('order-1', { userId: 'seller-1', role: 'seller' }),
     ).rejects.toThrow(/confirmed by the Edudeen team/);
