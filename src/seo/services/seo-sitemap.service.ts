@@ -7,6 +7,7 @@ import { QUEUE_NAMES, SEO_SITEMAP_REGENERATE_JOB } from 'src/queues/queue.consta
 import { SITEMAP_URL_LIMIT_PER_CHUNK, SitemapType } from '../schemas/seo-sitemap-cache.schema';
 
 import { STATIC_PAGES } from './seo-prerender.service';
+import { buildBrowseCombos } from './browse-combos.util';
 
 const PLATFORM_ORIGIN = 'https://edudeen.com';
 
@@ -101,8 +102,25 @@ export class SeoSitemapService {
     const pages = await seoLandingPageModel.find({ status: 'published', isDelete: false }).select('slug updatedAt').lean();
     // The home page and the public static pages always come first.
     const staticUrls = [{ loc: `${PLATFORM_ORIGIN}/` }, ...Object.values(STATIC_PAGES).map((p) => ({ loc: `${PLATFORM_ORIGIN}${p.path}` }))];
-    const urls = [...staticUrls, ...pages.map((p: any) => ({ loc: `${PLATFORM_ORIGIN}/pages/${p.slug}`, lastmod: p.updatedAt }))];
+    const browseUrls = (await this.browseCombos()).map((c) => ({ loc: `${PLATFORM_ORIGIN}/browse/${c.cls}${c.slug ? `/${c.slug}` : ''}` }));
+    const urls = [...staticUrls, ...pages.map((p: any) => ({ loc: `${PLATFORM_ORIGIN}/pages/${p.slug}`, lastmod: p.updatedAt })), ...browseUrls];
     await this.writeChunks('pages', null, urls);
+  }
+
+  /** `/browse/:class[/:subject]` pages that have >= 1 live product (capped). A failure here must not break the rest of the sitemap. */
+  private async browseCombos() {
+    try {
+      const { productModel, categoryModel, storeModel } = this.db.repositories;
+      const liveStores = await storeModel.find({ status: 'active', isDelete: false }).select('_id').lean();
+      const rows: any[] = await productModel.aggregate([
+        { $match: { status: 'active', isDelete: false, isTest: { $ne: true }, 'seo.noindex': { $ne: true }, classFrom: { $ne: null }, storeId: { $in: liveStores.map((s: any) => String(s._id)) } } },
+        { $group: { _id: { categoryId: '$categoryId', subCategoryId: '$subCategoryId', classFrom: '$classFrom', classTo: '$classTo' }, n: { $sum: 1 } } },
+      ]);
+      const cats: any[] = await categoryModel.find({ status: 'active', isDelete: false, slug: { $exists: true, $ne: null }, 'seo.noindex': { $ne: true } }).select('slug parentId').lean();
+      return buildBrowseCombos(rows.map((r) => ({ ...r._id, n: r.n })), cats);
+    } catch {
+      return [];
+    }
   }
 
   /** Seller-authored storefront content — custom `StorePage`s and `BlogPost`s, scoped to `status:'active'` stores only (a suspended/rejected store's pages/posts shouldn't be indexed even if individually marked published). */

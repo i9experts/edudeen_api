@@ -5,6 +5,7 @@ import { FaqService } from 'src/faqs/faq.service';
 import { PlatformSeoService } from './platform-seo-settings.service';
 import { SeoSchemaGeneratorService } from './seo-schema-generator.service';
 import type { ResolvedSeoMeta } from './seo-resolution.service';
+import { CLASS_LEVELS, classFilter } from 'src/products/class-levels';
 
 const ORIGIN = 'https://edudeen.com';
 const DEFAULT_OG_IMAGE = `${ORIGIN}/og-default.png`;
@@ -267,6 +268,60 @@ ${this.listHtml('More like this', related)}`;
 ${children.length ? `<section><h2>Subcategories</h2><ul>${children.map((c) => `<li><a href="${ORIGIN}/c/${esc(c.slug)}">${esc(c.name)}</a></li>`).join('')}</ul></section>` : ''}
 ${this.listHtml(`${self.name} resources`, cards)}`;
     return { title: meta.title, description: meta.description, canonical: meta.canonicalUrl, ogImage: meta.ogImage ?? DEFAULT_OG_IMAGE, ogType: 'website', noindex: meta.noindex, jsonLd, body };
+  }
+
+  /**
+   * `/browse/:class/:subject?` - one class (+ one category and its descendants). Same title/description as the web
+   * page (HomeBrowse), canonical = the pretty URL. Unknown class/subject -> NotFoundException (HTML 404). A page with
+   * no products is `noindex` (thin), so only listings that have something to show get indexed.
+   */
+  async browse(clsRaw: string, subjectRaw?: string): Promise<PrerenderPage> {
+    const cls = String(clsRaw ?? '').trim().toLowerCase();
+    const filter = classFilter(cls);
+    if (!filter) throw new NotFoundException('Class not found.');
+    const className = CLASS_LEVELS.find((c) => c.value === cls)?.label ?? cls;
+    const subject = String(subjectRaw ?? '').trim().toLowerCase();
+    const { categoryModel } = this.db.repositories;
+    let self: any = null;
+    let ids: string[] = [];
+    let trail: any[] = [];
+    let children: any[] = [];
+    if (subject) {
+      if (!/^[a-z0-9][a-z0-9-]{0,99}$/.test(subject)) throw new NotFoundException('Category not found.');
+      const all: any[] = await categoryModel.find({ status: 'active', isDelete: false }).select('name slug parentId description').lean();
+      self = all.find((c) => String(c.slug ?? '').toLowerCase() === subject);
+      if (!self) throw new NotFoundException('Category not found.');
+      const selfId = String(self._id);
+      const set = new Set<string>([selfId]);
+      let grew = true;
+      while (grew) { grew = false; for (const c of all) if (c.parentId && set.has(String(c.parentId)) && !set.has(String(c._id))) { set.add(String(c._id)); grew = true; } }
+      ids = [...set];
+      children = all.filter((c) => String(c.parentId) === selfId && c.slug);
+      for (let cur = self; cur?.parentId; ) { const par = all.find((c) => String(c._id) === String(cur.parentId)); if (!par) break; trail.unshift(par); cur = par; }
+      trail = trail.filter((c) => c.slug);
+    }
+    const query = ids.length ? { $and: [filter, { $or: [{ categoryId: { $in: ids } }, { subCategoryId: { $in: ids } }] }] } : filter;
+    const cards = await this.cards(query, { purchaseCount: -1, createdAt: -1 }, 24);
+    const name = self ? `${className} ${self.name}` : className;
+    const path = `/browse/${cls}${self ? `/${self.slug}` : ''}`;
+    const canonical = `${ORIGIN}${path}`;
+    const description = `Browse ${name} resources on Edudeen: worksheets, books, digital downloads and courses from trusted sellers.`;
+    const jsonLd = [
+      this.schema.buildBreadcrumbSchema([
+        { name: 'Home', url: ORIGIN },
+        { name: className, url: `${ORIGIN}/browse/${cls}` },
+        ...(self ? [{ name: self.name, url: canonical }] : []),
+      ]),
+      ...(cards.length ? [this.itemListLd(name, cards)] : []),
+    ];
+    const crumb = self
+      ? `<a href="${ORIGIN}/browse/${esc(cls)}">${esc(className)}</a>${trail.map((c) => ` &gt; <a href="${ORIGIN}/browse/${esc(cls)}/${esc(c.slug)}">${esc(c.name)}</a>`).join('')} &gt; ${esc(self.name)}`
+      : esc(className);
+    const body = `<nav aria-label="Breadcrumb"><a href="${ORIGIN}/">Home</a> &gt; ${crumb}</nav>
+<h1>${esc(name)} resources</h1><p>${esc(description)}</p>
+${children.length ? `<section><h2>Subcategories</h2><ul>${children.map((c) => `<li><a href="${ORIGIN}/browse/${esc(cls)}/${esc(c.slug)}">${esc(c.name)}</a></li>`).join('')}</ul></section>` : ''}
+${this.listHtml(`${name} resources`, cards)}`;
+    return { title: `${name} - worksheets, books & courses | Edudeen`, description, canonical, ogImage: DEFAULT_OG_IMAGE, ogType: 'website', noindex: cards.length === 0, jsonLd, body };
   }
 
   async store(meta: ResolvedSeoMeta): Promise<PrerenderPage> {

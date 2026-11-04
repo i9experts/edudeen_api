@@ -79,6 +79,17 @@ export class SeoRenderHtmlController {
     }
   }
 
+  // Class x subject listings (/browse/class-5/math); declared before the generic :entityType/:slug route.
+  @Get('browse/:cls/:subject?')
+  async browse(@Param('cls') cls: string, @Param('subject') subject: string | undefined, @Res() res: Response) {
+    try {
+      this.send(res, await this.cached(`browse:${cls.toLowerCase()}:${(subject ?? '').toLowerCase()}`, () => this.prerender.browse(cls, subject)));
+    } catch (e) {
+      if (e instanceof NotFoundException) return this.send(res, this.prerender.notFoundHtml(), 404);
+      throw e;
+    }
+  }
+
   @Get(':entityType/:slug')
   async renderHtml(@Param('entityType') entityType: string, @Param('slug') slug: string, @Res() res: Response) {
     assertValidEntityType(entityType);
