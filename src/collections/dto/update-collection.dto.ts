@@ -1,7 +1,8 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsOptional, IsEnum, IsArray, ValidateNested, IsIn } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsString, IsOptional, IsEnum, IsArray, ValidateNested, IsIn, Length } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
+import { cleanCollectionName, COLLECTION_NAME_MIN, COLLECTION_NAME_MAX } from '../collection-name.util';
 
 class CollectionRulesDto {
   @ApiProperty({ required: false })
@@ -24,7 +25,9 @@ class CollectionRulesDto {
 export class UpdateCollectionDto {
   @ApiProperty({ required: false })
   @IsOptional()
+  @Transform(({ value }) => cleanCollectionName(value))
   @IsString()
+  @Length(COLLECTION_NAME_MIN, COLLECTION_NAME_MAX, { message: `Name must be ${COLLECTION_NAME_MIN}-${COLLECTION_NAME_MAX} characters` })
   name?: string;
 
   @ApiProperty({ required: false })

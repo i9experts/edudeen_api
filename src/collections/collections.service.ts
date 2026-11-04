@@ -1,5 +1,7 @@
 /* eslint-disable prettier/prettier */
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
+import { normalizeCollectionName, MAX_COLLECTIONS_PER_STORE } from './collection-name.util';
+import { ReorderCollectionsDto } from './dto/reorder-collections.dto';
 import { isValidObjectId } from 'mongoose';
 import { DatabaseService } from '../database/databaseservice';
 import { ActivityLogService } from '../activity-log/activity-log.service';
@@ -54,10 +56,26 @@ export class CollectionsService {
     return collection;
   }
 
+  /** Rejects a name whose normalised form matches another live collection of the SAME store. Compares against the
+   *  computed form of every name (not only the stored field) so collections created before `normalizedName` existed
+   *  still count. A store has at most 20, so the scan is cheap. Race-proofing = the unique index added after cleanup. */
+  private async assertNameFree(storeId: string, name: string, excludeId?: string) {
+    const key = normalizeCollectionName(name);
+    if (!key) throw new BadRequestException('Collection name must contain letters or numbers');
+    const existing = await this.r.collectionModel.find({ storeId, isDelete: false }).select('name').lean();
+    const clash = existing.some((c: any) => String(c._id) !== excludeId && normalizeCollectionName(c.name) === key);
+    if (clash) throw new ConflictException('This collection already exists');
+  }
+
   // ── Seller ─────────────────────────────────────────────────────────────
 
   async create(storeId: string, sellerId: string, dto: CreateCollectionDto) {
     await verifyStoreOwnershipStrict(this.r.storeModel, storeId, sellerId);
+    const liveCount = await this.r.collectionModel.countDocuments({ storeId, isDelete: false });
+    if (liveCount >= MAX_COLLECTIONS_PER_STORE) {
+      throw new BadRequestException(`You can have at most ${MAX_COLLECTIONS_PER_STORE} collections. Delete one first.`);
+    }
+    await this.assertNameFree(storeId, dto.name);
     if (dto.type === 'manual' && (!dto.productIds || dto.productIds.length === 0)) {
       throw new BadRequestException('A manual collection needs at least one product — add products after creating it, or switch to automatic.');
     }
@@ -66,6 +84,8 @@ export class CollectionsService {
     const collection = await this.r.collectionModel.create({
       storeId,
       name: dto.name,
+      normalizedName: normalizeCollectionName(dto.name),
+      sortOrder: liveCount,
       slug,
       description: dto.description ?? null,
       image: dto.image ?? null,
@@ -99,7 +119,9 @@ export class CollectionsService {
 
     const set: Record<string, unknown> = {};
     if (dto.name !== undefined && dto.name !== collection.name) {
+      await this.assertNameFree(storeId, dto.name, collectionId);
       set.name = dto.name;
+      set.normalizedName = normalizeCollectionName(dto.name);
       set.slug = await this.generateStoreScopedSlug(storeId, dto.name, collectionId);
     }
     if (dto.description !== undefined) set.description = dto.description;
@@ -111,7 +133,36 @@ export class CollectionsService {
     if (dto.status !== undefined) set.status = dto.status;
 
     const updated = await this.r.collectionModel.findByIdAndUpdate(collectionId, { $set: set }, { returnDocument: 'after' });
+
+    const changes: string[] = [];
+    if (set.name) changes.push(`renamed "${collection.name}" -> "${dto.name}"`);
+    if (dto.status !== undefined && dto.status !== collection.status) changes.push(dto.status === 'draft' ? 'hidden from store' : 'shown on store');
+    if (dto.type !== undefined || dto.rules !== undefined || dto.description !== undefined || dto.image !== undefined) changes.push('details edited');
+    if (changes.length) {
+      await this.activityLogService.log({
+        storeId, category: 'marketing', action: 'collection_updated',
+        description: `${collection.name}: ${changes.join(', ')}`, actorId: sellerId, actorRole: 'seller',
+        targetId: collectionId, targetType: 'collection',
+      });
+    }
     return { success: true, message: 'Collection updated', data: updated };
+  }
+
+  /** Saves the seller's display order. Must list ONLY this store's live collections; anything else is rejected, so an
+   *  id from another store can never be touched. Ids not listed (none expected) keep their place after the listed ones. */
+  async reorder(storeId: string, sellerId: string, dto: ReorderCollectionsDto) {
+    await verifyStoreOwnershipStrict(this.r.storeModel, storeId, sellerId);
+    const owned = await this.r.collectionModel.find({ storeId, isDelete: false, _id: { $in: dto.ids } }).select('_id').lean();
+    if (owned.length !== dto.ids.length) throw new BadRequestException('Some collections were not found in your store');
+    await this.r.collectionModel.bulkWrite(
+      dto.ids.map((id, i) => ({ updateOne: { filter: { _id: id, storeId }, update: { $set: { sortOrder: i } } } })),
+    );
+    await this.activityLogService.log({
+      storeId, category: 'marketing', action: 'collections_reordered',
+      description: `${dto.ids.length} collections`, actorId: sellerId, actorRole: 'seller',
+      targetId: null, targetType: 'collection',
+    });
+    return { success: true, message: 'Order saved' };
   }
 
   async updateProducts(storeId: string, sellerId: string, collectionId: string, dto: UpdateCollectionProductsDto) {

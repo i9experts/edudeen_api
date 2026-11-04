@@ -33,6 +33,7 @@ import { StoreThemeService } from '../store-theme/store-theme.service';
 import { StorePagesService } from '../store-pages/store-pages.service';
 import { CollectionsService } from '../collections/collections.service';
 import { featuredStoreFilter, featuredScore, selectFeatured } from './featured-stores.util';
+import { parseCatalogParams, classFacetCounts } from './store-catalog-query.util';
 
 // Store slugs render at the site root (`edudeen.com/:slug`) — these are the
 // frontend's top-level static route segments (router/index.tsx), reserved so
@@ -1175,14 +1176,15 @@ export class StoreService {
     // catalog with a variant query per page), page could be negative (Mongo error) or huge (skip overflow),
     // and `?type[$ne]=x` style objects flowed straight into the filter.
     const page  = clampInt(query.page, 1, 1, 1000);
-    const limit = clampInt(query.limit, 12, 1, 50);
+    const limit = clampInt(query.limit, 12, 1, 100);
     const skip  = (page - 1) * limit;
+    const cp = parseCatalogParams(query, (m) => new BadRequestException(m), (v) => isValidObjectId(v));
 
     const qType = queryString(query.type);
     const qCategory = queryString(query.categoryId);
     const qTag = queryString(query.tag);
     const qCollection = queryString(query.collectionId);
-    const qSort = queryString(query.sort);
+    const qSort = cp.sort;
 
     const filter: any = { storeId, isDelete: false, status: 'active', isTest: { $ne: true } };
     if (qType && qType !== 'all') filter.type = qType;
@@ -1207,9 +1209,15 @@ export class StoreService {
         : qCategory;
     }
     if (qTag && qTag !== 'all') filter.tags = qTag;
-    if (queryString(query.search) && queryString(query.search)!.trim()) {
-      filter.name = { $regex: queryString(query.search)!.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+    // In-store search (`q`, or the older `search`): escaped, case-insensitive, any script (Urdu titles included).
+    if (cp.q) filter.name = { $regex: escapeRegex(cp.q), $options: 'i' };
+    const andClauses: any[] = [];
+    if (cp.classClause) andClauses.push(cp.classClause);
+    // Subject = a category/sub-category of this store's products, with everything filed under it.
+    if (cp.subject) {
+      andClauses.push({ subCategoryId: { $in: await getDescendantIds(this.databaseService.repositories.categoryModel, cp.subject) } });
     }
+    if (andClauses.length) filter.$and = andClauses;
     // Collection membership — resolved via CollectionsService (manual: the
     // seller's own ordered pick; automatic: category/tag rule, evaluated
     // fresh) so this endpoint's existing variant/seller/campaign-pricing
@@ -1238,22 +1246,40 @@ export class StoreService {
       filter._id = { $in: already ? already.filter((id: string) => onSaleIds.includes(id)) : (onSaleIds.length ? onSaleIds : ['__none__']) };
     }
 
-    const sortMap: Record<string, any> = {
-      newest:     { createdAt: -1 },
-      price_asc:  { 'variants.price': 1 },
-      price_desc: { 'variants.price': -1 },
-      best_rated: { averageRating: -1 },
-      default:    { createdAt: -1 },
-    };
-    const sort = sortMap[qSort ?? ''] ?? sortMap['default'];
-
-    const total    = await this.databaseService.repositories.productModel.countDocuments(filter);
-    const products = await this.databaseService.repositories.productModel
-      .find(filter)
-      .sort(sort)
-      .skip(skip)
-      .limit(limit)
-      .lean();
+    // Price lives on variants (never on Product), so a price range / price sort works on each product's
+    // CHEAPEST active variant, in the store's own currency (the price the card shows before any sale).
+    const priceSort = qSort === 'price_asc' || qSort === 'price_desc';
+    let total: number;
+    let products: any[];
+    const { productModel, productVariantModel } = this.databaseService.repositories;
+    if (cp.min !== undefined || cp.max !== undefined || priceSort) {
+      const ids = (await productModel.find(filter).select('_id').lean()).map((p: any) => String(p._id));
+      const rows: { _id: string; min: number }[] = ids.length
+        ? await productVariantModel.aggregate([
+            { $match: { productId: { $in: ids }, status: 'active', isDelete: false } },
+            { $group: { _id: '$productId', min: { $min: '$price' } } },
+          ])
+        : [];
+      const list = rows.filter((r) => (cp.min === undefined || r.min >= cp.min) && (cp.max === undefined || r.min <= cp.max));
+      if (priceSort) {
+        list.sort((a, b) => (qSort === 'price_asc' ? a.min - b.min : b.min - a.min) || (a._id < b._id ? -1 : 1));
+        total = list.length;
+        const pageIds = list.slice(skip, skip + limit).map((r) => r._id);
+        const docs = pageIds.length ? await productModel.find({ _id: { $in: pageIds } }).lean() : [];
+        const byId = new Map(docs.map((d: any) => [String(d._id), d]));
+        products = pageIds.map((id) => byId.get(id)).filter(Boolean);
+      } else {
+        // A price range only narrows the set; ordering/paging stay on the plain path below.
+        filter._id = { $in: list.length ? list.map((r) => r._id) : ['__none__'] };
+        const sort = qSort === 'best_rated' ? { averageRating: -1, createdAt: -1 } : { createdAt: -1 };
+        total    = await productModel.countDocuments(filter);
+        products = await productModel.find(filter).sort(sort as any).skip(skip).limit(limit).lean();
+      }
+    } else {
+      const sort = qSort === 'best_rated' ? { averageRating: -1, createdAt: -1 } : { createdAt: -1 };
+      total    = await productModel.countDocuments(filter);
+      products = await productModel.find(filter).sort(sort as any).skip(skip).limit(limit).lean();
+    }
 
     // Cheapest active variant per product — powers the card price and, when
     // the buyer has an active subscription to this store, the member price.
@@ -1373,6 +1399,68 @@ export class StoreService {
 
     const data = { tags: tags.filter(Boolean).sort(), categories: categoryFacets };
     await this.redisService.set(cacheKey, JSON.stringify(data), 600);
+    return { success: true, data };
+  }
+
+  // ── 5b. Public catalog facets (class / subject / price / kind / collections) ─
+  // Only options this store's own live catalog has. One $facet over products + one variant aggregation,
+  // cached 60 s (the same numbers feed the filter UI and, later, the collections picker).
+  async getCatalogFacets(storeId: string) {
+    if (typeof storeId !== 'string' || !isValidObjectId(storeId)) throw new NotFoundException('Store not found');
+    const { storeModel, productModel, productVariantModel, categoryModel } = this.databaseService.repositories;
+    const store: any = await storeModel.findOne({ _id: storeId, isDelete: false, status: 'active' }).select('baseCurrency').lean();
+    if (!store) throw new NotFoundException('Store not found');
+    const cacheKey = `store-catalog-facets:v1:${storeId}`;
+    const cached = await this.redisService.get(cacheKey);
+    if (cached) return { success: true, data: JSON.parse(cached) };
+
+    const base = { storeId, isDelete: false, status: 'active', isTest: { $ne: true } };
+    const [agg] = await productModel.aggregate([
+      { $match: base },
+      { $facet: {
+        classes: [{ $group: { _id: { classFrom: '$classFrom', classTo: '$classTo', educationLevel: '$educationLevel', normalizedCustomLevel: '$normalizedCustomLevel' }, count: { $sum: 1 } } }],
+        subjects: [{ $match: { subCategoryId: { $ne: null } } }, { $group: { _id: '$subCategoryId', count: { $sum: 1 } } }],
+        kinds: [{ $group: { _id: { type: '$type', deliveryFormat: '$deliveryFormat' }, count: { $sum: 1 } } }],
+        ids: [{ $project: { _id: 1 } }],
+      } },
+    ]);
+    const ids: string[] = (agg?.ids ?? []).map((d: any) => String(d._id));
+    const idSet = new Set(ids);
+
+    const kinds = { physical: 0, digital: 0, course: 0 };
+    for (const k of agg?.kinds ?? []) {
+      if (k._id?.deliveryFormat === 'course') kinds.course += k.count;
+      else if (k._id?.type === 'physical') kinds.physical += k.count;
+      else if (k._id?.type === 'digital') kinds.digital += k.count;
+    }
+
+    const subjectRows: { _id: string; count: number }[] = agg?.subjects ?? [];
+    const cats: any[] = subjectRows.length
+      ? await categoryModel.find({ _id: { $in: subjectRows.map((s) => s._id) }, isDelete: false }).select('name slug').lean()
+      : [];
+    const catById = new Map(cats.map((c) => [String(c._id), c]));
+    const subjects = subjectRows
+      .filter((s) => catById.has(String(s._id)))
+      .map((s) => ({ id: String(s._id), name: catById.get(String(s._id)).name, slug: catById.get(String(s._id)).slug, count: s.count }))
+      .sort((a, b) => b.count - a.count);
+
+    const priceRows: { _id: null; min: number; max: number }[] = ids.length
+      ? await productVariantModel.aggregate([
+          { $match: { productId: { $in: ids }, status: 'active', isDelete: false } },
+          { $group: { _id: '$productId', p: { $min: '$price' } } },
+          { $group: { _id: null, min: { $min: '$p' }, max: { $max: '$p' } } },
+        ])
+      : [];
+    const price = priceRows[0] ? { min: priceRows[0].min, max: priceRows[0].max, currency: store.baseCurrency ?? null } : null;
+
+    const colList = ((await this.collectionsService.listPublic(storeId)).data as any[]).slice(0, 20);
+    const collections = (await Promise.all(colList.map(async (c) => {
+      const members = await this.collectionsService.resolveProductIds(storeId, String(c._id));
+      return { id: String(c._id), name: c.name, slug: c.slug, count: members.filter((id) => idSet.has(id)).length };
+    }))).filter((c) => c.count > 0);
+
+    const data = { total: ids.length, classes: classFacetCounts(agg?.classes ?? []), subjects, kinds, price, collections };
+    await this.redisService.set(cacheKey, JSON.stringify(data), 60);
     return { success: true, data };
   }
 

@@ -142,6 +142,11 @@ export class StoreController {
     return this.storeService.getPublicStoreProducts(storeId, query, req.user?.userId ?? null);
   }
 
+  @Get('public/:storeId/catalog-facets')
+  async getCatalogFacets(@Param('storeId') storeId: string) {
+    return this.storeService.getCatalogFacets(storeId);
+  }
+
   @Get('public/:storeId/filters')
   async getPublicStoreFilters(@Param('storeId') storeId: string) {
     return this.storeService.getPublicStoreFilters(storeId);

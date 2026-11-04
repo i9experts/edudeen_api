@@ -12,6 +12,7 @@
     "migrate:educational:apply": "node --env-file=.env --experimental-strip-types src/scripts/migrate-educational-to-digital.ts --apply",
     "remove:live-classes": "node --env-file=.env --experimental-strip-types src/scripts/remove-live-classes.ts",
     "remove:live-classes:apply": "node --env-file=.env --experimental-strip-types src/scripts/remove-live-classes.ts --apply",
+    "report:collection-duplicates": "node --env-file=.env --experimental-strip-types src/scripts/report-collection-duplicates.ts",
     "report:courses-category": "node --env-file=.env --experimental-strip-types src/scripts/report-courses-category.ts",
     "seed:categories":"node --env-file=.env --experimental-strip-types src/scripts/seed-education-categories.ts",
     "fix:slugs": "node --env-file=.env --experimental-strip-types src/scripts/fix-product-slugs.ts",

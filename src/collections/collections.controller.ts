@@ -8,6 +8,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CreateCollectionDto } from './dto/create-collection.dto';
 import { UpdateCollectionDto } from './dto/update-collection.dto';
 import { UpdateCollectionProductsDto } from './dto/update-collection-products.dto';
+import { ReorderCollectionsDto } from './dto/reorder-collections.dto';
 
 @ApiTags('Collections')
 @ApiBearerAuth()
@@ -30,6 +31,12 @@ export class CollectionsController {
   @Get(':storeId/:collectionId')
   get(@Req() req: any, @Param('storeId') storeId: string, @Param('collectionId') collectionId: string) {
     return this.collectionsService.getForSeller(storeId, req.user.userId, collectionId);
+  }
+
+  // Declared before ':storeId/:collectionId' so 'reorder' is not read as a collection id.
+  @Patch(':storeId/reorder')
+  reorder(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: ReorderCollectionsDto) {
+    return this.collectionsService.reorder(storeId, req.user.userId, dto);
   }
 
   @Patch(':storeId/:collectionId')

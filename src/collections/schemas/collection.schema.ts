@@ -23,6 +23,11 @@ export class Collection {
   @Prop({ required: true, trim: true })
   name: string;
 
+  // lowercase letters+digits only (collection-name.util). Duplicate check key, enforced in CollectionsService.
+  // TODO(after cleanup, see docs): unique partial index { storeId, normalizedName } - NOT created yet on purpose.
+  @Prop({ type: String, default: null })
+  normalizedName: string | null;
+
   // Unique per store (not globally) — see CollectionsService's own slug
   // generator, scoped by storeId unlike the shared generateUniqueSlug()
   // helper (which checks uniqueness globally, right for Store/Category but
