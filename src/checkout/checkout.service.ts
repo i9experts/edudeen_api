@@ -871,6 +871,37 @@ export class CheckoutService {
       (checkout.fxSnapshots as any) ?? [],
     );
 
+    const { shippingByStore, shippingFee, totalAmount, shippingEstimate } = await this.computeShippingLines(checkout, shippingZone, baseFee);
+
+    await checkoutModel.findByIdAndUpdate(checkoutId, {
+      shippingZoneId,
+      shippingFee,
+      shippingByStore,
+      totalAmount,
+      shippingEstimate,
+    });
+
+    return {
+      success: true,
+      message: 'Shipping added to checkout',
+      data: {
+        checkoutId,
+        shippingZoneId,
+        shippingFee,
+        shippingByStore,
+        shippingEstimate,
+        subtotal: checkout.subtotal,
+        totalAmount,
+        ...this.splitSubtotalsByType(checkout.items as any[]),
+      },
+    };
+  }
+
+  /**
+   * The one place delivery fees are worked out (checkout AND the read-only product/cart quote use it).
+   * Pure read: `checkout` only needs items, currency, fxSnapshots, giftWrap and subtotal.
+   */
+  private async computeShippingLines(checkout: any, shippingZone: any, baseFee: number) {
     // Sellers ship separately, so every store with PHYSICAL items gets its own
     // shipping line (the platform zone fee), and each store's free/discounted
     // shipping line applies to that store's line only. A checkout
@@ -962,28 +993,63 @@ export class CheckoutService {
         ? shippingZone.estimatedDeliveryTime.trim()
         : null;
 
-    await checkoutModel.findByIdAndUpdate(checkoutId, {
-      shippingZoneId,
-      shippingFee,
-      shippingByStore,
-      totalAmount,
-      shippingEstimate,
-    });
+    return { shippingByStore, shippingFee, totalAmount, shippingEstimate };
+  }
 
-    return {
-      success: true,
-      message: 'Shipping added to checkout',
-      data: {
-        checkoutId,
-        shippingZoneId,
-        shippingFee,
-        shippingByStore,
-        shippingEstimate,
-        subtotal: checkout.subtotal,
-        totalAmount,
-        ...this.splitSubtotalsByType(checkout.items as any[]),
-      },
-    };
+  /**
+   * READ-ONLY delivery facts for one product line (product page / cart). Writes nothing, creates no checkout.
+   * Fee uses computeShippingLines (same code as checkout); with no zone the fee is unknown (`fee: null`).
+   * COD = store allows it AND the admin's COD limit is not exceeded by this one package.
+   */
+  async getDeliveryInfo(q: { productId?: string; variantId?: string; quantity?: number | string; zoneId?: string; currency?: string }) {
+    const { productId, variantId } = q;
+    if (!productId || !isValidObjectId(productId)) throw new BadRequestException('productId is required');
+    if (variantId && !isValidObjectId(variantId)) throw new BadRequestException('Invalid variantId');
+    if (q.zoneId && !isValidObjectId(q.zoneId)) throw new BadRequestException('Invalid zoneId');
+    const currency = q.currency === 'PKR' ? 'PKR' : 'USD';
+    const quantity = Math.min(Math.max(Math.floor(Number(q.quantity) || 1), 1), 100);
+    const { productModel, productVariantModel, storeModel, shippingZoneModel } = this.databaseService.repositories;
+    const product: any = await productModel.findOne({ _id: productId, isDelete: false }).select('productType storeId deliveryFormat').lean();
+    if (!product) throw new NotFoundException('Product not found');
+    if (product.productType !== 'physical') return { success: true, data: { kind: 'digital' } };
+
+    const variant: any = variantId
+      ? await productVariantModel.findOne({ _id: variantId, productId, isDelete: false }).select('price currency').lean()
+      : await productVariantModel.findOne({ productId, isDelete: false, isDefault: true }).select('price currency').lean();
+    const store: any = await storeModel.findById(product.storeId).select('codEnabled baseCurrency deliverySettings giftWrap shipFrom deliveryMethod').lean();
+    if (!store || !variant) throw new NotFoundException('Product not found');
+    const itemCcy = variant.currency ?? store.baseCurrency ?? currency;
+    const item = { type: 'physical', storeId: String(product.storeId), productId: String(product._id), variantId: String(variant._id), quantity, totalPrice: (variant.price || 0) * quantity, currency: itemCcy };
+    const fxSnapshots = await this.exchangeRateService.buildSnapshots([...new Set([currency, itemCcy, SHIPPING_ZONE_CURRENCY])]);
+    const checkout = { items: [item], currency, fxSnapshots, giftWrap: false, subtotal: this.convertedSubtotal([item], currency, fxSnapshots) };
+
+    let fee: number | null = null;
+    let etaText: string | null = null;
+    let shippingLines: any[] = [];
+    if (q.zoneId) {
+      const zone: any = await shippingZoneModel.findOne({ _id: q.zoneId, isDelete: false, status: { $ne: 'inactive' } }).lean();
+      if (zone) {
+        const baseFee = this.exchangeRateService.convertWithSnapshots(zone.shippingPrice || 0, SHIPPING_ZONE_CURRENCY, currency, fxSnapshots as any);
+        const r = await this.computeShippingLines(checkout, zone, baseFee);
+        fee = r.shippingFee;
+        etaText = r.shippingEstimate;
+        shippingLines = r.shippingByStore;
+      }
+    }
+    const codCfg = typeof (this.adminConfigService as any)?.getCodConfig === 'function'
+      ? await this.adminConfigService.getCodConfig().catch(() => null)
+      : { maxPerPackagePKR: null, feePerPackagePKR: 0 };
+    const platformCod = await this.adminConfigService.isCodOffered().catch(() => false);
+    let codAvailable = platformCod && store.codEnabled !== false && codCfg != null;
+    if (codAvailable && codCfg) {
+      const ev = evaluateCod(
+        { ...checkout, shippingByStore: shippingLines, shippingFee: fee ?? 0 },
+        codCfg,
+        (n, from, to) => this.exchangeRateService.convertWithSnapshots(n, from, to, fxSnapshots as any),
+      );
+      codAvailable = ev.available;
+    }
+    return { success: true, data: { kind: 'physical', currency, fee, estimate: etaText, freeShipping: fee === 0, cod: codAvailable } };
   }
 
   async getShippingZones() {

@@ -101,6 +101,7 @@ import {
   Query,
   UseInterceptors,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -136,6 +137,19 @@ export class CheckoutController {
   ) {
     const { userId } = req.user;
     return this.checkoutService.deleteCheckout(userId, checkoutId);
+  }
+
+  // Read-only delivery facts for a product line (product page / cart). Public; writes nothing.
+  @Throttle({ default: { limit: 60, ttl: 60000 } })
+  @Get('delivery-info')
+  async getDeliveryInfo(@Query() query: any) {
+    return this.checkoutService.getDeliveryInfo({
+      productId: typeof query.productId === 'string' ? query.productId : undefined,
+      variantId: typeof query.variantId === 'string' ? query.variantId : undefined,
+      zoneId: typeof query.zoneId === 'string' ? query.zoneId : undefined,
+      currency: typeof query.currency === 'string' ? query.currency : undefined,
+      quantity: typeof query.quantity === 'string' ? query.quantity : undefined,
+    });
   }
 
   @Get('getShippingZones')

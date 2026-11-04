@@ -504,7 +504,7 @@ export class AdminConfigService {
   }
 
   /** True when at least one live store accepts cash on delivery (used for the homepage trust points). */
-  private async isCodOffered(): Promise<boolean> {
+  async isCodOffered(): Promise<boolean> {
     try {
       return !!(await this.databaseService.repositories.storeModel.exists({ status: 'active', isDelete: false, codEnabled: { $ne: false } }));
     } catch {
