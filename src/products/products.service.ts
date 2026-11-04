@@ -25,6 +25,7 @@ import { UploadService } from 'src/upload/upload.service';
 import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
 import { fetchPdfPageCount, isPdfName } from './pdf-page-count.util';
 import { sanitizeDigitalForPublicView } from './product-public-view.util';
+import { filterValidRailProducts } from './home-rail.util';
 import { classFilter, classIndex } from './class-levels';
 import { assertPriceRules, assertDescriptionRule, assertStockRule, cleanShippingWeight } from './price-rules.util';
 import { splitEditForReview, overlayPendingEdit } from './product-edit-review.util';
@@ -1192,7 +1193,7 @@ export class ProductsService {
       return rows.map((r) => String(r._id));
     });
     // Over-ask: some candidates may belong to a store that has since gone offline.
-    const products = (await this.getShapedProductsByIds(ids.slice(0, lim * 3), customerId ?? null)).slice(0, lim);
+    const products = filterValidRailProducts(await this.getShapedProductsByIds(ids.slice(0, lim * 3), customerId ?? null)).slice(0, lim);
     return { success: true, data: { products } };
   }
 

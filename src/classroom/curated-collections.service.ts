@@ -5,6 +5,7 @@ import { isValidObjectId, Model } from 'mongoose';
 import { DatabaseService } from '../database/databaseservice';
 import { ProductsService } from '../products/products.service';
 import { sanitizeDigitalForPublicView } from '../products/product-public-view.util';
+import { filterValidRailProducts } from '../products/home-rail.util';
 import { CURRICULA } from '../products/schemas/product.schema';
 import { getDescendantIds } from '../categories/category-tree.util';
 import { CuratedCollection, CuratedCollectionDocument } from './schemas/curated-collection.schema';
@@ -104,7 +105,7 @@ export class CuratedCollectionsService {
 
   async homeShelves(viewerId?: string | null) {
     const rows = await (this.model as any).find({ ...this.liveFilter(), showOnHome: true }).sort({ order: 1, createdAt: -1 }).limit(6).lean();
-    const shelves = await Promise.all(rows.map(async c => ({ ...this.shape(c), products: await this.resolveProducts(c, 12, viewerId) })));
+    const shelves = await Promise.all(rows.map(async c => ({ ...this.shape(c), products: filterValidRailProducts(await this.resolveProducts(c, 12, viewerId)) })));
     return { success: true, data: shelves.filter(s => s.products.length > 0) };
   }
 

@@ -19,7 +19,7 @@ function make(rows: { sold?: any[]; free?: any[]; sample?: any[]; variants?: any
   const svc: any = Object.create(ProductsService.prototype);
   svc.databaseService = { repositories: { productModel, productVariantModel: { find: jest.fn(() => chain(rows.variants ?? [])) } } };
   svc.redisService = { get: jest.fn(async (k: string) => store.get(k) ?? null), set: jest.fn(async (k: string, v: string) => { store.set(k, v); }) };
-  svc.getShapedProductsByIds = jest.fn(async (ids: string[]) => ids.map((id) => ({ _id: id, name: id })));
+  svc.getShapedProductsByIds = jest.fn(async (ids: string[]) => ids.map((id) => ({ _id: id, name: id, variants: [{ isDefault: true, price: 10 }] })));
   return { svc, productModel, store };
 }
 
@@ -33,6 +33,13 @@ describe('home shelves: bestsellers + free resources', () => {
     expect(q.status).toBe('active');
     expect(q.purchaseCount).toEqual({ $gte: 1 });
     expect(res.data.products.map((p: any) => p._id)).toEqual([A, B]);
+  });
+
+  it('bestsellers drop an item priced Rs 0 with a strike price (-100%)', async () => {
+    const { svc } = make({ sold: [{ _id: A }, { _id: B }] });
+    svc.getShapedProductsByIds = jest.fn(async (ids: string[]) => ids.map((id) => ({ _id: id, variants: [id === A ? { isDefault: true, price: 0, compareAtPrice: 500 } : { isDefault: true, price: 20 }] })));
+    const res = await svc.getBestsellers(10, null);
+    expect(res.data.products.map((p: any) => p._id)).toEqual([B]);
   });
 
   it('bestsellers are cached for 10 minutes (second call does not hit the database)', async () => {
