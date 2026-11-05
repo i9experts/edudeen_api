@@ -99,6 +99,15 @@ export class RatingController {
     return this.ratingService.getProductReviews(productId, query, viewerId);
   }
 
+  /** Public, read-only: a store's latest reviews, paginated (store page Reviews tab). */
+  @Get('store/:storeId/reviews')
+  async getStoreReviewsPage(
+    @Param('storeId') storeId: string,
+    @Query() query: any,
+  ) {
+    return this.ratingService.getStoreReviewsPage(storeId, query);
+  }
+
   /** Public: a store's best recent written reviews (storefront testimonials fallback). */
   @Get('store/:storeId/public')
   async getPublicStoreReviews(

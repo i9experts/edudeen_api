@@ -339,7 +339,8 @@ export class Store {
   // Seller-stated return policy shown on the product page (advisory: the return/refund
   // request APIs do not enforce windowDays; each request is reviewed by the seller).
   @Prop({ type: Object, default: null })
-  returnPolicy: { returnsAccepted: boolean; windowDays: number; note?: string | null } | null;
+  // note = physical items; digitalNote = digital downloads (text only, the real digital rule is "refundable only before download").
+  returnPolicy: { returnsAccepted: boolean; windowDays: number; note?: string | null; digitalNote?: string | null } | null;
 
   // Seller's own delivery charge (store currency). enabled=false/null -> the platform shipping-zone fee is used.
   // freeOverAmount: the store's items subtotal at or above which delivery is free (null = never).
@@ -363,6 +364,19 @@ export class Store {
   // Computed hourly from buyer<->seller messages (ResponseStatsService). Null = not enough data.
   @Prop({ type: Object, default: null })
   responseStats: { medianReplyMinutes: number; sampleSize: number; updatedAt: Date } | null;
+
+  // Cached by the same hourly job: response rate (answered within 24 h) + dispatch on time (shipped within 48 h of payment),
+  // last 90 days. pct is null while a number has fewer than 10 data points. Never computed per page view.
+  @Prop({ type: Object, default: null })
+  trustStats: {
+    responseRate: { pct: number | null; sample: number };
+    dispatch: { pct: number | null; sample: number };
+    updatedAt: Date;
+  } | null;
+
+  // Seller-written "About us" text for the store's About tab (max 1500). Qualifications / experience live in educatorProfile.
+  @Prop({ type: String, default: null })
+  aboutBio: string | null;
 
   @Prop({ type: String, default: null })
   categoryId!: string | null;

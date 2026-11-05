@@ -488,6 +488,58 @@ export class RatingService {
     return { success: true, data: { reviews: list } };
   }
 
+  /**
+   * Public, READ-ONLY, paginated list of a store's latest buyer reviews (store page "Reviews" tab).
+   * Unlike the testimonials fallback above it is NOT filtered by stars (that would hide bad reviews) and
+   * comment text is optional; flagged and deleted reviews never show. Reviewer = first name or "Anonymous".
+   */
+  async getStoreReviewsPage(storeId: string, query: any) {
+    const { ratingModel, userModel, storeModel, productModel } = this.r as any;
+    if (!storeId || !/^[a-f\d]{24}$/i.test(storeId)) throw new BadRequestException('Invalid storeId');
+    const store = await storeModel.findOne({ _id: storeId, isDelete: false }).select('_id averageRating reviewCount').lean().catch(() => null);
+    if (!store) throw new NotFoundException('Store not found');
+
+    const limit = clampInt(query.limit, 10, 1, 30);
+    const page = clampInt(query.page, 1, 1, 10_000);
+    const filter = { storeId, isDelete: false, isFlagged: { $ne: true }, rating: { $ne: null } };
+
+    const [total, reviews] = await Promise.all([
+      ratingModel.countDocuments(filter),
+      ratingModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+    ]);
+
+    const userIds = [...new Set(reviews.filter((r: any) => !r.isAnonymous).map((r: any) => r.userId))];
+    const productIds = [...new Set(reviews.map((r: any) => r.productId).filter(Boolean))];
+    const [users, products] = await Promise.all([
+      userIds.length ? userModel.find({ _id: { $in: userIds } }).select('name').lean() : [],
+      productIds.length ? productModel.find({ _id: { $in: productIds } }).select('title slug').lean() : [],
+    ]);
+    const nameById = new Map<string, string>(users.map((u: any) => [String(u._id), String(u.name ?? '').trim()]));
+    const productById = new Map<string, any>(products.map((p: any) => [String(p._id), p]));
+
+    return {
+      success: true,
+      data: {
+        stats: { averageRating: store.averageRating ?? 0, totalReviews: store.reviewCount ?? total },
+        pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+        reviews: reviews.map((r: any) => {
+          const p = productById.get(String(r.productId));
+          return {
+            reviewId: r._id,
+            customerName: r.isAnonymous ? 'Anonymous' : (nameById.get(String(r.userId)) ?? '').split(/\s+/)[0] || 'Customer',
+            rating: r.rating,
+            comment: r.comments?.[0]?.text ?? '',
+            isVerifiedPurchase: !!r.isVerifiedPurchase,
+            usedFor: r.usedFor ?? null,
+            sellerReply: r.sellerReply?.text ? { text: r.sellerReply.text } : null,
+            product: p ? { title: p.title, slug: p.slug ?? null } : null,
+            createdAt: r.createdAt,
+          };
+        }),
+      },
+    };
+  }
+
   /** Toggle the caller's "helpful" vote on a review — idempotent, no self-vote block (own-review voting is harmless). */
   async toggleHelpful(userId: string, reviewId: string) {
     const { ratingModel } = this.r;

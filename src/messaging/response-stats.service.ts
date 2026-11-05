@@ -3,9 +3,19 @@ import { Cron } from '@nestjs/schedule';
 import { isValidObjectId } from 'mongoose';
 import { DatabaseService } from '../database/databaseservice';
 import { RedisService } from '../redis/redis.service';
-import { buildResponseStats, firstReplyMinutes, RESPONSE_WINDOW_DAYS } from './response-stats.util';
+import {
+  buildDispatchRate, buildResponseRate, buildResponseStats, firstInquiry, RESPONSE_WINDOW_DAYS, TRUST_WINDOW_DAYS,
+  type DispatchPackage, type FirstInquiry,
+} from './response-stats.util';
 
-/** Hourly: median first-reply time of each seller over the last 30 days -> Store.responseStats. */
+const SHIPPED_LIKE = new Set(['shipped', 'delivered', 'completed']);
+
+/**
+ * Hourly store trust numbers, cached on the Store doc (nothing is computed per page view):
+ *  - Store.responseStats: median first-reply time, last 30 days (shown on product pages)
+ *  - Store.trustStats: response rate (answered within 24 h) + dispatch on time (shipped within 48 h of payment), last 90 days
+ * Every number needs TRUST_MIN_SAMPLES data points, otherwise it is stored as null.
+ */
 @Injectable()
 export class ResponseStatsService {
   private readonly logger = new Logger(ResponseStatsService.name);
@@ -24,40 +34,98 @@ export class ResponseStatsService {
 
   async run(now = new Date()): Promise<{ stores: number }> {
     const { messageModel, conversationModel, storeModel } = this.db.repositories;
-    const since = new Date(now.getTime() - RESPONSE_WINDOW_DAYS * 86_400_000);
+    const since90 = new Date(now.getTime() - TRUST_WINDOW_DAYS * 86_400_000);
+    const since30 = now.getTime() - RESPONSE_WINDOW_DAYS * 86_400_000;
 
     const perConversation: { _id: string; msgs: { senderRole: string; at: Date }[] }[] = await messageModel.aggregate([
-      { $match: { createdAt: { $gte: since }, isDeleted: { $ne: true }, senderRole: { $in: ['user', 'seller'] } } },
+      { $match: { createdAt: { $gte: since90 }, isDeleted: { $ne: true }, senderRole: { $in: ['user', 'seller'] } } },
       { $sort: { createdAt: 1 } },
       { $group: { _id: '$conversationId', msgs: { $push: { senderRole: '$senderRole', at: '$createdAt' } } } },
     ]).allowDiskUse(true);
 
-    const replyByConv = new Map<string, number>();
+    const inquiryByConv = new Map<string, FirstInquiry>();
     for (const c of perConversation) {
-      const mins = firstReplyMinutes(c.msgs);
-      if (mins !== null) replyByConv.set(String(c._id), mins);
+      const q = firstInquiry(c.msgs);
+      if (q) inquiryByConv.set(String(c._id), q);
     }
 
-    const ids = [...replyByConv.keys()].filter((id) => isValidObjectId(id));
-    const byStore = new Map<string, number[]>();
+    const ids = [...inquiryByConv.keys()].filter((id) => isValidObjectId(id));
+    const inquiriesByStore = new Map<string, FirstInquiry[]>();
     for (let i = 0; i < ids.length; i += 1000) {
       const convs: any[] = await conversationModel.find({ _id: { $in: ids.slice(i, i + 1000) } }).select('storeId').lean();
       for (const conv of convs) {
-        const list = byStore.get(conv.storeId) ?? [];
-        list.push(replyByConv.get(String(conv._id))!);
-        byStore.set(conv.storeId, list);
+        const list = inquiriesByStore.get(conv.storeId) ?? [];
+        list.push(inquiryByConv.get(String(conv._id))!);
+        inquiriesByStore.set(conv.storeId, list);
       }
     }
 
-    const withStats: string[] = [];
-    for (const [storeId, mins] of byStore) {
+    const dispatchByStore = await this.collectDispatchPackages(since90);
+
+    // ── median reply time (30 days), as before but with the shared minimum ──
+    const withStats = new Set<string>();
+    for (const [storeId, inquiries] of inquiriesByStore) {
+      const mins = inquiries.filter((q) => q.replyMinutes !== null && q.inquiryAt >= since30).map((q) => q.replyMinutes as number);
       const stats = buildResponseStats(mins, now);
       if (!stats || !isValidObjectId(storeId)) continue;
-      withStats.push(storeId);
+      withStats.add(storeId);
       await storeModel.updateOne({ _id: storeId }, { $set: { responseStats: stats } });
     }
     // Stores whose data dropped below the threshold must stop showing an old number.
-    await storeModel.updateMany({ responseStats: { $ne: null }, _id: { $nin: withStats } }, { $set: { responseStats: null } });
-    return { stores: withStats.length };
+    await storeModel.updateMany({ responseStats: { $ne: null }, _id: { $nin: [...withStats] } }, { $set: { responseStats: null } });
+
+    // ── response rate + dispatch on time (90 days) ──
+    const withTrust = new Set<string>();
+    const storeIds = new Set<string>([...inquiriesByStore.keys(), ...dispatchByStore.keys()]);
+    for (const storeId of storeIds) {
+      if (!isValidObjectId(storeId)) continue;
+      const trust = {
+        responseRate: buildResponseRate(inquiriesByStore.get(storeId) ?? [], now),
+        dispatch: buildDispatchRate(dispatchByStore.get(storeId) ?? [], now),
+        updatedAt: now,
+      };
+      withTrust.add(storeId);
+      await storeModel.updateOne({ _id: storeId }, { $set: { trustStats: trust } });
+    }
+    await storeModel.updateMany({ trustStats: { $ne: null }, _id: { $nin: [...withTrust] } }, { $set: { trustStats: null } });
+
+    return { stores: withStats.size };
+  }
+
+  /** Physical packages created in the window, per store. Payment moment = order.paidAt (COD: order creation). */
+  private async collectDispatchPackages(since: Date): Promise<Map<string, DispatchPackage[]>> {
+    const { orderModel } = this.db.repositories;
+    const rows: any[] = await orderModel.aggregate([
+      { $match: { createdAt: { $gte: since }, isFreeClaim: { $ne: true } } },
+      { $unwind: '$sellerOrders' },
+      { $match: { 'sellerOrders.items.type': 'physical' } },
+      {
+        $project: {
+          _id: 0,
+          storeId: '$sellerOrders.storeId',
+          status: '$sellerOrders.status',
+          shippedAt: '$sellerOrders.shippedAt',
+          paymentType: 1,
+          paidAt: 1,
+          createdAt: 1,
+        },
+      },
+    ]).allowDiskUse(true);
+
+    const byStore = new Map<string, DispatchPackage[]>();
+    for (const r of rows) {
+      if (!r.storeId) continue;
+      const status = String(r.status ?? '');
+      // Shipped-like but no shipped time (old data): unknown, leave it out rather than guess.
+      if (!r.shippedAt && SHIPPED_LIKE.has(status)) continue;
+      const list = byStore.get(String(r.storeId)) ?? [];
+      list.push({
+        baseAt: r.paymentType === 'cash_on_delivery' ? r.createdAt : r.paidAt ?? null,
+        shippedAt: r.shippedAt ?? null,
+        cancelled: status === 'cancelled' || status === 'refunded',
+      });
+      byStore.set(String(r.storeId), list);
+    }
+    return byStore;
   }
 }

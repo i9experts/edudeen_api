@@ -33,6 +33,7 @@ import { StoreThemeService } from '../store-theme/store-theme.service';
 import { StorePagesService } from '../store-pages/store-pages.service';
 import { CollectionsService } from '../collections/collections.service';
 import { featuredStoreFilter, featuredScore, selectFeatured } from './featured-stores.util';
+import { publicTrust, TRUST_MIN_SAMPLES } from '../messaging/response-stats.util';
 import { parseCatalogParams, classFacetCounts } from './store-catalog-query.util';
 
 // Store slugs render at the site root (`edudeen.com/:slug`) — these are the
@@ -732,11 +733,25 @@ export class StoreService {
         }
         if (rp.returnsAccepted && days < 1) throw new BadRequestException('returnPolicy.windowDays must be at least 1 day when returns are accepted');
         if (rp.note !== undefined && rp.note !== null) text(rp.note, 'returnPolicy.note', 300);
+        if (rp.digitalNote !== undefined && rp.digitalNote !== null) text(rp.digitalNote, 'returnPolicy.digitalNote', 300);
         updateData.returnPolicy = {
           returnsAccepted: rp.returnsAccepted,
           windowDays: rp.returnsAccepted ? days : 0,
           note: typeof rp.note === 'string' && rp.note.trim() ? rp.note.trim() : null,
+          // The older return-policy card never sends digitalNote: keep what is stored unless it is sent.
+          digitalNote: rp.digitalNote === undefined
+            ? (store as any).returnPolicy?.digitalNote ?? null
+            : typeof rp.digitalNote === 'string' && rp.digitalNote.trim() ? rp.digitalNote.trim() : null,
         };
+      }
+    }
+
+    // Seller-written About text (store About tab).
+    if (body.aboutBio !== undefined) {
+      if (body.aboutBio === null || body.aboutBio === '') updateData.aboutBio = null;
+      else {
+        text(body.aboutBio, 'aboutBio', 1500);
+        updateData.aboutBio = (body.aboutBio as string).trim() || null;
       }
     }
 
@@ -952,9 +967,12 @@ export class StoreService {
         badges: store.badges ?? [],
         educatorProfile: store.educatorProfile ?? null,
         returnPolicy: store.returnPolicy ?? null,
-        responseStats: store.responseStats?.medianReplyMinutes != null && store.responseStats.sampleSize >= 3
+        responseStats: store.responseStats?.medianReplyMinutes != null && store.responseStats.sampleSize >= TRUST_MIN_SAMPLES
           ? { medianReplyMinutes: store.responseStats.medianReplyMinutes, sampleSize: store.responseStats.sampleSize }
           : null,
+        // Cached by the hourly ResponseStatsService job; pct is null below the minimum sample (UI says "Not enough data").
+        trust: publicTrust(store),
+        aboutBio: store.aboutBio ?? null,
         createdAt: store.createdAt,
         announcementBar: announcementActive ? { message: bar.message, type: bar.type, ctaLabel: bar.ctaLabel, ctaLink: bar.ctaLink } : null,
         activeCampaign: primaryCampaign ? {
