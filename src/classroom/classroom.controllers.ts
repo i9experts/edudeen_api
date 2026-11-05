@@ -1,6 +1,8 @@
 /* eslint-disable prettier/prettier */
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import type { Response } from 'express';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -218,6 +220,26 @@ export class CoursesController {
   @Post('learn/:idOrSlug/lessons/:lessonId/quiz')
   quiz(@Req() req: any, @Param('idOrSlug') idOrSlug: string, @Param('lessonId') lessonId: string, @Body('answers') answers: unknown) {
     return this.courses.submitQuiz(req.user.userId, idOrSlug, lessonId, answers);
+  }
+
+  // Store-level students & downloads. Declared BEFORE `seller/:storeId/:productId` so "roster" is never read as a product id.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Get('seller/:storeId/roster')
+  roster(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Query() query: any) {
+    return this.courses.rosterForSeller(storeId, req.user.userId, query);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Get('seller/:storeId/roster/export')
+  async rosterExport(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Query() query: any, @Res() res: Response) {
+    const csv = await this.courses.rosterForSeller(storeId, req.user.userId, query, true);
+    res.header('Content-Type', 'text/csv; charset=utf-8');
+    res.header('Content-Disposition', 'attachment; filename="students.csv"');
+    res.header('Cache-Control', 'no-store');
+    res.send(csv);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

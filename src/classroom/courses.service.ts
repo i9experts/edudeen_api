@@ -12,6 +12,10 @@ import { verifyStoreOwnershipStrict } from '../common/store-ownership.util';
 import { CourseProgress, CourseProgressDocument } from './schemas/course.schema';
 import { accessDaysAt, accessExpiry, nextAccessDaysLog,certificateCode, cleanCertificateConfig, cleanCertificateDetails, cleanCourseInput, EMPTY_CERT_CONFIG, courseTotals, lessonIds, paidSeatFilter, scoreQuiz } from './course.util';
 
+import { parseRosterQuery, rosterCsvRows, ROSTER_CSV_HEADER, ROSTER_EXPORT_CAP, type RosterRow } from './students-roster.util';
+import { escapeRegex } from '../common/query-safety.util';
+import { toExportCsv } from '../common/csv-export.util';
+
 const LESSON_LINK_SECONDS = 3600;
 
 @Injectable()
@@ -434,6 +438,115 @@ export class CoursesService {
             lastActiveAt: p?.updatedAt ?? null, completedAt: p?.completedAt ?? null, certificateCode: p?.certificateCode ?? null,
           };
         }),
+      },
+    };
+  }
+
+  /**
+   * Store-level roster: every buyer of this store's digital products (courses = progress, files = download count),
+   * paid seats and free claims alike. Reads existing order/progress data only; nothing is tracked or changed.
+   */
+  async rosterForSeller(storeId: string, sellerId: string, rawQuery: Record<string, unknown> = {}, forExport = false) {
+    await verifyStoreOwnershipStrict(this.r.storeModel, storeId, sellerId);
+    const query = parseRosterQuery(rawQuery);
+    if (query.productId) {
+      const owned = await this.r.productModel.findOne({ _id: query.productId, storeId, isDelete: false, type: 'digital' }).select('_id').lean();
+      if (!owned) throw new NotFoundException('Product not found');
+    }
+
+    const base: any = {
+      isDelete: false,
+      'sellerOrders.storeId': storeId,
+      $or: [{ isPaid: true }, { isFreeClaim: true }],
+    };
+    let userFilter: any = null;
+    if (query.q) {
+      const buyerIds: any[] = await this.r.orderModel.distinct('userId', base);
+      const rx = new RegExp(escapeRegex(query.q), 'i');
+      const matched: any[] = await this.r.userModel
+        .find({ _id: { $in: buyerIds.map(String).filter(id => isValidObjectId(id)) }, $or: [{ name: rx }, { email: rx }] })
+        .select('_id').limit(2000).lean();
+      userFilter = { $in: matched.map(u => String(u._id)) };
+    }
+
+    const itemMatch: any = {
+      'sellerOrders.storeId': storeId,
+      'sellerOrders.items.type': { $in: ['digital', 'educational'] },
+      'sellerOrders.items.status': { $nin: ['cancelled', 'refunded'] },
+      ...(query.productId ? { 'sellerOrders.items.productId': query.productId } : {}),
+    };
+    const when = { $ifNull: ['$paidAt', '$createdAt'] };
+    const pipeline: any[] = [
+      { $match: { ...base, ...(userFilter ? { userId: userFilter } : {}) } },
+      { $unwind: '$sellerOrders' },
+      { $unwind: '$sellerOrders.items' },
+      { $match: itemMatch },
+      {
+        $group: {
+          _id: { u: '$userId', p: '$sellerOrders.items.productId' },
+          firstAt: { $min: when }, lastAt: { $max: when },
+          downloads: { $sum: { $ifNull: ['$sellerOrders.items.downloadCount', 0] } },
+          free: { $max: { $cond: [{ $eq: ['$isFreeClaim', true] }, 1, 0] } },
+        },
+      },
+      { $sort: { firstAt: -1, '_id.u': 1, '_id.p': 1 } },
+    ];
+    const skip = forExport ? 0 : (query.page - 1) * query.limit;
+    const take = forExport ? ROSTER_EXPORT_CAP + 1 : query.limit;
+    const [res]: any[] = await this.r.orderModel.aggregate([
+      ...pipeline,
+      { $facet: { total: [{ $count: 'n' }], page: [{ $skip: skip }, { $limit: take }] } },
+    ]);
+    const total: number = res?.total?.[0]?.n ?? 0;
+    const groups: any[] = res?.page ?? [];
+
+    const userIds = [...new Set(groups.map(g => String(g._id.u)))];
+    const productIds = [...new Set(groups.map(g => String(g._id.p)))];
+    const [users, products, progress, courses, storeProducts]: any[] = await Promise.all([
+      this.r.userModel.find({ _id: { $in: userIds.filter(id => isValidObjectId(id)) } }).select('name email').lean(),
+      this.r.productModel.find({ _id: { $in: productIds.filter(id => isValidObjectId(id)) } }).select('name deliveryFormat').lean(),
+      this.progressModel.find({ userId: { $in: userIds }, productId: { $in: productIds } }).lean(),
+      this.r.courseModel.find({ productId: { $in: productIds } }).select('productId sections accessDays accessDaysLog').lean(),
+      forExport ? Promise.resolve([]) : this.r.productModel.find({ storeId, type: 'digital', isDelete: false }).select('name').sort({ name: 1 }).limit(200).lean(),
+    ]);
+    const userById = new Map(users.map((u: any) => [String(u._id), u]));
+    const productById = new Map(products.map((p: any) => [String(p._id), p]));
+    const progByKey = new Map(progress.map((p: any) => [`${p.userId}:${p.productId}`, p]));
+    const courseById = new Map(courses.map((c: any) => [String(c.productId), c]));
+
+    const rows: RosterRow[] = groups.map(g => {
+      const userId = String(g._id.u);
+      const productId = String(g._id.p);
+      const u: any = userById.get(userId);
+      const p: any = productById.get(productId);
+      const isCourse = p?.deliveryFormat === 'course';
+      const prog: any = progByKey.get(`${userId}:${productId}`);
+      const course: any = courseById.get(productId);
+      const totalLessons = isCourse ? lessonIds(course?.sections ?? []).length : null;
+      const done = isCourse ? (prog?.completedLessonIds?.length ?? 0) : null;
+      const until = isCourse ? accessExpiry(g.lastAt, accessDaysAt(course, g.lastAt)) : null;
+      return {
+        userId, name: u?.name ?? 'Learner', email: u?.email ?? null,
+        productId, productName: p?.name ?? 'Product', kind: isCourse ? 'course' : 'file',
+        enrolledAt: g.firstAt, isFree: g.free === 1,
+        percent: isCourse ? (totalLessons ? Math.min(100, Math.round(((done ?? 0) / totalLessons) * 100)) : 0) : null,
+        completedLessons: done, totalLessons,
+        downloads: isCourse ? null : (g.downloads ?? 0),
+        lastActivityAt: isCourse ? (prog?.updatedAt ?? null) : null,
+        accessEnded: !!until && until.getTime() < Date.now(),
+      } as RosterRow;
+    });
+
+    if (forExport) {
+      const out = toExportCsv(ROSTER_CSV_HEADER, rosterCsvRows(rows), { cap: ROSTER_EXPORT_CAP, label: 'students' });
+      return out.csv;
+    }
+    return {
+      success: true,
+      data: {
+        total, page: query.page, limit: query.limit, totalPages: Math.max(1, Math.ceil(total / query.limit)),
+        rows,
+        products: storeProducts.map((p: any) => ({ id: String(p._id), name: p.name })),
       },
     };
   }
