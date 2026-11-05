@@ -20,6 +20,8 @@ import {
   allTimeCustomerAggregate as allTimeCustomerAggregateUtil,
   itemRefundSumField,
   notCancelledCond,
+  paidPeriodTotals,
+  pktDayStart,
   periodTotals as periodTotalsUtil,
   repeatBuyerPercent as repeatBuyerPercentUtil,
   repeatBuyerStats as repeatBuyerStatsUtil,
@@ -164,15 +166,15 @@ export class AnalyticsService {
     const scope = { 'sellerOrders.storeId': storeId };
 
     const now = new Date();
-    const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const todayStart = pktDayStart(now); // Pakistan day (UTC+5), not UTC midnight
     const elapsedMs = now.getTime() - todayStart.getTime();
     const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
     const yesterdaySameTime = new Date(yesterdayStart.getTime() + elapsedMs);
 
     return withAnalyticsCache(this.redis, this.key('today', storeId, {}), this.TODAY_CACHE_TTL_SECONDS, async () => {
       const [today, yesterday] = await Promise.all([
-        this.periodTotals(scope, todayStart, now),
-        this.periodTotals(scope, yesterdayStart, yesterdaySameTime),
+        paidPeriodTotals(this.r.orderModel, todayStart, now, scope),
+        paidPeriodTotals(this.r.orderModel, yesterdayStart, yesterdaySameTime, scope),
       ]);
 
       return {
@@ -182,6 +184,7 @@ export class AnalyticsService {
           revenueChangePercent: percentChange(today.netRevenue, yesterday.netRevenue),
           ordersCount: today.orderCount,
           avgOrderValue: today.avgOrderValue,
+          freeClaims: today.freeClaims,
         },
       };
     });

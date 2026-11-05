@@ -117,6 +117,38 @@ export async function periodTotals(orderModel: Model<any>, from: Date, to: Date,
   };
 }
 /**
+ * "Today" card only: PAID orders, free claims excluded (they are shown as a separate count).
+ * Paid = order-level isPaid, or this package's own isPaid (multi-seller COD). Cancelled excluded.
+ * Does not touch periodTotals, which Analytics/Finance keep using unchanged.
+ */
+export async function paidPeriodTotals(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>) {
+  const rows = await orderModel.aggregate([
+    ...sellerOrderMatchStage(from, to, scopeMatch),
+    { $match: { 'sellerOrders.status': { $ne: 'cancelled' } } },
+    { $addFields: { itemRefund: itemRefundSumField(), isClaim: { $eq: ['$isFreeClaim', true] }, paidNow: { $or: [{ $eq: ['$isPaid', true] }, { $eq: ['$sellerOrders.isPaid', true] }] } } },
+    {
+      $group: {
+        _id: null,
+        paidCount: { $sum: { $cond: [{ $and: [{ $not: ['$isClaim'] }, '$paidNow'] }, 1, 0] } },
+        gross: { $sum: { $cond: [{ $and: [{ $not: ['$isClaim'] }, '$paidNow'] }, '$sellerOrders.subtotal', 0] } },
+        refunds: { $sum: { $cond: [{ $and: [{ $not: ['$isClaim'] }, '$paidNow'] }, '$itemRefund', 0] } },
+        freeClaims: { $sum: { $cond: ['$isClaim', 1, 0] } },
+      },
+    },
+  ]);
+  const r = rows[0] ?? { paidCount: 0, gross: 0, refunds: 0, freeClaims: 0 };
+  const net = round(r.gross - r.refunds);
+  return { orderCount: r.paidCount as number, netRevenue: net, avgOrderValue: r.paidCount > 0 ? round(net / r.paidCount) : 0, freeClaims: r.freeClaims as number };
+}
+
+/** Start of the Pakistan (UTC+5, no DST) calendar day that contains `d`. */
+export function pktDayStart(d: Date): Date {
+  const PKT = 5 * 3600 * 1000;
+  const shifted = new Date(d.getTime() + PKT);
+  return new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - PKT);
+}
+
+/**
  * ONE definition of customers for every seller metric (dashboard, Customers page, Analytics):
  * unique buyers = distinct users with a non-cancelled order in scope within [from, to];
  * repeat/returning = those buyers with >= 2 such orders in the same period; new = the rest.
