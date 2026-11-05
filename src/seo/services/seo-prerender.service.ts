@@ -42,6 +42,7 @@ export const STATIC_PAGES: Record<string, { path: string; title: string; h1: str
   'terms-of-service': { path: '/terms-of-service', title: 'Terms of Service | Edudeen', h1: 'Terms of Service', description: 'The terms that apply when you buy or sell on Edudeen.', intro: 'The terms that apply when you buy or sell on Edudeen.' },
   'cookie-policy': { path: '/cookie-policy', title: 'Cookie Policy | Edudeen', h1: 'Cookie Policy', description: 'How Edudeen uses cookies and similar technologies.', intro: 'How Edudeen uses cookies and similar technologies.' },
   returns: { path: '/returns', title: 'Returns policy | Edudeen', h1: 'Returns policy', description: 'When you can ask for a refund on Edudeen digital downloads and physical products.', intro: 'When you can ask for a refund on Edudeen digital downloads and physical products.' },
+  sitemap: { path: '/sitemap', title: 'Sitemap | Edudeen', h1: 'Sitemap', description: 'Every page on Edudeen in one place: shop by class and subject, courses, free resources, help, policies and your account.', intro: 'Every page on Edudeen in one place. Pick a class or a subject to start shopping.' },
 };
 
 /**
@@ -196,6 +197,30 @@ ${this.faqHtml(faqs)}`;
     return this.cards({ _id: { $in: ids } }, { purchaseCount: -1 }, limit);
   }
 
+  /** Crawler body of the HTML sitemap page: classes, the nested active category tree, and the fixed site pages (same links as the web /sitemap page). */
+  private async sitemapHtml(): Promise<string> {
+    const all: any[] = await this.db.repositories.categoryModel.find({ status: 'active', isDelete: false }).select('name slug parentId sortOrder').sort({ sortOrder: 1, name: 1 }).lean();
+    const kids = new Map<string, any[]>();
+    for (const c of all) {
+      if (!c.slug) continue;
+      const key = c.parentId ? String(c.parentId) : '';
+      (kids.get(key) ?? kids.set(key, []).get(key)!).push(c);
+    }
+    const branch = (parent: string, depth: number): string => {
+      const list = depth > 4 ? [] : kids.get(parent) ?? [];
+      return list.length ? `<ul>${list.map((c) => `<li><a href="${ORIGIN}/c/${esc(c.slug)}">${esc(c.name)}</a>${branch(String(c._id), depth + 1)}</li>`).join('')}</ul>` : '';
+    };
+    const subjects = branch('', 1);
+    const site: [string, string][] = [
+      ['/', 'Home'], ['/learn', 'Learn by grade'], ['/premium', 'Edudeen Premium'], ['/become-a-seller', 'Sell on Edudeen'],
+      ['/about', 'About'], ['/faq', 'Help and FAQ'], ['/contact-us', 'Contact us'],
+      ['/returns', 'Returns policy'], ['/privacy-policy', 'Privacy Policy'], ['/terms-of-service', 'Terms of Service'], ['/cookie-policy', 'Cookie Policy'],
+    ];
+    return `<section><h2>Shop by class</h2><ul>${CLASS_LEVELS.map((c) => `<li><a href="${ORIGIN}/browse/${esc(c.value)}">${esc(c.label)}</a></li>`).join('')}</ul></section>`
+      + (subjects ? `<section><h2>Shop by subject</h2>${subjects}</section>` : '')
+      + `<section><h2>Edudeen</h2><ul>${site.map(([p, l]) => `<li><a href="${ORIGIN}${p}">${esc(l)}</a></li>`).join('')}</ul></section>`;
+  }
+
   async page(slug: string): Promise<PrerenderPage> {
     const def = STATIC_PAGES[slug];
     if (!def) throw new NotFoundException('Unknown page.');
@@ -215,6 +240,8 @@ ${this.faqHtml(faqs)}`;
     } else if (slug === 'learn' || slug === 'become-a-seller' || slug === 'premium') {
       const cats = slug === 'learn' ? await this.rootCategories() : [];
       extra = cats.length ? `<h2>Browse by subject</h2><ul>${cats.map((c) => `<li><a href="${ORIGIN}/c/${esc(c.slug)}">${esc(c.name)}</a></li>`).join('')}</ul>` : '';
+    } else if (slug === 'sitemap') {
+      extra = await this.sitemapHtml();
     } else if (hc.legalPages?.[slug]?.text) {
       extra = String(hc.legalPages[slug].text).split(/\r?\n/).filter((l) => l.trim()).map((l) => (l.startsWith('## ') ? `<h2>${esc(l.slice(3))}</h2>` : `<p>${esc(l)}</p>`)).join('');
     }
