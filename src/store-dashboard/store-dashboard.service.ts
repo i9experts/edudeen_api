@@ -1,4 +1,8 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import type { Model } from 'mongoose';
+import { ProductQuestion, ProductQuestionDocument } from '../classroom/schemas/product-question.schema';
+import { computeActionItems } from './action-items.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { AnalyticsService } from 'src/analytics/analytics.service';
 import { hasDirectPayment } from 'src/common/direct-payment.util';
@@ -17,6 +21,7 @@ export class StoreDashboardService {
   constructor(
     private readonly db: DatabaseService,
     private readonly analytics: AnalyticsService,
+    @InjectModel(ProductQuestion.name) private readonly questionModel: Model<ProductQuestionDocument>,
   ) {}
 
   async getSummary(sellerId: string, storeId: string) {
@@ -83,9 +88,23 @@ export class StoreDashboardService {
       activeShippingZones: zoneCount,
     });
 
+    // "Action required" counts (read-only; each equals its target page's filtered list). Never breaks the summary.
+    const actionItems = await computeActionItems(
+      {
+        orderModel: this.db.repositories.orderModel,
+        conversationModel: this.db.repositories.conversationModel,
+        questionModel: this.questionModel,
+        productModel,
+      },
+      storeId,
+      sellerId,
+      !(payoutCount > 0 || hasDirectPayment(store.directPayment)),
+    ).catch(() => null);
+
     return {
       success: true,
       data: {
+        actionItems,
         overview: (overviewRes as any).data,
         revenueSeries: (revenueRes as any).data?.series ?? [],
         today: (todayRes as any).data,

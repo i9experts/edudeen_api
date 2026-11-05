@@ -9,6 +9,7 @@ import { Readable } from 'stream';
 import { isValidObjectId } from 'mongoose';
 import { isVerifiedPurchaseLine } from 'src/rating/verified-purchase.util';
 import { DatabaseService } from 'src/database/databaseservice';
+import { parseOrderAction, sellerOrdersActionFilter } from 'src/store-dashboard/action-items.util';
 import { UploadService } from 'src/upload/upload.service';
 import { ZIP_MAX_FILE_BYTES, ZIP_MAX_TOTAL_BYTES, buildZipStream, uniqueZipEntryNames, zipDownloadName } from './download-zip.util';
 import { JwtService } from '@nestjs/jwt';
@@ -431,6 +432,12 @@ export class OrdersService {
     }
     if (query.status && query.status !== 'all') {
       matchFilter['sellerOrders.status'] = query.status;
+    }
+    // ?action=toship|overdue — the dashboard "Action required" lists (same predicate as its counts).
+    const actionKind = parseOrderAction(query.action);
+    if (actionKind) {
+      const { $and } = sellerOrdersActionFilter(storeIds, actionKind);
+      matchFilter.$and = $and;
     }
     if (query.time && query.time !== 'all') {
       const now = new Date();

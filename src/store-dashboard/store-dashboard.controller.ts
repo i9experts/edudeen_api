@@ -1,4 +1,5 @@
 ﻿import { Controller, Get, Param, Req, UseGuards } from '@nestjs/common';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -12,7 +13,7 @@ export class StoreDashboardController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Get(':storeId/dashboard-summary')
-  getSummary(@Req() req: any, @Param('storeId') storeId: string) {
+  getSummary(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string) {
     return this.service.getSummary(req.user.userId, storeId);
   }
 }
