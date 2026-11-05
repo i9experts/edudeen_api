@@ -486,7 +486,8 @@ export class CoursesService {
           _id: { u: '$userId', p: '$sellerOrders.items.productId' },
           firstAt: { $min: when }, lastAt: { $max: when },
           downloads: { $sum: { $ifNull: ['$sellerOrders.items.downloadCount', 0] } },
-          free: { $max: { $cond: [{ $eq: ['$isFreeClaim', true] }, 1, 0] } },
+          // Free only when EVERY purchase of this product by this buyer was a free claim (a paid purchase makes it Paid).
+          free: { $min: { $cond: [{ $eq: ['$isFreeClaim', true] }, 1, 0] } },
         },
       },
       { $sort: { firstAt: -1, '_id.u': 1, '_id.p': 1 } },
