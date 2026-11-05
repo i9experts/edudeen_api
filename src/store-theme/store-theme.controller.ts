@@ -9,6 +9,8 @@ import { UpdateThemeDto } from './dto/update-theme.dto';
 import { UpdateHeaderDto } from './dto/update-header.dto';
 import { UpdateFooterDto } from './dto/update-footer.dto';
 import { UpdateIdentityBannerDto } from './dto/update-identity-banner.dto';
+import { UpdateStorefrontDto } from './dto/update-storefront.dto';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 
 @ApiTags('Store Theme')
 @ApiBearerAuth()
@@ -51,6 +53,11 @@ export class StoreThemeController {
   @Patch(':storeId/footer')
   updateFooter(@Req() req: any, @Param('storeId') storeId: string, @Body() dto: UpdateFooterDto) {
     return this.storeThemeService.updateFooter(storeId, req.user.userId, dto);
+  }
+
+  @Patch(':storeId/storefront')
+  updateStorefront(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Body() dto: UpdateStorefrontDto) {
+    return this.storeThemeService.updateStorefront(storeId, req.user.userId, dto);
   }
 
   @Patch(':storeId/identity-banner')

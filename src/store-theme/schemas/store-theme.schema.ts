@@ -144,6 +144,20 @@ export class IdentityBanner {
 }
 export const IdentityBannerSchema = SchemaFactory.createForClass(IdentityBanner);
 
+// Highlight rows above "All products" on the buyer store page. Lives in the
+// same draft/live split as the rest of the theme (NOT Store.featuredRank, which
+// is the admin's "Featured store" pin, and not the legacy Store.pinnedProductIds).
+@Schema({ _id: false })
+export class StorefrontHighlights {
+  // Seller-picked, in display order, max 8 (validated in StoreThemeService.updateStorefront).
+  @Prop({ type: [String], default: [] }) featuredProductIds: string[];
+  // Latest 8 published products.
+  @Prop({ type: Boolean, default: false }) showNewArrivals: boolean;
+  // Top 8 by Product.purchaseCount.
+  @Prop({ type: Boolean, default: false }) showBestSellers: boolean;
+}
+export const StorefrontHighlightsSchema = SchemaFactory.createForClass(StorefrontHighlights);
+
 // The draft/live split (Phase 2 of the Store Builder plan) — mirrors the
 // `StoreTheme` root shape exactly (theme/header/footer/identityBanner +
 // baseThemeId) so every seller edit lands here first and only reaches the
@@ -165,6 +179,9 @@ export class StoreThemeDraft {
 
   @Prop({ type: String, default: null })
   baseThemeId: string | null;
+
+  @Prop({ type: StorefrontHighlightsSchema, default: () => ({}) })
+  storefront: StorefrontHighlights;
 }
 export const StoreThemeDraftSchema = SchemaFactory.createForClass(StoreThemeDraft);
 
@@ -210,6 +227,10 @@ export class StoreTheme {
   // who's only ever used the manual controls).
   @Prop({ type: String, default: null })
   baseThemeId: string | null;
+
+  // LIVE highlight rows (published copy; the draft lives in `draft.storefront`).
+  @Prop({ type: StorefrontHighlightsSchema, default: () => ({}) })
+  storefront: StorefrontHighlights;
 
   // Defaults to a copy of the live root fields at read time for any store
   // that predates this field (`ensureDefaultTheme`), never left empty — see

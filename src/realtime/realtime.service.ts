@@ -45,7 +45,7 @@ const ALIASES: Record<string, string[]> = {
  * Everything else is private and only goes to the rooms it concerns (the admin room, the user who did it,
  * and the stores / buyers involved), so a busy platform does not wake every browser for every order.
  */
-const PUBLIC_TOPICS = new Set(['catalog', 'products', 'config', 'banners', 'spotlight', 'home-cards', 'campaigns', 'categories', 'reviews', 'plans', 'bundles', 'announcements', 'faqs', 'learning-paths']);
+const PUBLIC_TOPICS = new Set(['catalog', 'products', 'config', 'banners', 'spotlight', 'home-cards', 'campaigns', 'categories', 'reviews', 'plans', 'bundles', 'announcements', 'faqs', 'learning-paths', 'storefront']);
 
 /** Everything a signed-in user's private screens may show; sent to a user when they receive a notification. */
 export const PRIVATE_TOPICS = [

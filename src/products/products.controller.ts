@@ -215,6 +215,27 @@ export class productController {
     return this.ProductsService.getPinnedProducts(storeId, req.user?.userId ?? null);
   }
 
+  /** Published highlight rows (Featured / New arrivals / Best sellers) — never the seller's draft. */
+  @UseGuards(OptionalJwtAuthGuard)
+  @Get('store/:storeId/storefront-sections')
+  async getStorefrontSections(@Req() req: any, @Param('storeId') storeId: string) {
+    return this.ProductsService.getStorefrontSections(storeId, req.user?.userId ?? null);
+  }
+
+  /** Seller-only preview of unsaved highlights, scoped to the seller's own store. */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Get('store/:storeId/storefront-sections/preview')
+  async previewStorefrontSections(
+    @Req() req: any,
+    @Param('storeId') storeId: string,
+    @Query('ids') ids?: string,
+    @Query('newArrivals') newArrivals?: string,
+    @Query('bestSellers') bestSellers?: string,
+  ) {
+    return this.ProductsService.getStorefrontPreview(storeId, req.user.userId, { ids, newArrivals, bestSellers });
+  }
+
   @UseGuards(OptionalJwtAuthGuard)
   @Get('store/:storeId/new-arrivals')
   async getNewArrivals(@Req() req: any, @Param('storeId') storeId: string, @Query('limit') limitQuery?: string) {

@@ -9,6 +9,9 @@ import { UpdateThemeDto } from './dto/update-theme.dto';
 import { UpdateHeaderDto } from './dto/update-header.dto';
 import { UpdateFooterDto } from './dto/update-footer.dto';
 import { UpdateIdentityBannerDto } from './dto/update-identity-banner.dto';
+import { UpdateStorefrontDto } from './dto/update-storefront.dto';
+import { assertFeaturedOwned, normalizeFeaturedIds, publishedHighlights } from './featured-products.util';
+import { RealtimeService } from '../realtime/realtime.service';
 
 const HEADER_ALLOWED_BLOCK_TYPES = ['nav_link'];
 const FOOTER_ALLOWED_BLOCK_TYPES = ['footer_column', 'social_link', 'copyright_text'];
@@ -73,6 +76,7 @@ export class StoreThemeService {
               footer: '$footer',
               identityBanner: '$identityBanner',
               baseThemeId: '$baseThemeId',
+              storefront: { $ifNull: ['$storefront', {}] },
             },
           },
         },
@@ -95,6 +99,7 @@ export class StoreThemeService {
     await verifyStoreOwnershipStrict(this.storeModel, storeId, sellerId);
     const doc = await this.ensureDefaultTheme(storeId);
     const draft = doc!.draft as StoreThemeDraft;
+    const { draft: storefront, published: publishedStorefront } = await this.highlightsState(storeId);
     return {
       success: true,
       data: {
@@ -103,9 +108,44 @@ export class StoreThemeService {
         footer: draft.footer,
         identityBanner: draft.identityBanner,
         baseThemeId: draft.baseThemeId,
+        storefront,
+        publishedStorefront,
         lastPublishedAt: doc!.lastPublishedAt,
       },
     };
+  }
+
+  /**
+   * Highlights (featured / new arrivals / best sellers): the seller's draft and what buyers see now. Read raw (lean) because a
+   * hydrated doc shows schema defaults for fields a store never had; an old store with no published block shows its legacy
+   * pinned list, and its draft starts from that same list.
+   */
+  private async highlightsState(storeId: string) {
+    const raw: any = await this.storeThemeModel.findOne({ storeId }).select('storefront draft.storefront').lean();
+    const store: any = await this.storeModel.findById(storeId).select('pinnedProductIds').lean();
+    const published = publishedHighlights(raw?.storefront, store?.pinnedProductIds);
+    const draft = raw?.draft?.storefront ? publishedHighlights(raw.draft.storefront, null) : published;
+    return { draft, published };
+  }
+
+  /** The seller's highlights draft: featured product ids (own, active, max 8, in order) + the two auto-row switches. */
+  async updateStorefront(storeId: string, sellerId: string, dto: UpdateStorefrontDto) {
+    await verifyStoreOwnershipStrict(this.storeModel, storeId, sellerId);
+    await this.ensureDefaultTheme(storeId);
+    const next = { ...(await this.highlightsState(storeId)).draft };
+    if (dto.featuredProductIds !== undefined) {
+      const ids = normalizeFeaturedIds(dto.featuredProductIds);
+      if (ids.length) {
+        const rows = await this.databaseService.repositories.productModel
+          .find({ _id: { $in: ids } }).select('_id storeId status isDelete isTest').lean();
+        assertFeaturedOwned(ids, rows as any[], storeId);
+      }
+      next.featuredProductIds = ids;
+    }
+    if (dto.showNewArrivals !== undefined) next.showNewArrivals = dto.showNewArrivals;
+    if (dto.showBestSellers !== undefined) next.showBestSellers = dto.showBestSellers;
+    await this.storeThemeModel.updateOne({ storeId }, { $set: { 'draft.storefront': next } });
+    return { success: true, message: 'Draft saved', data: { storefront: next } };
   }
 
   async getPublic(storeId: string) {
@@ -129,12 +169,17 @@ export class StoreThemeService {
             footer: '$draft.footer',
             identityBanner: '$draft.identityBanner',
             baseThemeId: '$draft.baseThemeId',
+            // Only when the seller has a highlights draft; an old store that never edited it keeps its legacy pinned row.
+            storefront: { $ifNull: ['$draft.storefront', '$storefront'] },
             lastPublishedAt: '$$NOW',
           },
         },
       ],
       { returnDocument: 'after', updatePipeline: true },
     );
+    // Open storefronts re-read the highlight rows (no data in the message, only the topic).
+    RealtimeService.instance?.emitTo({ stores: [storeId] }, ['store']);
+    RealtimeService.instance?.emit('storefront');
     return { success: true, message: 'Theme published', data: updated };
   }
 
@@ -153,6 +198,7 @@ export class StoreThemeService {
               footer: '$footer',
               identityBanner: '$identityBanner',
               baseThemeId: '$baseThemeId',
+              storefront: { $ifNull: ['$storefront', '$$REMOVE'] },
             },
           },
         },

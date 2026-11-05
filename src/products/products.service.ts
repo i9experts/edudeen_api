@@ -26,6 +26,8 @@ import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
 import { fetchPdfPageCount, isPdfName } from './pdf-page-count.util';
 import { sanitizeDigitalForPublicView } from './product-public-view.util';
 import { filterValidRailProducts } from './home-rail.util';
+import { publishedHighlights } from 'src/store-theme/featured-products.util';
+import { verifyStoreOwnershipStrict } from 'src/common/store-ownership.util';
 import { classFilter, classIndex } from './class-levels';
 import { assertPriceRules, assertDescriptionRule, assertStockRule, cleanShippingWeight } from './price-rules.util';
 import { splitEditForReview, overlayPendingEdit } from './product-edit-review.util';
@@ -1294,6 +1296,56 @@ export class ProductsService {
   async getTrendingProducts(storeId: string, limit: number = 12, customerId?: string | null) {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     return this.getTopSellingProducts(storeId, sevenDaysAgo, limit, customerId);
+  }
+
+  /**
+   * The highlight rows on a store page: Featured (seller-picked, in order), New arrivals (latest published) and
+   * Best sellers (top by `purchaseCount`). Buyers get the PUBLISHED config; the seller's preview passes its own
+   * unsaved draft (`preview`). New arrivals / best sellers return up to 16 candidates so the web can drop products
+   * already shown in an earlier row (dedupeInOrder) and still fill 8.
+   */
+  async getStorefrontSections(
+    storeId: string,
+    customerId?: string | null,
+    preview?: { featuredProductIds: string[]; showNewArrivals: boolean; showBestSellers: boolean },
+  ) {
+    const empty = { success: true, data: { featured: [], newArrivals: [], bestSellers: [], config: { showNewArrivals: false, showBestSellers: false } } };
+    if (!(await this.isStoreLive(storeId))) return empty;
+    const { storeModel, storeThemeModel, productModel } = this.databaseService.repositories as any;
+    let cfg = preview;
+    if (!cfg) {
+      const [theme, store]: any[] = await Promise.all([
+        storeThemeModel.findOne({ storeId }).select('storefront').lean(),
+        storeModel.findById(storeId).select('pinnedProductIds').lean(),
+      ]);
+      cfg = publishedHighlights(theme?.storefront, store?.pinnedProductIds);
+    }
+    const featured = cfg.featuredProductIds.length
+      ? filterValidRailProducts(((await this.getShapedProductsByIds(cfg.featuredProductIds.slice(0, 8), customerId)) as any[]).filter((p) => String(p.storeId) === String(storeId)))
+      : [];
+    const newArrivals = cfg.showNewArrivals
+      ? filterValidRailProducts(((await this.getNewArrivals(storeId, 16, customerId)).data.products as any[]))
+      : [];
+    let bestSellers: any[] = [];
+    if (cfg.showBestSellers) {
+      const rows: any[] = await productModel
+        .find({ storeId, status: 'active', isDelete: false, isTest: { $ne: true }, purchaseCount: { $gte: 1 } })
+        .sort({ purchaseCount: -1, averageRating: -1, _id: -1 }).limit(16).lean();
+      bestSellers = filterValidRailProducts(await this.attachVariantsAndPricing(rows, customerId));
+    }
+    return { success: true, data: { featured, newArrivals, bestSellers, config: { showNewArrivals: cfg.showNewArrivals, showBestSellers: cfg.showBestSellers } } };
+  }
+
+  /** Seller preview of the unsaved highlights (own store only): same rows buyers will get after Publish. */
+  async getStorefrontPreview(storeId: string, sellerId: string, body: { ids?: string; newArrivals?: string; bestSellers?: string }) {
+    await verifyStoreOwnershipStrict(this.databaseService.repositories.storeModel, storeId, sellerId);
+    const ids = (body.ids ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    const clean = [...new Set(ids.filter((id) => isValidObjectId(id)))].slice(0, 8);
+    return this.getStorefrontSections(storeId, null, {
+      featuredProductIds: clean,
+      showNewArrivals: body.newArrivals === '1',
+      showBestSellers: body.bestSellers === '1',
+    });
   }
 
   async getProductById(idOrSlug: string, customerId?: string | null, viewerRole?: string | null) {
