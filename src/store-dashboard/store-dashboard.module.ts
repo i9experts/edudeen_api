@@ -6,6 +6,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ProductQuestion, ProductQuestionSchema } from '../classroom/schemas/product-question.schema';
 import { StoreDashboardController } from './store-dashboard.controller';
 import { StoreDashboardService } from './store-dashboard.service';
+import { StoreHealthService } from './store-health.service';
 
 @Module({
   imports: [
@@ -13,6 +14,6 @@ import { StoreDashboardService } from './store-dashboard.service';
     MongooseModule.forFeature([{ name: ProductQuestion.name, schema: ProductQuestionSchema }]),
   ],
   controllers: [StoreDashboardController],
-  providers: [StoreDashboardService],
+  providers: [StoreDashboardService, StoreHealthService],
 })
 export class StoreDashboardModule {}

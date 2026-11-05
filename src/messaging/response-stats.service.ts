@@ -4,11 +4,9 @@ import { isValidObjectId } from 'mongoose';
 import { DatabaseService } from '../database/databaseservice';
 import { RedisService } from '../redis/redis.service';
 import {
-  buildDispatchRate, buildResponseRate, buildResponseStats, firstInquiry, RESPONSE_WINDOW_DAYS, TRUST_WINDOW_DAYS,
+  buildDispatchRate, buildResponseRate, buildResponseStats, firstInquiry, RESPONSE_WINDOW_DAYS, toDispatchPackage, TRUST_WINDOW_DAYS,
   type DispatchPackage, type FirstInquiry,
 } from './response-stats.util';
-
-const SHIPPED_LIKE = new Set(['shipped', 'delivered', 'completed']);
 
 /**
  * Hourly store trust numbers, cached on the Store doc (nothing is computed per page view):
@@ -115,15 +113,11 @@ export class ResponseStatsService {
     const byStore = new Map<string, DispatchPackage[]>();
     for (const r of rows) {
       if (!r.storeId) continue;
-      const status = String(r.status ?? '');
       // Shipped-like but no shipped time (old data): unknown, leave it out rather than guess.
-      if (!r.shippedAt && SHIPPED_LIKE.has(status)) continue;
+      const pkg = toDispatchPackage(r);
+      if (!pkg) continue;
       const list = byStore.get(String(r.storeId)) ?? [];
-      list.push({
-        baseAt: r.paymentType === 'cash_on_delivery' ? r.createdAt : r.paidAt ?? null,
-        shippedAt: r.shippedAt ?? null,
-        cancelled: status === 'cancelled' || status === 'refunded',
-      });
+      list.push(pkg);
       byStore.set(String(r.storeId), list);
     }
     return byStore;

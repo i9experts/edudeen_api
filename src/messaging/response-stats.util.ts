@@ -80,6 +80,25 @@ export interface DispatchPackage {
   cancelled: boolean;
 }
 
+const SHIPPED_LIKE = new Set(['shipped', 'delivered', 'completed']);
+
+/**
+ * One physical package row -> DispatchPackage, or null when it must be left out (shipped-like but no shipped
+ * time = old data, unknown). Payment moment = paidAt, COD = order creation. Shared by the hourly trust job
+ * and the seller Store Health page so both use the identical rule.
+ */
+export function toDispatchPackage(r: {
+  status?: string | null; shippedAt?: Date | string | null; paymentType?: string | null; paidAt?: Date | string | null; createdAt?: Date | string | null;
+}): DispatchPackage | null {
+  const status = String(r.status ?? '');
+  if (!r.shippedAt && SHIPPED_LIKE.has(status)) return null;
+  return {
+    baseAt: r.paymentType === 'cash_on_delivery' ? r.createdAt ?? null : r.paidAt ?? null,
+    shippedAt: r.shippedAt ?? null,
+    cancelled: status === 'cancelled' || status === 'refunded',
+  };
+}
+
 /**
  * Dispatch on time = share of physical packages shipped within 48 h of payment. A package not shipped yet only
  * counts as late once 48 h have passed; cancelled/refunded and unpaid packages are left out. Fewer than
