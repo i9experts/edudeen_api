@@ -592,6 +592,8 @@ export class OrdersService {
             email: (user as any)?.email || '',
           },
           product: firstItem?.name || '',
+          // Number of lines in this store's package (web shows "×N" when > 1).
+          itemCount: so.items?.length ?? 0,
           type: so.fulfillmentType,
           // Who ships this sub-order, so the seller app can hide status controls on Edudeen-fulfilled
           // rows instead of discovering it from a 403 (missing = seller-fulfilled).
