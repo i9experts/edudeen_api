@@ -153,6 +153,19 @@ export class OrdersController {
     return this.ordersService.cancelOrder(userId, orderId, body);
   }
 
+  /** Seller (own store's items, body.storeId) or admin cancels items that have not shipped. Refund path is shared with the buyer cancel. */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller', 'admin')
+  @Post('seller-cancel/:orderId')
+  async sellerCancelOrder(
+    @Req() req: any,
+    @Param('orderId', ParseObjectIdPipe) orderId: string,
+    @Body() body: any,
+  ) {
+    const { userId, role } = req.user;
+    return this.ordersService.cancelOrder(userId, orderId, body, { role: role === 'admin' ? 'admin' : 'seller' });
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller', 'admin')
   @Get('returns')

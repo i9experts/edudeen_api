@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
-import { buildStoreHealth, parseHealthRange } from './store-health.util';
+import { buildStoreHealth, countCancellations, parseHealthRange } from './store-health.util';
 import { StoreHealthService } from './store-health.service';
 
 const NOW = new Date('2026-11-05T12:00:00Z');
@@ -12,6 +12,34 @@ const pkgs = (onTime: number, late: number) => [
 ];
 const inq = (n: number, replyMinutes: number | null) => Array.from({ length: n }, () => ({ inquiryAt: NOW.getTime() - 100 * H, replyMinutes }));
 const base = { range: 30 as const, now: NOW, inquiries: [], packages: [], deliveredItems: 0, returnedItems: 0, rating: { average: 0, count: 0 }, sentBack: 0 };
+
+describe('seller cancellation metric', () => {
+  const p = (n: number, status: string, cancelledBy: string | null, eligible = true) =>
+    Array.from({ length: n }, () => ({ eligible, status, cancelledBy }));
+
+  it('counts only seller cancels over eligible packages', () => {
+    const c = countCancellations([...p(8, 'completed', null), ...p(1, 'cancelled', 'seller'), ...p(1, 'cancelled', 'buyer'), ...p(3, 'cancelled', 'system', false)]);
+    expect(c).toEqual({ eligible: 10, bySeller: 1 });
+    const r = buildStoreHealth({ ...base, cancellation: c });
+    expect(metric(r, 'cancellation').value).toBe(10);
+    expect(metric(r, 'cancellation').status).toBe('attention');
+    expect(metric(r, 'cancellation').countedFrom).toBeTruthy();
+  });
+
+  it('buyer and system cancels never hurt the seller; old docs without the field are not seller cancels', () => {
+    const c = countCancellations([...p(8, 'cancelled', 'buyer'), ...p(1, 'cancelled', 'system'), ...p(1, 'cancelled', null)]);
+    expect(c.bySeller).toBe(0);
+    const m = metric(buildStoreHealth({ ...base, cancellation: c }), 'cancellation');
+    expect(m.value).toBe(0);
+    expect(m.status).toBe('good');
+  });
+
+  it('below 10 eligible packages shows no number', () => {
+    const m = metric(buildStoreHealth({ ...base, cancellation: countCancellations(p(9, 'cancelled', 'seller')) }), 'cancellation');
+    expect(m.value).toBeNull();
+    expect(m.status).toBe('insufficient');
+  });
+});
 
 describe('store health metric math', () => {
   it('range parsing accepts only 30 or 90', () => {

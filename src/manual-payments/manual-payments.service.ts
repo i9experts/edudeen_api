@@ -1,4 +1,4 @@
-/* eslint-disable prettier/prettier */
+/* eslint-disable prettier/prettier */
 import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { DatabaseService } from 'src/database/databaseservice';
@@ -444,11 +444,12 @@ export class ManualPaymentsService {
     const set: Record<string, any> = { orderStatus: 'cancelled' };
     const toRestock: { variantId: string; quantity: number }[] = [];
     order.sellerOrders.forEach((so: any, si: number) => {
-      if (so.status !== 'cancelled') { set[`sellerOrders.${si}.status`] = 'cancelled'; set[`sellerOrders.${si}.cancelledAt`] = now; set[`sellerOrders.${si}.cancelReason`] = reason; }
+      if (so.status !== 'cancelled') { set[`sellerOrders.${si}.status`] = 'cancelled'; set[`sellerOrders.${si}.cancelledAt`] = now; set[`sellerOrders.${si}.cancelledBy`] = 'system'; set[`sellerOrders.${si}.cancelReason`] = reason; }
       so.items.forEach((item: any, ii: number) => {
         if (item.status === 'cancelled') return;
         set[`sellerOrders.${si}.items.${ii}.status`] = 'cancelled';
         set[`sellerOrders.${si}.items.${ii}.cancelledAt`] = now;
+        set[`sellerOrders.${si}.items.${ii}.cancelledBy`] = 'system';
         set[`sellerOrders.${si}.items.${ii}.cancelReason`] = reason;
         if (item.type === 'physical' && item.variantId) toRestock.push({ variantId: item.variantId, quantity: item.quantity });
       });

@@ -2,7 +2,7 @@ import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { RedisService } from '../redis/redis.service';
 import { firstInquiry, toDispatchPackage, type DispatchPackage, type FirstInquiry } from '../messaging/response-stats.util';
-import { buildStoreHealth, type HealthRange } from './store-health.util';
+import { buildStoreHealth, cancellationTrackingStart, countCancellations, type HealthRange } from './store-health.util';
 
 const CACHE_SECONDS = 15 * 60;
 const DAY = 86_400_000;
@@ -26,9 +26,10 @@ export class StoreHealthService {
     } catch { /* cache is optional */ }
 
     const since = new Date(now.getTime() - range * DAY);
-    const [inquiries, orderStats, sentBack] = await Promise.all([
+    const [inquiries, orderStats, cancellation, sentBack] = await Promise.all([
       this.collectInquiries(storeId, since),
       this.collectOrderStats(storeId, since),
+      this.collectCancellations(storeId, since),
       this.db.repositories.productModel.countDocuments({ storeId, sellerId, isDelete: false, status: 'rejected', reviewedAt: { $gte: since } }),
     ]);
 
@@ -40,6 +41,7 @@ export class StoreHealthService {
         returnedItems: orderStats.returnedItems,
         rating: { average: Number(store.averageRating) || 0, count: Number(store.reviewCount) || 0 },
         sentBack,
+        cancellation,
       }),
       generatedAt: now.toISOString(),
     };
@@ -65,6 +67,25 @@ export class StoreHealthService {
       }
     }
     return out;
+  }
+
+  /** Seller cancellations: only orders created since `cancelledBy` began to be written (older cancels have no author). */
+  private async collectCancellations(storeId: string, since: Date) {
+    const { orderModel } = this.db.repositories;
+    const from = new Date(Math.max(since.getTime(), cancellationTrackingStart().getTime()));
+    const rows: any[] = await orderModel.aggregate([
+      { $match: { 'sellerOrders.storeId': storeId, createdAt: { $gte: from }, isFreeClaim: { $ne: true } } },
+      { $unwind: '$sellerOrders' },
+      { $match: { 'sellerOrders.storeId': storeId, 'sellerOrders.items.type': 'physical' } },
+      {
+        $project: {
+          _id: 0,
+          eligible: { $or: [{ $eq: ['$paymentType', 'cash_on_delivery'] }, { $ne: [{ $ifNull: ['$paidAt', null] }, null] }, { $eq: ['$isPaid', true] }] },
+          status: '$sellerOrders.status', cancelledBy: { $ifNull: ['$sellerOrders.cancelledBy', null] },
+        },
+      },
+    ]).allowDiskUse(true);
+    return countCancellations(rows);
   }
 
   /** This store's physical packages in the window (free claims never count) + return counts on delivered ones. */

@@ -137,6 +137,10 @@ export class OrderItem {
   @Prop({ type: Date, default: null })
   cancelledAt: Date | null;
 
+  /** Who cancelled (set only where a cancel path exists; old docs have none and are left out of seller metrics). */
+  @Prop({ type: String, enum: ['buyer', 'seller', 'admin', 'system', null], default: null })
+  cancelledBy: 'buyer' | 'seller' | 'admin' | 'system' | null;
+
   @Prop({ type: String, default: null })
   cancelReason: string | null;
 
@@ -348,6 +352,9 @@ export class SellerOrder {
 
   @Prop({ type: Date, default: null })
   cancelledAt: Date | null;
+
+  @Prop({ type: String, enum: ['buyer', 'seller', 'admin', 'system', null], default: null })
+  cancelledBy: 'buyer' | 'seller' | 'admin' | 'system' | null;
 
   @Prop({ type: String, default: null })
   cancelReason: string | null;

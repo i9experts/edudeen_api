@@ -1114,19 +1114,34 @@ export class OrdersService {
     return { success: true, message: allPaid ? 'Order marked as paid' : 'Package marked as paid', creditStatus, orderPaid: allPaid };
   }
 
-  async cancelOrder(userId: string, orderId: string, body: any) {
-    const { reason, itemIds } = body;
-    if (!reason) throw new BadRequestException('reason is required');
+  /**
+   * Cancels items of an order that has not shipped yet. Default actor = the buyer (own order, any items).
+   * `actor` seller = only THEIR store's items (body.storeId, ownership checked); `actor` admin = any items.
+   * Refund / stock / gift-card handling is the same single code path for all three.
+   */
+  async cancelOrder(userId: string, orderId: string, body: any, actor?: { role: 'seller' | 'admin' }) {
+    const { reason, itemIds } = body ?? {};
+    if (!reason || typeof reason !== 'string' || !reason.trim()) throw new BadRequestException('reason is required');
+    const cancelledBy: 'buyer' | 'seller' | 'admin' = actor?.role ?? 'buyer';
 
-    const { orderModel, productVariantModel } =
+    const { orderModel, productVariantModel, storeModel } =
       this.databaseService.repositories;
 
-    const order = await orderModel.findOne({
-      _id: orderId,
-      userId,
-      isDelete: false,
-    });
+    let ownStoreId: string | null = null;
+    if (actor?.role === 'seller') {
+      ownStoreId = typeof body?.storeId === 'string' ? body.storeId : null;
+      if (!ownStoreId) throw new BadRequestException('storeId is required');
+      const store = await storeModel.findOne({ _id: ownStoreId, sellerId: userId, isDelete: false }).select('_id').lean();
+      if (!store) throw new ForbiddenException('Store not found or unauthorized');
+    }
+
+    const order = await orderModel.findOne(
+      actor ? { _id: orderId, isDelete: false } : { _id: orderId, userId, isDelete: false },
+    );
     if (!order) throw new NotFoundException('Order not found');
+    if (ownStoreId && !order.sellerOrders.some((so: any) => String(so.storeId) === ownStoreId)) {
+      throw new NotFoundException('Order not found');
+    }
 
     if (order.orderStatus === 'completed')
       throw new BadRequestException('Completed orders cannot be cancelled');
@@ -1139,6 +1154,7 @@ export class OrdersService {
     // flatten all items with their indices
     const allItems: { soIndex: number; itemIndex: number; item: any }[] = [];
     order.sellerOrders.forEach((so: any, soIndex: number) => {
+      if (ownStoreId && String(so.storeId) !== ownStoreId) return; // a seller only touches their own package
       so.items.forEach((item: any, itemIndex: number) => {
         allItems.push({ soIndex, itemIndex, item });
       });
@@ -1250,6 +1266,7 @@ export class OrdersService {
         'cancelled';
       updateData[`sellerOrders.${soIndex}.items.${itemIndex}.cancelledAt`] =
         now;
+      updateData[`sellerOrders.${soIndex}.items.${itemIndex}.cancelledBy`] = cancelledBy;
       updateData[`sellerOrders.${soIndex}.items.${itemIndex}.cancelReason`] =
         reason;
       if (order.isPaid) {
@@ -1278,6 +1295,7 @@ export class OrdersService {
       if (updatedStatuses.every((s: string) => s === 'cancelled')) {
         updateData[`sellerOrders.${soIndex}.status`] = 'cancelled';
         updateData[`sellerOrders.${soIndex}.cancelledAt`] = now;
+        updateData[`sellerOrders.${soIndex}.cancelledBy`] = cancelledBy;
         updateData[`sellerOrders.${soIndex}.cancelReason`] = reason;
       }
     });
@@ -1328,9 +1346,9 @@ export class OrdersService {
         storeId: order.sellerOrders[targetItems[0].soIndex].storeId,
         category: 'finance',
         action: 'manual_refund_required',
-        description: `Buyer cancelled paid bank-transfer order #${orderId} â€” refund must be sent manually`,
+        description: `${cancelledBy === 'buyer' ? 'Buyer' : cancelledBy === 'seller' ? 'Seller' : 'Admin'} cancelled paid bank-transfer order #${orderId} â€” refund must be sent manually`,
         actorId: userId,
-        actorRole: 'user',
+        actorRole: cancelledBy === 'buyer' ? 'user' : cancelledBy,
         isSecurityAlert: true,
         targetId: orderId,
         targetType: 'order',
@@ -1342,7 +1360,43 @@ export class OrdersService {
         targetItems.map(({ soIndex }) => order.sellerOrders[soIndex].sellerId),
       ),
     ];
-    affectedSellerIds.forEach((sellerOrderSellerId) => {
+    if (actor) {
+      // Seller/admin cancelled: tell the buyer (and, for an admin cancel, the store owners) + audit it.
+      this.notificationsService
+        .notify({
+          recipientId: String(order.userId),
+          recipientRole: 'user',
+          type: NOTIFICATION_TYPES.ORDER_CANCELLED,
+          title: 'Your order was cancelled',
+          body: `Order #${(order as any).orderNumber ?? orderId} was cancelled by ${cancelledBy === 'seller' ? 'the seller' : 'Edudeen'} — ${reason}`,
+          data: { orderId, link: `/account/orders/${orderId}` },
+        })
+        .catch(() => {});
+      if (cancelledBy === 'admin') {
+        affectedSellerIds.forEach((sid) => {
+          this.notificationsService
+            .notify({
+              recipientId: sid,
+              recipientRole: 'seller',
+              type: NOTIFICATION_TYPES.ORDER_CANCELLED,
+              title: 'Order cancelled by Edudeen',
+              body: `Order #${orderId} was cancelled by Edudeen — ${reason}`,
+              data: { orderId },
+            })
+            .catch(() => {});
+        });
+      }
+      await this.activityLogService.log({
+        storeId: order.sellerOrders[targetItems[0].soIndex].storeId,
+        category: 'orders',
+        action: `order_cancelled_by_${cancelledBy}`,
+        description: `${cancelledBy === 'admin' ? 'Admin' : 'Seller'} cancelled ${targetItems.length} item(s) of order #${orderId} — ${reason}`,
+        actorId: userId,
+        actorRole: cancelledBy,
+        targetId: orderId,
+        targetType: 'order',
+      } as any);
+    } else affectedSellerIds.forEach((sellerOrderSellerId) => {
       this.notificationsService
         .notify({
           recipientId: sellerOrderSellerId,

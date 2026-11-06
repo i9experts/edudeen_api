@@ -23,15 +23,47 @@ export interface HealthMetric {
   target: string;
   status: HealthStatus;
   hint: string;
+  /** ISO date the number is counted from (only metrics that began tracking late). */
+  countedFrom?: string;
 }
 
 export const HEALTH_TARGETS = {
   lateDispatchMaxPct: 10,
   returnMaxPct: 10,
+  sellerCancelMaxPct: 5,
   responseRateMinPct: 90,
   replyMaxMinutes: RESPONSE_RATE_HOURS * 60,
   ratingMin: 4,
 } as const;
+
+/**
+ * `cancelledBy` is only written on cancels made after it was introduced; older orders carry no value, so the
+ * seller-cancellation metric ignores every order created before this date (no backfill). Override with env
+ * CANCELLED_BY_TRACKING_START (YYYY-MM-DD) to match the real deploy day.
+ */
+export function cancellationTrackingStart(): Date {
+  const d = new Date(`${process.env.CANCELLED_BY_TRACKING_START || '2026-11-06'}T00:00:00+05:00`);
+  return Number.isNaN(d.getTime()) ? new Date('2026-11-06T00:00:00+05:00') : d;
+}
+
+/** One physical package row for the cancellation metric. */
+export interface CancellationPackage {
+  /** Buyer paid (order paid) or it is cash on delivery. */
+  eligible: boolean;
+  status: string;
+  cancelledBy: string | null;
+}
+
+export function countCancellations(pkgs: CancellationPackage[]) {
+  let eligible = 0;
+  let bySeller = 0;
+  for (const p of pkgs) {
+    if (!p.eligible) continue;
+    eligible++;
+    if (p.status === 'cancelled' && p.cancelledBy === 'seller') bySeller++;
+  }
+  return { eligible, bySeller };
+}
 
 export function parseHealthRange(raw: unknown): HealthRange {
   if (raw === undefined || raw === null || raw === '') return 30;
@@ -55,6 +87,8 @@ export interface HealthInput {
   rating: { average: number; count: number };
   /** Listings an admin sent back (status rejected) with a review inside the window. */
   sentBack: number;
+  /** Eligible physical packages (created since tracking began) and how many the SELLER cancelled. */
+  cancellation?: { eligible: number; bySeller: number };
 }
 
 const pctOrNull = (n: number, d: number) => (d >= TRUST_MIN_SAMPLES ? Math.round((n / d) * 100) : null);
@@ -74,7 +108,9 @@ export function buildStoreHealth(input: HealthInput) {
 
   const returnPct = pctOrNull(input.returnedItems, input.deliveredItems);
 
-  const ratingOk = input.rating.count >= TRUST_MIN_SAMPLES;
+  const cancelPct = input.cancellation ? pctOrNull(input.cancellation.bySeller, input.cancellation.eligible) : null;
+
+  const ratingOk =input.rating.count >= TRUST_MIN_SAMPLES;
 
   const st = (value: number | null, ok: boolean): HealthStatus => (value === null ? 'insufficient' : ok ? 'good' : 'attention');
   const notEnough = `Needs ${TRUST_MIN_SAMPLES} data points before a number is shown`;
@@ -89,11 +125,16 @@ export function buildStoreHealth(input: HealthInput) {
         : `Physical parcels not marked shipped within ${DISPATCH_HOURS} hours of payment (${dispatch.sample} parcels). Free claims and digital orders are not counted.`,
     },
     {
-      // Orders only record the buyer's cancel reason, never who cancelled, and sellers cannot cancel an order,
-      // so a seller-cancel rate cannot be told apart from buyer cancels yet.
-      id: 'cancellation', label: 'Seller cancellations', value: null, unit: 'percent', sample: 0,
-      target: '5% or less', status: 'unavailable',
-      hint: 'Not available yet. Orders do not record who cancelled, so your cancellations cannot be separated from buyer cancellations.',
+      // Seller cancels / eligible physical packages. Buyer and system cancels never count against the seller.
+      id: 'cancellation', label: 'Seller cancellations', value: cancelPct, unit: 'percent', sample: input.cancellation?.eligible ?? 0,
+      target: `${HEALTH_TARGETS.sellerCancelMaxPct}% or less`,
+      status: input.cancellation ? st(cancelPct, (cancelPct ?? 0) <= HEALTH_TARGETS.sellerCancelMaxPct) : 'unavailable',
+      hint: !input.cancellation
+        ? 'Not available yet.'
+        : cancelPct === null
+          ? notEnough
+          : `Paid or cash-on-delivery physical parcels you cancelled (${input.cancellation.eligible} parcels). Buyer and automatic cancellations are not counted.`,
+      countedFrom: cancellationTrackingStart().toISOString(),
     },
     {
       id: 'returns', label: 'Return rate', value: returnPct, unit: 'percent', sample: input.deliveredItems,
@@ -131,6 +172,6 @@ export function buildStoreHealth(input: HealthInput) {
     },
   ];
 
-  const evidence = dispatch.sample + rate.sample + replied.length + input.deliveredItems + input.rating.count;
+  const evidence = (input.cancellation?.eligible ?? 0) + dispatch.sample +rate.sample + replied.length + input.deliveredItems + input.rating.count;
   return { range, metrics, isNew: evidence === 0 && input.sentBack === 0, minSamples: TRUST_MIN_SAMPLES };
 }
