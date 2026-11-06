@@ -80,6 +80,43 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     return count;
   }
 
+  /** SET NX EX: true = key was created now, false = it already existed, null = Redis is down. */
+  async setNx(key: string, ttl: number): Promise<boolean | null> {
+    if (!this._isConnected) return null;
+    const res = await this.client.set(key, '1', { NX: true, EX: ttl });
+    return res !== null;
+  }
+
+  /** INCRBY that sets the TTL when the key is created. No-op when Redis is down. */
+  async incrBy(key: string, by: number, ttl: number): Promise<void> {
+    if (!this._isConnected) return;
+    const n = await this.client.incrBy(key, by);
+    if (n === by) await this.client.expire(key, ttl);
+  }
+
+  /** Keys matching a pattern (SCAN, never KEYS), capped. */
+  async scanKeys(pattern: string, max = 5000): Promise<string[]> {
+    if (!this._isConnected) return [];
+    const out: string[] = [];
+    let cursor: string = '0';
+    do {
+      const res: any = await this.client.scan(cursor, { MATCH: pattern, COUNT: 500 });
+      cursor = String(res.cursor);
+      out.push(...res.keys);
+    } while (cursor !== '0' && out.length < max);
+    return out.slice(0, max);
+  }
+
+  /** Atomic read + delete (Lua, so it also works on older Redis without GETDEL). */
+  async getDel(key: string): Promise<string | null> {
+    if (!this._isConnected) return null;
+    const v = await this.client.eval(
+      'local v = redis.call("get", KEYS[1]); if v then redis.call("del", KEYS[1]) end; return v',
+      { keys: [key] },
+    );
+    return v == null ? null : String(v);
+  }
+
   async withLock(
     lockKey: string,
     ttlMs: number,

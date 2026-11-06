@@ -1,6 +1,12 @@
 /* eslint-disable prettier/prettier */
 import { BadRequestException, Injectable, Optional } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 import { EntitlementsService } from '../platform-plans/entitlements.service';
+import { VisitDaily } from '../analytics-visits/visit-daily.schema';
+import { conversionRate, pktDateOf, pktDayStartOf } from '../analytics-visits/visit-tracking.util';
+import { toExportCsv } from '../common/csv-export.util';
+import { FREE_TO_PAID_WINDOWS, PRODUCT_TABLE_SORTS, freeToPaid, productSalesRows, productTypeOf } from './utils/product-performance.util';
 import { DatabaseService } from '../database/databaseservice';
 import { RedisService } from '../redis/redis.service';
 import { verifyStoreOwnershipOrForbidden } from '../common/store-ownership.util';
@@ -43,6 +49,7 @@ export class AnalyticsService {
     private readonly databaseService: DatabaseService,
     private readonly redis: RedisService,
     @Optional() private readonly entitlements?: EntitlementsService,
+    @Optional() @InjectModel(VisitDaily.name) private readonly visitModel?: Model<VisitDaily>,
   ) {}
 
   /** Advanced analytics (customers, product performance, traffic, payments, exports…) is a plan feature. */
@@ -573,6 +580,105 @@ export class AnalyticsService {
         },
       };
     });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // F2b. PRODUCT TABLE (views, orders, revenue, conversion, free claims) + FREE -> PAID
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /** Full table (all matching products, sorted) for ONE owned store; paging/CSV slice it. */
+  private async buildProductTable(sellerId: string, storeId: string, query: any) {
+    await this.verifyStoreOwnership(storeId, sellerId);
+    const { from, to } = resolveDateRange(query, { pkt: true });
+    const q = typeof query.q === 'string' ? query.q.trim().slice(0, 100).toLowerCase() : '';
+    const sort = (PRODUCT_TABLE_SORTS as readonly string[]).includes(query.sort) ? (query.sort as string) : 'revenue';
+
+    return this.cached(this.key('product-table', storeId, { from, to, q, sort }), async () => {
+      const fromDate = pktDateOf(from), toDate = pktDateOf(to);
+      let trackingSince: string | null = null;
+      const viewMap = new Map<string, number>();
+      if (this.visitModel) {
+        const first: any = await this.visitModel.findOne({ storeId }).sort({ pktDate: 1 }).select('pktDate').lean();
+        trackingSince = first?.pktDate ?? null;
+        const views = await this.visitModel.aggregate([
+          { $match: { storeId, productId: { $ne: '' }, pktDate: { $gte: fromDate, $lte: toDate } } },
+          { $group: { _id: '$productId', visits: { $sum: '$visits' } } },
+        ]);
+        for (const v of views as any[]) viewMap.set(v._id, v.visits);
+      }
+      const trackingFrom = trackingSince ? pktDayStartOf(trackingSince) : null;
+
+      const { rows, totalRevenue } = await productSalesRows(this.r.orderModel, from, to, { 'sellerOrders.storeId': storeId }, trackingFrom);
+      const salesMap = new Map(rows.filter((r) => r.productId).map((r) => [r.productId as string, r]));
+
+      // every live product of the store + any product that sold (even if deleted since)
+      const live = await this.r.productModel.find({ storeId, isDelete: false }).select('name productType deliveryFormat').lean();
+      const seen = new Set(live.map((p: any) => String(p._id)));
+      const extraIds = [...salesMap.keys(), ...viewMap.keys()].filter((id) => !seen.has(id) && /^[0-9a-f]{24}$/i.test(id));
+      const extra = extraIds.length ? await this.r.productModel.find({ _id: { $in: extraIds }, storeId }).select('name productType deliveryFormat').lean() : [];
+
+      let products = [...live, ...extra].map((p: any) => {
+        const id = String(p._id);
+        const s = salesMap.get(id);
+        const views = viewMap.get(id) ?? 0;
+        return {
+          productId: id,
+          name: p.name as string,
+          type: productTypeOf(p),
+          views: trackingSince ? views : null,
+          orders: s?.orders ?? 0,
+          revenue: round(s?.revenue ?? 0),
+          conversionPercent: trackingSince ? conversionRate(s?.trackedOrders ?? 0, views) : null,
+          freeClaims: s?.freeClaims ?? 0,
+        };
+      });
+      if (q) products = products.filter((p) => p.name?.toLowerCase().includes(q));
+
+      const num = (v: number | null) => (v === null ? -1 : v);
+      const cmp: Record<string, (a: any, b: any) => number> = {
+        revenue: (a, b) => b.revenue - a.revenue,
+        orders: (a, b) => b.orders - a.orders,
+        views: (a, b) => num(b.views) - num(a.views),
+        conversion: (a, b) => num(b.conversionPercent) - num(a.conversionPercent),
+        claims: (a, b) => b.freeClaims - a.freeClaims,
+        name: (a, b) => String(a.name).localeCompare(String(b.name)),
+      };
+      products.sort((a, b) => cmp[sort](a, b) || String(a.name).localeCompare(String(b.name)));
+
+      return { range: { from, to }, timezone: 'Asia/Karachi', trackingSince, viewsAvailable: !!trackingSince, totalRevenue, products };
+    });
+  }
+
+  async getProductTable(sellerId: string, storeId: string, query: any) {
+    const t = await this.buildProductTable(sellerId, storeId, query);
+    const page = clampInt(query.page, 1, 1, 100000);
+    const limit = clampInt(query.limit, 20, 1, 50);
+    const total = t.products.length;
+    return {
+      success: true,
+      data: {
+        range: t.range, timezone: t.timezone, trackingSince: t.trackingSince, viewsAvailable: t.viewsAvailable,
+        totalRevenue: t.totalRevenue, // = Overview "Order value (booked)" for the same range, including products not on this page
+        pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
+        products: t.products.slice((page - 1) * limit, page * limit),
+      },
+    };
+  }
+
+  async exportProductTableCsv(sellerId: string, storeId: string, query: any): Promise<string> {
+    const t = await this.buildProductTable(sellerId, storeId, query);
+    const header = ['Product', 'Type', 'Views', 'Orders', 'Revenue', 'Conversion %', 'Free claims'];
+    const rows = t.products.map((p) => [p.name, p.type, p.views ?? '', p.orders, p.revenue, p.conversionPercent ?? '', p.freeClaims]);
+    return toExportCsv(header, rows, { label: 'products' }).csv;
+  }
+
+  async getFreeToPaid(sellerId: string, storeId: string, query: any) {
+    await this.verifyStoreOwnership(storeId, sellerId);
+    const { from, to } = resolveDateRange(query, { pkt: true });
+    const days = (FREE_TO_PAID_WINDOWS as readonly number[]).includes(Number(query.days)) ? Number(query.days) : 30;
+    const data = await this.cached(this.key('free-to-paid', storeId, { from, to, days }), () =>
+      freeToPaid(this.r.orderModel, from, to, { 'sellerOrders.storeId': storeId }, days));
+    return { success: true, data: { range: { from, to }, timezone: 'Asia/Karachi', ...data } };
   }
 
   // ═══════════════════════════════════════════════════════════════════════

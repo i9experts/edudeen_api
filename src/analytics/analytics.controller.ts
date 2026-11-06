@@ -9,6 +9,7 @@ import { AnalyticsService } from './analytics.service';
 import { AnalyticsQueryDto } from './dto/analytics-query.dto';
 import { TopProductsQueryDto } from './dto/top-products-query.dto';
 import { ProductPerformanceQueryDto } from './dto/product-performance-query.dto';
+import { ProductTableQueryDto } from './dto/product-table-query.dto';
 import { ExportQueryDto } from './dto/export-query.dto';
 
 @ApiTags('Seller Analytics')
@@ -65,6 +66,28 @@ export class AnalyticsController {
   async getProductPerformance(@Req() req: any, @Query() query: ProductPerformanceQueryDto) {
     await this.analyticsService.assertAdvancedAnalytics(req.user.userId, query.storeId);
     return this.analyticsService.getProductPerformance(req.user.userId, query.storeId, query);
+  }
+
+  // Product table: views / orders / booked revenue / conversion / free claims, plus Free -> Paid. Pro (advanced analytics), one owned store.
+  @Get('products')
+  async getProductTable(@Req() req: any, @Query() query: ProductTableQueryDto) {
+    await this.analyticsService.assertAdvancedAnalytics(req.user.userId, query.storeId);
+    return this.analyticsService.getProductTable(req.user.userId, query.storeId, query);
+  }
+
+  @Get('products/export')
+  async exportProductTable(@Req() req: any, @Query() query: ProductTableQueryDto, @Res() res: Response) {
+    await this.analyticsService.assertAdvancedAnalytics(req.user.userId, query.storeId);
+    const csv = await this.analyticsService.exportProductTableCsv(req.user.userId, query.storeId, query);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="analytics-product-performance.csv"');
+    res.send(csv);
+  }
+
+  @Get('free-to-paid')
+  async getFreeToPaid(@Req() req: any, @Query() query: ProductTableQueryDto) {
+    await this.analyticsService.assertAdvancedAnalytics(req.user.userId, query.storeId);
+    return this.analyticsService.getFreeToPaid(req.user.userId, query.storeId, query);
   }
 
   @Get('inventory-insights')

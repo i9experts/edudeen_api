@@ -92,6 +92,8 @@ export class RealtimeService {
       (ALIASES[s] ?? []).forEach((a) => out.add(a));
     };
     if (IGNORED.has(segs[1])) return [];
+    // Page-view beacons are high-volume and carry no change anyone needs to see: never broadcast them.
+    if (segs[1] === 'analytics' && segs[2] === 'view') return [];
     add(segs[1]);
     // /api/admin/<x>, /api/seller/<x>, /api/public/<x>: the real subject is the next segment.
     if (['admin', 'seller', 'public'].includes(segs[1])) {

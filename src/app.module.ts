@@ -42,6 +42,7 @@ import { DiscountsModule } from './discounts/discounts.module';
 import { CollectionsModule } from './collections/collections.module';
 import { StripeConnectModule } from './stripe-connect/stripe-connect.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { AnalyticsVisitsModule } from './analytics-visits/analytics-visits.module';
 import { AdminAnalyticsModule } from './admin-analytics/admin-analytics.module';
 import { AdminFinanceModule } from './admin-finance/admin-finance.module';
 import { QueueModule } from './queues/queue.module';
@@ -141,6 +142,7 @@ import { PhoneVerificationModule } from './phone-verification/phone-verification
     CollectionsModule,
     StripeConnectModule,
     AnalyticsModule,
+    AnalyticsVisitsModule,
     AdminAnalyticsModule,
     AdminFinanceModule,
     SeoModule,
