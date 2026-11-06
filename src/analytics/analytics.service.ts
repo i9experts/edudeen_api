@@ -7,6 +7,7 @@ import { verifyStoreOwnershipOrForbidden } from '../common/store-ownership.util'
 import {
   BucketGranularity,
   absoluteChange,
+  PKT_OFFSET_MS,
   enumerateBuckets,
   nextBucket as nextBucketUtil,
   percentChange,
@@ -23,9 +24,11 @@ import {
   paidPeriodTotals,
   pktDayStart,
   periodTotals as periodTotalsUtil,
+  customerSplit,
   repeatBuyerPercent as repeatBuyerPercentUtil,
   repeatBuyerStats as repeatBuyerStatsUtil,
   sellerOrderMatchStage,
+  sellerOverviewStats,
 } from './utils/order-aggregation.util';
 import { toCsv } from './utils/csv.util';
 import { PdfReportBuilder } from './utils/pdf-report.util';
@@ -132,6 +135,13 @@ export class AnalyticsService {
     return itemRefundSumField();
   }
 
+  /** Chart bucket in Pakistan time (weeks start Monday, matching enumerateBuckets). */
+  private pktBucket(granularity: BucketGranularity) {
+    const spec: Record<string, any> = { date: '$createdAt', unit: granularity, timezone: 'Asia/Karachi' };
+    if (granularity === 'week') spec.startOfWeek = 'monday';
+    return { $dateTrunc: spec };
+  }
+
   private async periodTotals(scope: Record<string, any>, from: Date, to: Date) {
     return periodTotalsUtil(this.r.orderModel, from, to, scope);
   }
@@ -196,55 +206,71 @@ export class AnalyticsService {
 
   async getOverview(sellerId: string, storeId: string | null | undefined, query: any) {
     const { scope, storeIds } = await this.resolveScope(sellerId, storeId);
-    const { from, to, previousFrom, previousTo } = resolveDateRange(query);
+    const { from, to, previousFrom, previousTo } = resolveDateRange(query, { pkt: true });
     const compare = query.compareToPreviousPeriod === true || query.compareToPreviousPeriod === 'true';
 
     return this.cached(this.key('overview', this.scopeLabel(sellerId, storeId), { from, to, compare }), async () => {
-      const [current, previous, repeatStats, prevRepeatBuyerPct, currency] = await Promise.all([
-        this.periodTotals(scope, from, to),
-        this.periodTotals(scope, previousFrom, previousTo),
-        this.repeatBuyerStats(scope, from, to),
-        this.repeatBuyerPercent(scope, previousFrom, previousTo),
+      // Free claims are excluded from every number below except the separate `freeClaims` count.
+      const claimOpts = { excludeFreeClaims: true };
+      const forPeriod = async (f: Date, t: Date) => {
+        const [stats, repeat, split] = await Promise.all([
+          sellerOverviewStats(this.r.orderModel, f, t, scope),
+          repeatBuyerStatsUtil(this.r.orderModel, f, t, scope, claimOpts),
+          customerSplit(this.r.orderModel, f, t, scope),
+        ]);
+        return { stats, repeatPercent: repeat.percent, newCustomers: split.newCustomers, returningCustomers: split.returningCustomers };
+      };
+
+      const [cur, prev, currency] = await Promise.all([
+        forPeriod(from, to),
+        compare ? forPeriod(previousFrom, previousTo) : Promise.resolve(null),
         this.resolveScopeCurrency(storeIds),
       ]);
-
-      // One customer definition (see repeatBuyerStats): new + returning = unique buyers in the period.
-      const repeatBuyerPct = repeatStats.percent;
-      const returningCustomersCount = repeatStats.repeat;
-      const newCustomersCount = repeatStats.total - repeatStats.repeat;
-
-      const refundRatePercent = current.grossRevenue > 0 ? this.round((current.refundAmount / current.grossRevenue) * 100) : 0;
+      const s = cur.stats;
+      const refundRatePercent = s.bookedValue > 0 ? this.round((s.refunds / s.bookedValue) * 100) : 0;
 
       const data: Record<string, any> = {
         period: { from, to },
+        timezone: 'Asia/Karachi',
         storeCount: storeIds.length,
         currency,
-        grossRevenue: current.grossRevenue,
-        totalRevenue: current.netRevenue, // "totalRevenue" = net of refunds, per spec
-        totalRevenueChangePercent: percentChange(current.netRevenue, previous.netRevenue),
-        totalOrders: current.orderCount,
-        totalOrdersChange: absoluteChange(current.orderCount, previous.orderCount),
-        avgOrderValue: current.avgOrderValue,
-        avgOrderValueChangePercent: percentChange(current.avgOrderValue, previous.avgOrderValue),
-        repeatBuyerPercent: repeatBuyerPct,
-        repeatBuyerTrend: trendFor(repeatBuyerPct, prevRepeatBuyerPct),
-        totalRefunds: current.refundAmount,
+        bookedValue: s.bookedValue,
+        collected: s.collected,
+        grossRevenue: s.bookedValue, // legacy alias of bookedValue (seller dashboard card still reads these two)
+        totalRevenue: this.round(s.bookedValue - s.refunds), // legacy: booked value net of refunds
+        totalOrders: s.bookedCount,
+        freeClaims: s.freeClaims,
+        avgOrderValue: s.avgOrderValue,
+        repeatBuyerPercent: cur.repeatPercent,
+        totalRefunds: s.refunds,
         refundRatePercent,
-        cancelledOrders: current.cancelledCount,
-        newCustomersCount,
-        returningCustomersCount,
+        cancelledOrders: s.cancelledCount,
+        newCustomersCount: cur.newCustomers,
+        returningCustomersCount: cur.returningCustomers,
       };
 
-      if (compare) {
+      if (prev) {
+        const p = prev.stats;
+        data.repeatBuyerTrend = trendFor(cur.repeatPercent, prev.repeatPercent);
+        data.bookedValueChangePercent = percentChange(s.bookedValue, p.bookedValue);
+        data.collectedChangePercent = percentChange(s.collected, p.collected);
+        data.totalOrdersChange = absoluteChange(s.bookedCount, p.bookedCount);
+        data.freeClaimsChange = absoluteChange(s.freeClaims, p.freeClaims);
+        data.avgOrderValueChangePercent = percentChange(s.avgOrderValue, p.avgOrderValue);
         data.previousPeriod = {
           period: { from: previousFrom, to: previousTo },
-          grossRevenue: previous.grossRevenue,
-          totalRevenue: previous.netRevenue,
-          totalOrders: previous.orderCount,
-          avgOrderValue: previous.avgOrderValue,
-          repeatBuyerPercent: prevRepeatBuyerPct,
-          totalRefunds: previous.refundAmount,
-          cancelledOrders: previous.cancelledCount,
+          bookedValue: p.bookedValue,
+          collected: p.collected,
+          grossRevenue: p.bookedValue,
+          totalRevenue: this.round(p.bookedValue - p.refunds),
+          totalOrders: p.bookedCount,
+          freeClaims: p.freeClaims,
+          avgOrderValue: p.avgOrderValue,
+          repeatBuyerPercent: prev.repeatPercent,
+          totalRefunds: p.refunds,
+          cancelledOrders: p.cancelledCount,
+          newCustomersCount: prev.newCustomers,
+          returningCustomersCount: prev.returningCustomers,
         };
       }
 
@@ -258,7 +284,7 @@ export class AnalyticsService {
 
   async getRevenueOverTime(sellerId: string, storeId: string | null | undefined, query: any) {
     const { scope, storeIds } = await this.resolveScope(sellerId, storeId);
-    const { from, to, granularity } = resolveDateRange(query);
+    const { from, to, granularity } = resolveDateRange(query, { pkt: true });
 
     return this.cached(this.key('revenue-over-time', this.scopeLabel(sellerId, storeId), { from, to }), async () => {
       const currency = await this.resolveScopeCurrency(storeIds);
@@ -267,20 +293,21 @@ export class AnalyticsService {
         {
           $addFields: {
             itemRefund: this.itemRefundField(),
-            bucket: { $dateTrunc: { date: '$createdAt', unit: granularity, timezone: 'UTC' } },
+            bucket: this.pktBucket(granularity),
+            booked: { $and: [this.notCancelled(), { $ne: ['$isFreeClaim', true] }] },
           },
         },
         {
           $group: {
             _id: '$bucket',
-            grossRevenue: { $sum: { $cond: [this.notCancelled(), '$sellerOrders.subtotal', 0] } },
-            refundAmount: { $sum: { $cond: [this.notCancelled(), '$itemRefund', 0] } },
+            grossRevenue: { $sum: { $cond: ['$booked', '$sellerOrders.subtotal', 0] } },
+            refundAmount: { $sum: { $cond: ['$booked', '$itemRefund', 0] } },
           },
         },
       ]);
 
       const byBucket = new Map(rows.map((r: any) => [r._id.getTime(), r]));
-      const series = enumerateBuckets(from, to, granularity).map((bucket) => {
+      const series = enumerateBuckets(from, to, granularity, PKT_OFFSET_MS).map((bucket) => {
         const row = byBucket.get(bucket.getTime());
         const gross = this.round(row?.grossRevenue ?? 0);
         const refund = this.round(row?.refundAmount ?? 0);
@@ -297,12 +324,13 @@ export class AnalyticsService {
 
   async getOrdersOverTime(sellerId: string, storeId: string | null | undefined, query: any) {
     const { scope } = await this.resolveScope(sellerId, storeId);
-    const { from, to, granularity } = resolveDateRange(query);
+    const { from, to, granularity } = resolveDateRange(query, { pkt: true });
 
     return this.cached(this.key('orders-over-time', this.scopeLabel(sellerId, storeId), { from, to }), async () => {
       const rows = await this.r.orderModel.aggregate([
         ...this.matchStage(scope, from, to),
-        { $addFields: { bucket: { $dateTrunc: { date: '$createdAt', unit: granularity, timezone: 'UTC' } } } },
+        { $match: { isFreeClaim: { $ne: true } } }, // free claims are not orders for the chart
+        { $addFields: { bucket: this.pktBucket(granularity) } },
         {
           $group: {
             _id: '$bucket',
@@ -314,7 +342,7 @@ export class AnalyticsService {
       ]);
 
       const byBucket = new Map(rows.map((r: any) => [r._id.getTime(), r]));
-      const series = enumerateBuckets(from, to, granularity).map((bucket) => {
+      const series = enumerateBuckets(from, to, granularity, PKT_OFFSET_MS).map((bucket) => {
         const row = byBucket.get(bucket.getTime());
         return {
           date: bucket,
@@ -334,7 +362,7 @@ export class AnalyticsService {
 
   async getTrafficSources(sellerId: string, storeId: string | null | undefined, query: any) {
     const { scope } = await this.resolveScope(sellerId, storeId);
-    const { from, to } = resolveDateRange(query);
+    const { from, to } = resolveDateRange(query, { pkt: true });
 
     return this.cached(this.key('traffic-sources', this.scopeLabel(sellerId, storeId), { from, to }), async () => {
       const rows = await this.r.orderModel.aggregate([
@@ -373,7 +401,7 @@ export class AnalyticsService {
 
   async getTopProducts(sellerId: string, storeId: string | null | undefined, query: any) {
     const { scope } = await this.resolveScope(sellerId, storeId);
-    const { from, to } = resolveDateRange(query);
+    const { from, to } = resolveDateRange(query, { pkt: true });
     const limit = clampInt(query.limit, 10, 1, 100);
     const sort = query.sort === 'units_sold' ? 'units_sold' : 'revenue';
 
@@ -410,7 +438,7 @@ export class AnalyticsService {
 
   async getCustomerAnalytics(sellerId: string, storeId: string | null | undefined, query: any) {
     const { scope } = await this.resolveScope(sellerId, storeId);
-    const { from, to, granularity } = resolveDateRange(query);
+    const { from, to, granularity } = resolveDateRange(query, { pkt: true });
 
     return this.cached(this.key('customers', this.scopeLabel(sellerId, storeId), { from, to }), async () => {
       const allTime = await this.allTimeCustomerAggregate(scope);
@@ -420,7 +448,7 @@ export class AnalyticsService {
       const periodRows = await this.r.orderModel.aggregate([
         ...this.matchStage(scope, from, to),
         { $match: { 'sellerOrders.status': { $ne: 'cancelled' } } },
-        { $addFields: { bucket: { $dateTrunc: { date: '$createdAt', unit: granularity, timezone: 'UTC' } } } },
+        { $addFields: { bucket: this.pktBucket(granularity) } },
         { $group: { _id: { bucket: '$bucket', userId: '$userId' } } },
       ]);
 
@@ -435,8 +463,8 @@ export class AnalyticsService {
         bucketTotals.set(bucketTime, entry);
       }
 
-      const series = enumerateBuckets(from, to, granularity).map((bucket) => {
-        const totals = bucketTotals.get(bucket.getTime()) ?? { newCustomers: 0, returningCustomers: 0 };
+      const series = enumerateBuckets(from, to, granularity, PKT_OFFSET_MS).map((bucket) => {
+        const totals =bucketTotals.get(bucket.getTime()) ?? { newCustomers: 0, returningCustomers: 0 };
         return { date: bucket, ...totals };
       });
 
@@ -486,7 +514,7 @@ export class AnalyticsService {
   }
 
   private nextBucket(bucket: Date, granularity: BucketGranularity): Date {
-    return nextBucketUtil(bucket, granularity);
+    return nextBucketUtil(bucket, granularity, PKT_OFFSET_MS);
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -495,7 +523,7 @@ export class AnalyticsService {
 
   async getProductPerformance(sellerId: string, storeId: string | null | undefined, query: any) {
     const { scope, storeIds } = await this.resolveScope(sellerId, storeId);
-    const { from, to } = resolveDateRange(query);
+    const { from, to } = resolveDateRange(query, { pkt: true });
     const page = clampInt(query.page, 1, 1, 100000);
     const limit = clampInt(query.limit, 20, 1, 100);
 
@@ -626,7 +654,7 @@ export class AnalyticsService {
 
   async getPaymentMethods(sellerId: string, storeId: string | null | undefined, query: any) {
     const { scope } = await this.resolveScope(sellerId, storeId);
-    const { from, to } = resolveDateRange(query);
+    const { from, to } = resolveDateRange(query, { pkt: true });
 
     return this.cached(this.key('payment-methods', this.scopeLabel(sellerId, storeId), { from, to }), async () => {
       const rows = await this.r.orderModel.aggregate([
@@ -654,7 +682,7 @@ export class AnalyticsService {
 
   async getRevenueBreakdown(sellerId: string, storeId: string | null | undefined, query: any) {
     const { scope } = await this.resolveScope(sellerId, storeId);
-    const { from, to } = resolveDateRange(query);
+    const { from, to } = resolveDateRange(query, { pkt: true });
 
     return this.cached(this.key('revenue-breakdown', this.scopeLabel(sellerId, storeId), { from, to }), async () => {
       const orderTotals = await this.periodTotals(scope, from, to);
@@ -686,7 +714,7 @@ export class AnalyticsService {
     const storeId = this.requireStoreId(storeIdInput);
     await this.verifyStoreOwnership(storeId, sellerId);
     const scope = { 'sellerOrders.storeId': storeId };
-    const { from, to } = resolveDateRange(query);
+    const { from, to } = resolveDateRange(query, { pkt: true });
     const section = query.section ?? 'revenue';
 
     switch (section) {
@@ -735,7 +763,7 @@ export class AnalyticsService {
   async exportPdf(sellerId: string, storeIdInput: string | null | undefined, query: any): Promise<Buffer> {
     const storeId = this.requireStoreId(storeIdInput);
     const store = await this.verifyStoreOwnership(storeId, sellerId);
-    const { from, to } = resolveDateRange(query);
+    const { from, to } = resolveDateRange(query, { pkt: true });
 
     const [overview, revenue, traffic, topProducts] = await Promise.all([
       this.getOverview(sellerId, storeId, query),

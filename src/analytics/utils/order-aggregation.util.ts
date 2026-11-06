@@ -154,10 +154,78 @@ export function pktDayStart(d: Date): Date {
  * repeat/returning = those buyers with >= 2 such orders in the same period; new = the rest.
  * repeat% = repeat / unique buyers, so new + returning always equals the unique-buyer count.
  */
-export async function repeatBuyerStats(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>): Promise<{ total: number; repeat: number; percent: number }> {
+/** Match for "real" orders: not cancelled, and (optionally) not a free claim. */
+function liveOrderMatch(excludeFreeClaims?: boolean): Record<string, any> {
+  return excludeFreeClaims
+    ? { 'sellerOrders.status': { $ne: 'cancelled' }, isFreeClaim: { $ne: true } }
+    : { 'sellerOrders.status': { $ne: 'cancelled' } };
+}
+
+/**
+ * Seller Analytics Overview numbers. Free claims (Order.isFreeClaim) and cancelled packages are
+ * never part of booked/paid figures; claims are only counted separately.
+ * booked = non-cancelled, non-claim; paid = booked AND (order.isPaid OR package.isPaid) - the same
+ * rule as paidPeriodTotals. AOV = booked value / booked count (same set).
+ */
+export async function sellerOverviewStats(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>) {
   const rows = await orderModel.aggregate([
     ...sellerOrderMatchStage(from, to, scopeMatch),
-    { $match: { 'sellerOrders.status': { $ne: 'cancelled' } } },
+    {
+      $addFields: {
+        itemRefund: itemRefundSumField(),
+        isClaim: { $eq: ['$isFreeClaim', true] },
+        cancelled: { $eq: ['$sellerOrders.status', 'cancelled'] },
+        paidNow: { $or: [{ $eq: ['$isPaid', true] }, { $eq: ['$sellerOrders.isPaid', true] }] },
+      },
+    },
+    { $addFields: { booked: { $and: [{ $not: ['$cancelled'] }, { $not: ['$isClaim'] }] } } },
+    {
+      $group: {
+        _id: null,
+        bookedCount: { $sum: { $cond: ['$booked', 1, 0] } },
+        bookedValue: { $sum: { $cond: ['$booked', '$sellerOrders.subtotal', 0] } },
+        refunds: { $sum: { $cond: ['$booked', '$itemRefund', 0] } },
+        paidCount: { $sum: { $cond: [{ $and: ['$booked', '$paidNow'] }, 1, 0] } },
+        paidValue: { $sum: { $cond: [{ $and: ['$booked', '$paidNow'] }, '$sellerOrders.subtotal', 0] } },
+        paidRefunds: { $sum: { $cond: [{ $and: ['$booked', '$paidNow'] }, '$itemRefund', 0] } },
+        cancelledCount: { $sum: { $cond: [{ $and: ['$cancelled', { $not: ['$isClaim'] }] }, 1, 0] } },
+        freeClaims: { $sum: { $cond: [{ $and: ['$isClaim', { $not: ['$cancelled'] }] }, 1, 0] } },
+      },
+    },
+  ]);
+  const r = rows[0] ?? {};
+  const bookedCount: number = r.bookedCount ?? 0;
+  const bookedValue = round(r.bookedValue ?? 0);
+  const refunds = round(r.refunds ?? 0);
+  return {
+    bookedCount,
+    bookedValue,
+    avgOrderValue: bookedCount > 0 ? round(bookedValue / bookedCount) : 0,
+    refunds,
+    paidCount: (r.paidCount ?? 0) as number,
+    collected: round((r.paidValue ?? 0) - (r.paidRefunds ?? 0)),
+    cancelledCount: (r.cancelledCount ?? 0) as number,
+    freeClaims: (r.freeClaims ?? 0) as number,
+  };
+}
+
+/**
+ * Overview customer split (free claims never count): unique buyers with a real order in [from, to];
+ * new = their FIRST real order in scope falls inside the range, returning = they had an earlier one.
+ * new(7d) is always a subset of new(30d) for the same end date.
+ */
+export async function customerSplit(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>): Promise<{ unique: number; newCustomers: number; returningCustomers: number }> {
+  const opts = { excludeFreeClaims: true };
+  const ids = await periodBuyerIds(orderModel, from, to, scopeMatch, opts);
+  const earlier = await returningBuyerSet(orderModel, ids, from, scopeMatch, opts);
+  const returningCustomers = ids.filter((id) => earlier.has(id)).length;
+  return { unique: ids.length, newCustomers: ids.length - returningCustomers, returningCustomers };
+}
+
+export async function repeatBuyerStats(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>, opts?: { excludeFreeClaims?: boolean }): Promise<{ total: number; repeat: number; percent: number }> {
+  const rows = await orderModel.aggregate([
+    ...sellerOrderMatchStage(from, to, scopeMatch),
+    { $match: liveOrderMatch(opts?.excludeFreeClaims) },
     { $group: { _id: '$userId', orders: { $sum: 1 } } },
   ]);
   const total = rows.length;
@@ -165,25 +233,25 @@ export async function repeatBuyerStats(orderModel: Model<any>, from: Date, to: D
   const repeat = rows.filter((r: any) => r.orders >= 2).length;
   return { total, repeat, percent: round((repeat / total) * 100) };
 }
-export async function repeatBuyerPercent(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>): Promise<number> {
-  return (await repeatBuyerStats(orderModel, from, to, scopeMatch)).percent;
+export async function repeatBuyerPercent(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>, opts?: { excludeFreeClaims?: boolean }): Promise<number> {
+  return (await repeatBuyerStats(orderModel, from, to, scopeMatch, opts)).percent;
 }
 /** Distinct buyers with a non-cancelled order in scope within [from, to]. */
-export async function periodBuyerIds(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>): Promise<string[]> {
+export async function periodBuyerIds(orderModel: Model<any>, from: Date, to: Date, scopeMatch?: Record<string, any>, opts?: { excludeFreeClaims?: boolean }): Promise<string[]> {
   const rows = await orderModel.aggregate([
     ...sellerOrderMatchStage(from, to, scopeMatch),
-    { $match: { 'sellerOrders.status': { $ne: 'cancelled' } } },
+    { $match: liveOrderMatch(opts?.excludeFreeClaims) },
     { $group: { _id: '$userId' } },
   ]);
   return rows.map((r: any) => r._id);
 }
 /** Buyers among `buyerIds` who already had a non-cancelled order (within `scopeMatch`'s scope) before `from`. */
-export async function returningBuyerSet(orderModel: Model<any>, buyerIds: string[], from: Date, scopeMatch?: Record<string, any>): Promise<Set<string>> {
+export async function returningBuyerSet(orderModel: Model<any>, buyerIds: string[], from: Date, scopeMatch?: Record<string, any>, opts?: { excludeFreeClaims?: boolean }): Promise<Set<string>> {
   if (buyerIds.length === 0) return new Set();
   const rows = await orderModel.aggregate([
     { $match: { isDelete: false, userId: { $in: buyerIds }, createdAt: { $lt: from } } },
     { $unwind: '$sellerOrders' },
-    { $match: { 'sellerOrders.status': { $ne: 'cancelled' }, ...scopeMatch } },
+    { $match: { ...liveOrderMatch(opts?.excludeFreeClaims), ...scopeMatch } },
     { $group: { _id: '$userId' } },
   ]);
   return new Set(rows.map((r: any) => r._id));

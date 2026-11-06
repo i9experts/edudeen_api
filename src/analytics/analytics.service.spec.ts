@@ -95,14 +95,12 @@ describe('AnalyticsService', () => {
   describe('net vs gross revenue', () => {
     it('subtracts item-level refunds from gross subtotal to produce net revenue', async () => {
       orderModel.aggregate = buildAggregateMock([
-        // periodTotals (current)
-        [{ orderCount: 3, cancelledCount: 0, refundedCount: 1, grossRevenue: 300, refundAmount: 50, buyerIds: ['u1', 'u2'] }],
-        // periodTotals (previous)
-        [{ orderCount: 0, cancelledCount: 0, refundedCount: 0, grossRevenue: 0, refundAmount: 0, buyerIds: [] }],
-        // repeatBuyerPercent (current)
-        [{ totalCustomers: 2, repeatCustomers: 0 }],
-        // repeatBuyerPercent (previous)
+        // sellerOverviewStats (all paid, 3 booked orders)
+        [{ bookedCount: 3, bookedValue: 300, refunds: 50, paidCount: 3, paidValue: 300, paidRefunds: 50, cancelledCount: 0, freeClaims: 0 }],
+        // repeatBuyerStats
         [],
+        // periodBuyerIds
+        [{ _id: 'u1' }, { _id: 'u2' }],
         // returningBuyerSet
         [],
       ]);
@@ -119,11 +117,13 @@ describe('AnalyticsService', () => {
   describe('repeat-buyer percent', () => {
     it('computes repeat buyers as a percentage of unique buyers in the period', async () => {
       orderModel.aggregate = buildAggregateMock([
-        [{ orderCount: 5, cancelledCount: 0, refundedCount: 0, grossRevenue: 500, refundAmount: 0, buyerIds: ['a', 'b', 'c', 'd'] }],
-        [{ orderCount: 0, cancelledCount: 0, refundedCount: 0, grossRevenue: 0, refundAmount: 0, buyerIds: [] }],
+        [{ bookedCount: 5, bookedValue: 500, refunds: 0, paidCount: 5, paidValue: 500, paidRefunds: 0, cancelledCount: 0, freeClaims: 0 }],
         // repeatBuyerStats: orders per buyer inside the period (repeat = 2+ orders in the period)
         [{ _id: 'a', orders: 2 }, { _id: 'b', orders: 1 }, { _id: 'c', orders: 1 }, { _id: 'd', orders: 1 }],
-        [], // previous period (repeatBuyerPercent)
+        // periodBuyerIds
+        [{ _id: 'a' }, { _id: 'b' }, { _id: 'c' }, { _id: 'd' }],
+        // returningBuyerSet: only 'a' ordered before the period
+        [{ _id: 'a' }],
       ]);
 
       const result = await service.getOverview(SELLER_ID, STORE_ID, { range: '30d' });
