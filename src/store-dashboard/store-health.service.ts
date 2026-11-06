@@ -26,12 +26,21 @@ export class StoreHealthService {
     } catch { /* cache is optional */ }
 
     const since = new Date(now.getTime() - range * DAY);
-    const [inquiries, orderStats, cancellation, sentBack] = await Promise.all([
+    // Counts listings CURRENTLY in status 'rejected' (reviewed in the window). Once an admin approves a
+    // sent-back listing its status flips to active, so approvals are (by design) not part of this number.
+    const sentBackFilter = { storeId, sellerId, isDelete: false, status: 'rejected', reviewedAt: { $gte: since } };
+    const [inquiries, orderStats, cancellation, sentBack, sentBackDocs] = await Promise.all([
       this.collectInquiries(storeId, since),
       this.collectOrderStats(storeId, since),
       this.collectCancellations(storeId, since),
-      this.db.repositories.productModel.countDocuments({ storeId, sellerId, isDelete: false, status: 'rejected', reviewedAt: { $gte: since } }),
+      this.db.repositories.productModel.countDocuments(sentBackFilter),
+      this.db.repositories.productModel.find(sentBackFilter).sort({ reviewedAt: -1 }).limit(3).select('title reviewNote').lean(),
     ]);
+    const sentBackItems = (sentBackDocs as any[]).map((p) => ({
+      id: String(p._id),
+      title: String(p.title ?? ''),
+      note: p.reviewNote ? String(p.reviewNote).slice(0, 140) : null,
+    }));
 
     const result = {
       ...buildStoreHealth({
@@ -43,6 +52,7 @@ export class StoreHealthService {
         sentBack,
         cancellation,
       }),
+      sentBackItems,
       generatedAt: now.toISOString(),
     };
     try { await this.redis.set(key, JSON.stringify(result), CACHE_SECONDS); } catch (e: any) { this.logger.debug(`health cache write failed: ${e?.message}`); }

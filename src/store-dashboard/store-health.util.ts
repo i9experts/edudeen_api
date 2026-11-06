@@ -173,5 +173,7 @@ export function buildStoreHealth(input: HealthInput) {
   ];
 
   const evidence = (input.cancellation?.eligible ?? 0) + dispatch.sample +rate.sample + replied.length + input.deliveredItems + input.rating.count;
-  return { range, metrics, isNew: evidence === 0 && input.sentBack === 0, minSamples: TRUST_MIN_SAMPLES };
+  // Additive: explicit sample size + minimum for each metric (sent-back is a plain count, no minimum).
+  const withSamples = metrics.map((m) => ({ ...m, sampleSize: m.sample, minSample: m.id === 'sentBack' ? 0 : TRUST_MIN_SAMPLES }));
+  return { range, metrics: withSamples, isNew: evidence === 0 && input.sentBack === 0, minSamples: TRUST_MIN_SAMPLES };
 }

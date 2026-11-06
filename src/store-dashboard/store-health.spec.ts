@@ -98,6 +98,13 @@ describe('store health metric math', () => {
     expect(metric(buildStoreHealth({ ...base, rating: { average: 3.2, count: 12 } }), 'rating').status).toBe('attention');
   });
 
+  it('every metric carries sampleSize and minSample (additive)', () => {
+    const r = buildStoreHealth({ ...base, packages: pkgs(5, 0), sentBack: 2 });
+    expect(metric(r, 'dispatch')).toMatchObject({ sampleSize: 5, minSample: 10 });
+    expect(metric(r, 'rating')).toMatchObject({ sampleSize: 0, minSample: 10 });
+    expect(metric(r, 'sentBack')).toMatchObject({ sampleSize: 2, minSample: 0 });
+  });
+
   it('sent back listings: 0 is good, more needs attention', () => {
     expect(metric(buildStoreHealth({ ...base, sentBack: 2 }), 'sentBack')).toMatchObject({ value: 2, status: 'attention' });
   });
@@ -114,7 +121,10 @@ describe('StoreHealthService ownership + cache', () => {
         conversationModel: { find: () => lean([]) },
         messageModel: { aggregate },
         orderModel: { aggregate },
-        productModel: { countDocuments: jest.fn().mockResolvedValue(0) },
+        productModel: {
+          countDocuments: jest.fn().mockResolvedValue(0),
+          find: jest.fn().mockReturnValue({ sort: () => ({ limit: () => ({ select: () => ({ lean: () => Promise.resolve([]) }) }) }) }),
+        },
       },
     };
     const redis: any = { get: jest.fn().mockResolvedValue(cached ?? null), set: jest.fn().mockResolvedValue(undefined) };
