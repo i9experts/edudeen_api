@@ -134,8 +134,8 @@ export class OrdersController {
   @Get('seller-orders/:storeId/:orderId')
   async getSellerOrderDetail(
     @Req() req: any,
-    @Param('storeId') storeId: string,
-    @Param('orderId') orderId: string,
+    @Param('storeId', ParseObjectIdPipe) storeId: string,
+    @Param('orderId', ParseObjectIdPipe) orderId: string,
   ) {
     const { userId } = req.user;
     return this.ordersService.getSellerOrderDetail(userId, storeId, orderId);

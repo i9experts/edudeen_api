@@ -20,6 +20,7 @@ import { LoyaltyService } from 'src/loyalty/loyalty.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 import { isPackagePaid } from './package-paid.util';
+import { addressWarnings, findPossibleDuplicates, itemReturnFlags } from './order-warnings.util';
 import { round } from 'src/common/number.util';
 import { PaymentService } from 'src/payment/payment.service';
 import { orderStatusEmail, downloadLinkEmail } from 'src/notifications/templates/notification-email.template';
@@ -570,6 +571,11 @@ export class OrdersService {
 
     const avgOrder = countedOrders > 0 ? totalRevenue / countedOrders : 0;
 
+    // Possible-duplicate chips for this page: ONE bounded query, never per row.
+    const dupMap = await findPossibleDuplicates(orderModel, orders, (o: any) =>
+      (o.sellerOrders ?? []).find((s: any) => storeIds.includes(s.storeId))?.storeId ?? null,
+    );
+
     // order rows format
     const rows = await Promise.all(
       orders.map(async (order: any) => {
@@ -615,6 +621,7 @@ export class OrdersService {
           paymentType: order.paymentType,
           // Ship-by = payment time (COD: order creation) + DISPATCH_HOURS; null when nothing is waiting to ship.
           shipBy: sellerShipBy(order, so)?.toISOString() ?? null,
+          possibleDuplicate: dupMap.get(String(order._id)) ?? null,
         };
       }),
     );
@@ -677,6 +684,10 @@ export class OrdersService {
       for (const v of vs) if (v.sku) liveSkus.set(v._id.toString(), v.sku);
     }
 
+    // Warnings are computed here, never stored; they only inform the seller.
+    const dupMap = await findPossibleDuplicates(orderModel, [order], () => storeId);
+    const needsAddress = so.fulfillmentType === 'physical' || so.fulfillmentType === 'mixed';
+
     return {
       success: true,
       data: {
@@ -684,6 +695,11 @@ export class OrdersService {
         orderNumber: order.orderNumber,
         date: order.createdAt,
         currency: order.currency ?? 'USD',
+        warnings: {
+          possibleDuplicate: dupMap.get(String(order._id)) ?? null,
+          address: needsAddress ? addressWarnings(order.shippingAddress, user?.phone) : [],
+        },
+        returnStatus: so.returnStatus ?? 'none',
         isPaid: order.isPaid || so.isPaid === true,
         codAmount: so.codAmount ?? 0,
         codCollector: so.codCollector ?? null,
@@ -722,6 +738,7 @@ export class OrdersService {
           totalPrice: it.totalPrice,
           status: it.status ?? null,
           cancelReason: it.cancelReason ?? null,
+          ...itemReturnFlags(it),
         })),
       },
     };
