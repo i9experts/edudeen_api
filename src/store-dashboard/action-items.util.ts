@@ -27,6 +27,64 @@ export function parseOrderAction(v: unknown): OrderActionKind | null {
   return v === 'toship' || v === 'overdue' ? v : null;
 }
 
+/** Seller Orders page tabs (package status of the seller's own store). */
+export const ORDER_TABS = ['needs_action', 'shipped', 'delivered', 'completed', 'cancelled', 'all'] as const;
+export type OrderTab = (typeof ORDER_TABS)[number];
+
+/** undefined/'' -> null (no tab); a known tab -> itself; anything else -> 'invalid' (caller answers 400). */
+export function parseOrderTab(v: unknown): OrderTab | null | 'invalid' {
+  if (v === undefined || v === null || v === '') return null;
+  return typeof v === 'string' && (ORDER_TABS as readonly string[]).includes(v) ? (v as OrderTab) : 'invalid';
+}
+
+export function packageStatusesForTab(tab: OrderTab): string[] | null {
+  switch (tab) {
+    case 'needs_action': return ['pending', 'processing'];
+    case 'all': return null;
+    default: return [tab];
+  }
+}
+
+/**
+ * Ship-by time of a package = payment time (COD / unpaid-time: order creation) + DISPATCH_HOURS.
+ * Only for packages the dashboard counts as "to ship" (same conditions as `sellerOrdersActionFilter`), else null.
+ */
+export function sellerShipBy(order: any, so: any): Date | null {
+  if (!so || !['physical', 'mixed'].includes(so.fulfillmentType)) return null;
+  if (!['pending', 'processing'].includes(so.status)) return null;
+  if (so.fulfillmentMode === 'platform') return null;
+  if (!(order?.isPaid === true || order?.paymentType === 'cash_on_delivery' || so.isPaid === true)) return null;
+  const base = order?.paidAt ?? order?.createdAt;
+  if (!base) return null;
+  return new Date(new Date(base).getTime() + DISPATCH_HOURS * 3_600_000);
+}
+
+/** Mongo pipeline stages that put the most urgent ship-by first (packages with no ship-by last, newest first). */
+export function shipByUrgencySort(storeIds: string[]): any[] {
+  return [
+    { $addFields: { _pkg: { $arrayElemAt: [{ $filter: { input: '$sellerOrders', cond: { $in: ['$$this.storeId', storeIds] } } }, 0] } } },
+    {
+      $addFields: {
+        _shipKey: {
+          $cond: [
+            {
+              $and: [
+                { $in: ['$_pkg.fulfillmentType', ['physical', 'mixed']] },
+                { $in: ['$_pkg.status', ['pending', 'processing']] },
+                { $ne: ['$_pkg.fulfillmentMode', 'platform'] },
+                { $or: [{ $eq: ['$isPaid', true] }, { $eq: ['$paymentType', 'cash_on_delivery'] }, { $eq: ['$_pkg.isPaid', true] }] },
+              ],
+            },
+            { $add: [{ $ifNull: ['$paidAt', '$createdAt'] }, DISPATCH_HOURS * 3_600_000] },
+            new Date('9999-01-01T00:00:00Z'),
+          ],
+        },
+      },
+    },
+    { $sort: { _shipKey: 1, createdAt: -1, _id: 1 } },
+  ];
+}
+
 /**
  * Orders (list rows) holding a PHYSICAL package of `storeId` that still has to be shipped:
  * - package status pending|processing (not shipped / delivered / cancelled / refunded)

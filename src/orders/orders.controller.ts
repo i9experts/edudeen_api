@@ -121,7 +121,7 @@ export class OrdersController {
   @Get('seller-orders/:storeId')
   async getSellerOrders(
     @Req() req: any,
-    @Param('storeId') storeId: string,
+    @Param('storeId', ParseObjectIdPipe) storeId: string,
     @Query() query: any,
   ) {
     const { userId } = req.user;

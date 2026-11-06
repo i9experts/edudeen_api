@@ -9,7 +9,7 @@ import { Readable } from 'stream';
 import { isValidObjectId } from 'mongoose';
 import { isVerifiedPurchaseLine } from 'src/rating/verified-purchase.util';
 import { DatabaseService } from 'src/database/databaseservice';
-import { parseOrderAction, sellerOrdersActionFilter } from 'src/store-dashboard/action-items.util';
+import { packageStatusesForTab, parseOrderAction, parseOrderTab, sellerOrdersActionFilter, sellerShipBy, shipByUrgencySort } from 'src/store-dashboard/action-items.util';
 import { UploadService } from 'src/upload/upload.service';
 import { ZIP_MAX_FILE_BYTES, ZIP_MAX_TOTAL_BYTES, buildZipStream, uniqueZipEntryNames, zipDownloadName } from './download-zip.util';
 import { JwtService } from '@nestjs/jwt';
@@ -427,11 +427,22 @@ export class OrdersService {
       isFreeClaim: { $ne: true },
     };
 
-    if (query.type && query.type !== 'all') {
-      matchFilter['sellerOrders.fulfillmentType'] = query.type;
-    }
-    if (query.status && query.status !== 'all') {
-      matchFilter['sellerOrders.status'] = query.status;
+    // ?tab= (seller Orders page): status is matched on THIS store's package, in one $elemMatch with the type filter.
+    const tab = parseOrderTab(query.tab);
+    if (tab === 'invalid') throw new BadRequestException('Invalid tab');
+    const typeFilter = query.type && query.type !== 'all' ? String(query.type) : null;
+    const tabElem: any = { storeId: { $in: storeIds } };
+    if (typeFilter) tabElem.fulfillmentType = typeFilter;
+    if (tab) {
+      const st = packageStatusesForTab(tab);
+      matchFilter.sellerOrders = { $elemMatch: st ? { ...tabElem, status: { $in: st } } : tabElem };
+    } else {
+      if (typeFilter) {
+        matchFilter['sellerOrders.fulfillmentType'] = typeFilter;
+      }
+      if (query.status && query.status !== 'all') {
+        matchFilter['sellerOrders.status'] = query.status;
+      }
     }
     // ?action=toship|overdue — the dashboard "Action required" lists (same predicate as its counts).
     const actionKind = parseOrderAction(query.action);
@@ -487,12 +498,48 @@ export class OrdersService {
     const totalOrders = await orderModel.countDocuments(matchFilter);
     const totalPages = Math.ceil(totalOrders / limit);
 
-    const orders = await orderModel
-      .find(matchFilter)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
+    // Needs action: most urgent ship-by first, decided in Mongo so paging stays correct.
+    const orders =
+      tab === 'needs_action'
+        ? await orderModel.aggregate([
+            { $match: matchFilter },
+            ...shipByUrgencySort(storeIds),
+            { $skip: skip },
+            { $limit: limit },
+          ])
+        : await orderModel
+            .find(matchFilter)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
+
+    // Per-tab counts (same type/search/time scope as the list) + the dashboard's to-ship / overdue numbers.
+    let counts: Record<string, number> | undefined;
+    if (tab) {
+      const { $and: _action, sellerOrders: _tabPart, ...scope } = matchFilter;
+      const countMatch = { ...scope, sellerOrders: { $elemMatch: tabElem } };
+      const [byStatus, toShip, overdue] = await Promise.all([
+        orderModel.aggregate([
+          { $match: countMatch },
+          { $project: { _st: { $arrayElemAt: [{ $map: { input: { $filter: { input: '$sellerOrders', cond: { $in: ['$$this.storeId', storeIds] } } }, in: '$$this.status' } }, 0] } } },
+          { $group: { _id: '$_st', n: { $sum: 1 } } },
+        ]),
+        orderModel.countDocuments({ 'sellerOrders.storeId': { $in: storeIds }, ...sellerOrdersActionFilter(storeIds, 'toship') }),
+        orderModel.countDocuments({ 'sellerOrders.storeId': { $in: storeIds }, ...sellerOrdersActionFilter(storeIds, 'overdue') }),
+      ]);
+      const n = (s: string) => byStatus.find((r: any) => r._id === s)?.n ?? 0;
+      counts = {
+        needs_action: n('pending') + n('processing'),
+        shipped: n('shipped'),
+        delivered: n('delivered'),
+        completed: n('completed'),
+        cancelled: n('cancelled'),
+        all: byStatus.reduce((sum: number, r: any) => sum + (r.n ?? 0), 0),
+        toShip,
+        overdue,
+      };
+    }
 
     // stats â€” all orders across the scoped store(s) (no pagination)
     const allOrders = await orderModel
@@ -564,6 +611,8 @@ export class OrdersService {
           codAmount: so.codAmount ?? 0,
           codCollector: so.codCollector ?? null,
           paymentType: order.paymentType,
+          // Ship-by = payment time (COD: order creation) + DISPATCH_HOURS; null when nothing is waiting to ship.
+          shipBy: sellerShipBy(order, so)?.toISOString() ?? null,
         };
       }),
     );
@@ -571,6 +620,7 @@ export class OrdersService {
     return {
       success: true,
       data: {
+        ...(counts ? { counts } : {}),
         stats: {
           totalOrders,
           revenue: totalRevenue,
