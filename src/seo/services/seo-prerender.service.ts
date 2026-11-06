@@ -7,6 +7,8 @@ import { SeoSchemaGeneratorService } from './seo-schema-generator.service';
 import type { ResolvedSeoMeta } from './seo-resolution.service';
 import { CLASS_LEVELS, classFilter } from 'src/products/class-levels';
 
+import { guideHtml } from './guide-content';
+
 const ORIGIN = 'https://edudeen.com';
 const DEFAULT_OG_IMAGE = `${ORIGIN}/og-default.png`;
 
@@ -218,7 +220,8 @@ ${this.faqHtml(faqs)}`;
     ];
     return `<section><h2>Shop by class</h2><ul>${CLASS_LEVELS.map((c) => `<li><a href="${ORIGIN}/browse/${esc(c.value)}">${esc(c.label)}</a></li>`).join('')}</ul></section>`
       + (subjects ? `<section><h2>Shop by subject</h2>${subjects}</section>` : '')
-      + `<section><h2>Edudeen</h2><ul>${site.map(([p, l]) => `<li><a href="${ORIGIN}${p}">${esc(l)}</a></li>`).join('')}</ul></section>`;
+      + `<section><h2>Edudeen</h2><ul>${site.map(([p, l]) => `<li><a href="${ORIGIN}${p}">${esc(l)}</a></li>`).join('')}</ul></section>`
+      + guideHtml(esc, ORIGIN);
   }
 
   async page(slug: string): Promise<PrerenderPage> {

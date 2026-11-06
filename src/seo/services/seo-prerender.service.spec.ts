@@ -27,6 +27,15 @@ describe('SeoPrerenderService (crawler HTML)', () => {
     expect(html).toContain('noindex,follow');
   });
 
+  it('sitemap html includes both guides with anchors', async () => {
+    const s = new SeoPrerenderService({ repositories: { categoryModel: { find: () => ({ select: () => ({ sort: () => ({ lean: async () => [] }) }) }) } } } as any, {} as any, {} as any, {} as any);
+    const html: string = await (s as any).sitemapHtml();
+    expect(html).toContain('<h2>Buyer guide</h2>');
+    expect(html).toContain('<h2>Seller guide</h2>');
+    expect(html).toContain('href="https://edudeen.com/sitemap?tab=seller#s-p1"');
+    expect(html).toContain('<h2>Shop by class</h2>');
+  });
+
   it('static pages are all public, absolute-path routes of the web app', () => {
     for (const [slug, p] of Object.entries(STATIC_PAGES)) {
       expect(p.path).toBe(`/${slug}`);
