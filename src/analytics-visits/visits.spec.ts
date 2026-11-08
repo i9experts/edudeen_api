@@ -163,6 +163,35 @@ describe('VisitsService.rollup', () => {
   });
 });
 
+describe('VisitsService.getAdminStats', () => {
+  function makeAdminService() {
+    const visitModel: any = {
+      findOne: () => ({ sort: () => ({ select: () => ({ lean: async () => ({ pktDate: '2026-10-01' }) }) }) }),
+      aggregate: jest.fn()
+        .mockResolvedValueOnce([{ _id: 'direct', visits: 60 }, { _id: 'social', visits: 40 }]) // bySource
+        .mockResolvedValueOnce([{ _id: '2026-10-05', visits: 50 }, { _id: '2026-10-06', visits: 50 }]) // byDay
+        .mockResolvedValueOnce([{ _id: STORE, visits: 100 }]), // topStores
+    };
+    const termModel: any = {};
+    const productModel: any = {};
+    const storeModel: any = { find: () => ({ select: () => ({ lean: async () => [{ _id: STORE, name: 'Uzair Book Center', slug: 'uzair' }] }) }) };
+    const orderModel: any = { aggregate: jest.fn().mockResolvedValue([{ paidCount: 5, gross: 500, refunds: 0, freeClaims: 0 }]) };
+    const svc = new VisitsService({ isConnected: true } as any, visitModel, termModel, orderModel, productModel, storeModel);
+    return { svc };
+  }
+
+  it('aggregates visits across every store, not just one seller', async () => {
+    const { svc } = makeAdminService();
+    const res: any = await svc.getAdminStats({ range: 'custom', from: '2026-10-01', to: '2026-10-10' });
+    expect(res.data.visits).toBe(100);
+    expect(res.data.sources.find((s: any) => s.source === 'direct')).toMatchObject({ visits: 60, percent: 60 });
+    expect(res.data.byDay).toEqual([{ date: '2026-10-05', visits: 50 }, { date: '2026-10-06', visits: 50 }]);
+    expect(res.data.topStores).toEqual([{ storeId: STORE, name: 'Uzair Book Center', slug: 'uzair', visits: 100 }]);
+    expect(res.data.paidOrders).toBe(5);
+    expect(res.data.conversionRate).toBe(5); // 5 orders / 100 visits
+  });
+});
+
 describe('realtime', () => {
   it('page-view beacons never publish a topic', () => {
     const rt = new RealtimeService();

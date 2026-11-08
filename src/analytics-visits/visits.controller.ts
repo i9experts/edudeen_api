@@ -44,3 +44,21 @@ export class VisitsStatsController {
     return this.visits.getStats(req.user.userId, query.storeId, query);
   }
 }
+
+/** Platform-wide — every store, not just one seller's. Mounted under
+ *  api/admin/analytics so it's covered by the existing analytics.view
+ *  staff permission (see staff/permissions.ts RULES) with no new entry needed. */
+@ApiTags('Admin Analytics')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
+@UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+@Controller('api/admin/analytics')
+export class VisitsAdminController {
+  constructor(private readonly visits: VisitsService) {}
+
+  @Get('visits')
+  getAdminVisits(@Query() query: AnalyticsQueryDto) {
+    return this.visits.getAdminStats(query);
+  }
+}

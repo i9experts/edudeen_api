@@ -194,6 +194,73 @@ export async function findPossibleDuplicates(
   }
 }
 
+/**
+ * Same signal as `findPossibleDuplicates`, but for a view that spans every store
+ * on an order (the admin order console) instead of one seller's own stores.
+ * Builds one target per (order, store) pair — an order with 3 seller packages
+ * yields 3 independent duplicate checks — then runs the same single pooled
+ * query as the seller path. Keyed by `${orderId}:${storeId}` so a multi-store
+ * order can flag one package as a duplicate without implicating the others.
+ */
+export async function findPossibleDuplicatesAcrossStores(
+  orderModel: { find: (f: any) => any },
+  orders: any[],
+): Promise<Map<string, DuplicateRef>> {
+  try {
+    const targets: DupCandidate[] = [];
+    for (const o of orders) {
+      for (const so of o.sellerOrders ?? []) {
+        const sid = idOf(so.storeId);
+        if (!sid) continue;
+        const c = toDupCandidate(o, sid);
+        if (c && c.status !== 'cancelled') targets.push(c);
+      }
+    }
+    if (!targets.length) return new Map();
+
+    const storeIds = Array.from(new Set(targets.map(t => t.storeId)));
+    const userIds = Array.from(new Set(targets.map(t => t.userId)));
+    const times = targets.map(t => t.createdAt);
+    const from = new Date(Math.min(...times) - DUPLICATE_WINDOW_MS);
+    const to = new Date(Math.max(...times) + DUPLICATE_WINDOW_MS);
+
+    const docs: any[] = await orderModel
+      .find({
+        userId: { $in: userIds },
+        'sellerOrders.storeId': { $in: storeIds },
+        createdAt: { $gte: from, $lte: to },
+        isDelete: false,
+        isFreeClaim: { $ne: true },
+      })
+      .select('orderNumber userId createdAt isFreeClaim sellerOrders.storeId sellerOrders.status sellerOrders.items.productId sellerOrders.items.status')
+      .limit(DUPLICATE_POOL_LIMIT)
+      .lean();
+
+    const pool: DupCandidate[] = [];
+    for (const d of docs) {
+      for (const sid of storeIds) {
+        const c = toDupCandidate(d, sid);
+        if (c) pool.push(c);
+      }
+    }
+
+    // Keyed by (order, store) rather than plain orderId (see `buildDuplicateMap`)
+    // so a multi-store order's packages are judged independently.
+    const byKey = new Map<string, DuplicateRef>();
+    for (const t of targets) {
+      let best: DupCandidate | null = null;
+      for (const p of pool) {
+        if (!isDuplicatePair(t, p)) continue;
+        if (!best || Math.abs(p.createdAt - t.createdAt) < Math.abs(best.createdAt - t.createdAt)) best = p;
+      }
+      if (best) byKey.set(`${t.orderId}:${t.storeId}`, { orderId: best.orderId, orderNumber: best.orderNumber });
+    }
+    return byKey;
+  } catch {
+    return new Map();
+  }
+}
+
 /** Per-item return flags for the seller detail (read straight from the existing order fields). */
 export function itemReturnFlags(it: any) {
   return {

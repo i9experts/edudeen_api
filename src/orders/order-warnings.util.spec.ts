@@ -1,6 +1,7 @@
 import {
   addressWarnings,
   findPossibleDuplicates,
+  findPossibleDuplicatesAcrossStores,
   isDuplicatePair,
   normalizePkPhone,
   phonesMismatch,
@@ -62,6 +63,34 @@ describe('findPossibleDuplicates (one query)', () => {
   it('returns an empty map when the query fails', async () => {
     const find = jest.fn(() => { throw new Error('db down'); });
     const map = await findPossibleDuplicates({ find }, [order('a', T0)], () => 'store1');
+    expect(map.size).toBe(0);
+  });
+});
+
+describe('findPossibleDuplicatesAcrossStores (admin, multi-store)', () => {
+  it('keys the result per (order, store) so one store package can duplicate while another does not', async () => {
+    // Order a: store1 + store2 packages, both with product p1.
+    const a = order('a', T0, {
+      sellerOrders: [
+        { storeId: 'store1', status: 'pending', items: [{ productId: 'p1' }] },
+        { storeId: 'store2', status: 'pending', items: [{ productId: 'p1' }] },
+      ],
+    });
+    // Order b: only a store1 package, same buyer + product, 1h later — duplicates a's store1 package only.
+    const b = order('b', T0 + H, { sellerOrders: [{ storeId: 'store1', status: 'pending', items: [{ productId: 'p1' }] }] });
+
+    const find = jest.fn().mockReturnValue({ select: () => ({ limit: () => ({ lean: async () => [a, b] }) }) });
+    const map = await findPossibleDuplicatesAcrossStores({ find }, [a, b]);
+
+    expect(find).toHaveBeenCalledTimes(1);
+    expect(map.get('a:store1')).toEqual({ orderId: 'b', orderNumber: 'ORD-b' });
+    expect(map.get('a:store2')).toBeUndefined(); // no other order has a store2 package at all
+    expect(map.get('b:store1')).toEqual({ orderId: 'a', orderNumber: 'ORD-a' });
+  });
+
+  it('returns an empty map when the query fails', async () => {
+    const find = jest.fn(() => { throw new Error('db down'); });
+    const map = await findPossibleDuplicatesAcrossStores({ find }, [order('a', T0)]);
     expect(map.size).toBe(0);
   });
 });
