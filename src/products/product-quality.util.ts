@@ -108,6 +108,78 @@ export function assertClassRangeRule(opts: { type: string; classFrom?: string | 
   }
 }
 
+// ── Listing quality score (read-time only, nothing stored) ───────────────────────────────────────────
+/** Points per check. A check that does not apply to a product (class range for physical goods, preview for physical) is dropped and the score re-scaled to 0-100. */
+export const QUALITY_WEIGHTS = {
+  title: 10,
+  images: 20,
+  description: 20,
+  category: 10,
+  classRange: 15,
+  tags: 10,
+  preview: 15,
+  coverStyle: 10,
+} as const;
+
+export const QUALITY_GOOD = 80;
+export const QUALITY_LOW = 60;
+
+export interface QualityInput {
+  name?: string | null;
+  isPhysical: boolean;
+  isCourse: boolean;
+  imageCount: number;
+  description?: string | null;
+  hasCategory: boolean;
+  hasSubCategory: boolean;
+  classFrom?: string | null;
+  classTo?: string | null;
+  tagCount: number;
+  /** digital downloads: a free sample or an enabled buyer preview exists */
+  hasPreview: boolean;
+  /** online courses: number of lessons */
+  lessonCount: number;
+  coverStyle?: string | null;
+}
+
+export interface QualityResult { score: number; missing: string[] }
+
+/** 0-100 listing completeness + the plain-language list of what is missing/weak. Pure. */
+export function listingQuality(i: QualityInput): QualityResult {
+  const W = QUALITY_WEIGHTS;
+  let earned = 0;
+  let possible = 0;
+  const missing: string[] = [];
+  const add = (weight: number, got: number, msg: string | null) => {
+    possible += weight;
+    earned += weight * Math.max(0, Math.min(1, got));
+    if (msg && got < 1) missing.push(msg);
+  };
+
+  const name = String(i.name ?? '').trim();
+  const titleOk = name.length >= MIN_TITLE_LENGTH && !vagueTitleWarning(name);
+  add(W.title, titleOk ? 1 : name.length >= MIN_TITLE_LENGTH ? 0.5 : 0, 'A clearer title (what it is, who it is for, who made it)');
+
+  const img = Math.max(0, i.imageCount | 0);
+  add(W.images, img >= 3 ? 1 : img === 2 ? 0.7 : img === 1 ? 0.4 : 0, img === 0 ? 'Add photos' : `Add more photos (${img} now, 3+ is best)`);
+
+  const dlen = String(i.description ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().length;
+  add(W.description, dlen >= 250 ? 1 : dlen >= 100 ? 0.7 : dlen >= 20 ? 0.35 : 0, dlen < 20 ? 'Add a description' : 'A longer description (250+ characters)');
+
+  add(W.category, (i.hasCategory ? 0.5 : 0) + (i.hasSubCategory ? 0.5 : 0), i.hasCategory ? 'Pick a sub-category' : 'Pick a category');
+
+  if (!i.isPhysical) add(W.classRange, i.classFrom || i.classTo ? 1 : 0, 'Set the class range');
+
+  add(W.tags, i.tagCount >= 3 ? 1 : i.tagCount >= 1 ? 0.5 : 0, i.tagCount === 0 ? 'Add search tags' : 'Add more search tags (3+)');
+
+  if (i.isCourse) add(W.preview, i.lessonCount > 0 ? 1 : 0, 'Add at least one lesson');
+  else if (!i.isPhysical) add(W.preview, i.hasPreview ? 1 : 0, 'Add a free sample or preview');
+
+  add(W.coverStyle, i.coverStyle === 'book' || i.coverStyle === 'flat' ? 1 : 0, 'Choose a product card style');
+
+  return { score: possible > 0 ? Math.round((earned / possible) * 100) : 0, missing };
+}
+
 /** All non-blocking warnings for a title + class range (returned to the seller in the create/update response). */
 export function productWarnings(title: string, classFrom?: string | null, classTo?: string | null): string[] {
   return [vagueTitleWarning(title), titleClassConflict(title, classFrom, classTo)].filter((w): w is string => !!w);

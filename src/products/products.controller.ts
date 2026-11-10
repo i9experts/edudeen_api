@@ -17,6 +17,9 @@ import {
 import { ProductsService } from './products.service';
 import { ProductStockService } from './product-stock.service';
 import { ProductOffersService } from './product-offers.service';
+import { ProductLifecycleService } from './product-lifecycle.service';
+import { ProductBulkService } from './product-bulk.service';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -28,6 +31,8 @@ export class productController {
     private readonly ProductsService: ProductsService,
     private readonly productStockService: ProductStockService,
     private readonly productOffersService: ProductOffersService,
+    private readonly lifecycle: ProductLifecycleService,
+    private readonly bulk: ProductBulkService,
   ) {}
 
   @UseGuards(OptionalJwtAuthGuard)
@@ -293,6 +298,38 @@ export class productController {
   async bulkOffers(@Req() req: any, @Body() body: any) {
     const { userId: sellerId } = req.user;
     return this.productOffersService.bulkOffers(sellerId, body);
+  }
+
+  // Draft copy of one of the seller's products (new SKU + slug; sales, ratings and offers are not copied).
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Post('duplicate/:productId')
+  async duplicateProduct(@Req() req: any, @Param('productId', ParseObjectIdPipe) productId: string) {
+    return this.lifecycle.duplicate(req.user.userId, productId);
+  }
+
+  // Seller Activate / Deactivate: { active: boolean }.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Patch('visibility/:productId')
+  async setVisibility(@Req() req: any, @Param('productId', ParseObjectIdPipe) productId: string, @Body() body: any) {
+    return this.lifecycle.setVisibility(req.user.userId, productId, body);
+  }
+
+  // Bulk Activate / Deactivate: { ids[<=100], active }. A foreign id = 403 for the whole request.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Patch('bulk-status')
+  async bulkStatus(@Req() req: any, @Body() body: any) {
+    return this.bulk.bulkSetStatus(req.user.userId, body);
+  }
+
+  // Bulk price: { ids[<=100], mode: 'set'|'percent', value, dryRun? }. All-or-nothing; dryRun = preview.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Patch('bulk-price')
+  async bulkPrice(@Req() req: any, @Body() body: any) {
+    return this.bulk.bulkSetPrice(req.user.userId, body);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
