@@ -15,19 +15,27 @@ export class CreateRefundRequestDto {
   @ApiProperty({ example: 'Item arrived damaged', required: false, description: 'Free text; optional when reasonCode is sent (the label is used).' })
   @IsOptional() @IsString() @MinLength(3) @MaxLength(500) reason?: string;
 
-  @ApiProperty({ required: false, enum: ['damaged', 'wrong_item', 'incomplete', 'not_as_described', 'cant_access_file'] })
+  @ApiProperty({ required: false, enum: ['damaged', 'missing_pages', 'printing_error', 'wrong_item', 'wrong_edition_or_class', 'not_as_described', 'digital_not_working', 'other'] })
   @IsOptional() @IsString() @MaxLength(40) reasonCode?: string;
 
   @ApiProperty({ required: false, description: '20-1000 characters; required with reasonCode' })
   @IsOptional() @IsString() @MaxLength(1000) note?: string;
 
-  @ApiProperty({ required: false, description: 'Up to 3 uploaded image links (physical items only)' })
-  @IsOptional() @IsArray() @ArrayMaxSize(3) @IsString({ each: true }) evidenceImages?: string[];
+  @ApiProperty({ required: false, description: 'Up to 4 uploaded image links (physical items only)' })
+  @IsOptional() @IsArray() @ArrayMaxSize(4) @IsString({ each: true }) evidenceImages?: string[];
 }
 
 export class RejectRefundRequestDto {
   @ApiProperty({ example: 'Return window has already closed' })
-  @IsString() @MinLength(3) @MaxLength(500) notes: string;
+  @IsString() @MinLength(10) @MaxLength(500) notes: string;
+}
+
+export class FollowUpDto {
+  @ApiProperty({ enum: ['item_received', 'replacement_sent'] })
+  @IsIn(['item_received', 'replacement_sent']) step: 'item_received' | 'replacement_sent';
+
+  @ApiProperty({ required: false, description: 'Optional seller note, up to 500 characters' })
+  @IsOptional() @IsString() @MaxLength(500) note?: string;
 }
 
 export class AdminRefundQueryDto {

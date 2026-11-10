@@ -166,6 +166,27 @@ export class OrderItem {
 
   @Prop({ type: String, default: null })
   returnRejectReason!: string | null;
+
+  // Optional structured detail (additive; old returns have none of these).
+  @Prop({ type: String, default: null })
+  returnReasonCode!: string | null;
+
+  @Prop({ type: String, default: null })
+  returnNote!: string | null;
+
+  @Prop({ type: [String], default: [] })
+  returnEvidence!: string[];
+
+  // Tracking-only steps after approval (item_received, replacement_sent). Never moves money.
+  @Prop({ type: String, enum: ['item_received', 'replacement_sent', null], default: null })
+  returnFollowUp!: string | null;
+
+  @Prop({ type: String, default: null })
+  returnFollowUpNote!: string | null;
+
+  // Status trail [{status, at, by, byRole, note}].
+  @Prop({ type: [Object], default: undefined })
+  returnHistory?: Record<string, any>[];
 }
 
 export const OrderItemSchema = SchemaFactory.createForClass(OrderItem);

@@ -1,18 +1,39 @@
 import { BadRequestException } from '@nestjs/common';
 
-/** Fixed reasons a buyer can pick; the label is what sellers/admins read. */
+/**
+ * The ONE reason list for refunds and returns (web mirror: api/services/refundRequests.ts).
+ * The label is what sellers/admins read. New requests may only use these codes.
+ */
 export const REFUND_REASON_CODES = {
   damaged: 'Item arrived damaged',
+  missing_pages: 'Missing pages or parts',
+  printing_error: 'Printing error',
   wrong_item: 'Wrong item received',
-  incomplete: 'Incomplete (missing parts or pages)',
+  wrong_edition_or_class: 'Wrong edition or class',
   not_as_described: 'Not as described',
-  cant_access_file: "Can't access the digital file",
+  digital_not_working: 'Digital file is not working',
+  other: 'Other',
 } as const;
 export type RefundReasonCode = keyof typeof REFUND_REASON_CODES;
 
+/** Codes stored by earlier versions: still DISPLAYED as written, never accepted for new requests. */
+export const LEGACY_REASON_LABELS: Record<string, string> = {
+  incomplete: 'Incomplete (missing parts or pages)',
+  cant_access_file: "Can't access the digital file",
+};
+
+/** Label for display: current list, then legacy codes, then the free text exactly as stored. */
+export function reasonDisplayLabel(code: string | null | undefined, freeText: string | null | undefined): string {
+  if (code && Object.prototype.hasOwnProperty.call(REFUND_REASON_CODES, code)) return REFUND_REASON_CODES[code as RefundReasonCode];
+  if (code && LEGACY_REASON_LABELS[code]) return LEGACY_REASON_LABELS[code];
+  return String(freeText ?? '').trim();
+}
+
 export const REFUND_NOTE_MIN = 20;
 export const REFUND_NOTE_MAX = 1000;
-export const REFUND_MAX_IMAGES = 3;
+export const REFUND_MAX_IMAGES = 4;
+/** A rejection must say why (shown to the buyer). */
+export const REJECT_REASON_MIN = 10;
 
 const IMAGE_EXT = /\.(jpe?g|png|webp|heic|avif)$/i;
 
@@ -69,8 +90,8 @@ export function cleanRefundEvidence(
     throw new BadRequestException(`Please describe the problem in ${REFUND_NOTE_MIN}-${REFUND_NOTE_MAX} characters`);
   }
   const hasPhysical = itemTypes.some((t) => t !== 'digital');
-  if (dto.reasonCode === 'cant_access_file' && hasPhysical) {
-    throw new BadRequestException('"Can\'t access the digital file" only applies to digital items');
+  if (dto.reasonCode === 'digital_not_working' && hasPhysical) {
+    throw new BadRequestException('"Digital file is not working" only applies to digital items');
   }
   if (images.length && !hasPhysical) throw new BadRequestException('Photos can only be added for physical items');
   return { reasonCode: dto.reasonCode, note, evidenceImages: images };

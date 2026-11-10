@@ -82,6 +82,17 @@ export class RefundRequest {
   @Prop({ type: String, default: null })
   resolutionNotes: string | null;
 
+  // Tracking-only steps after approval (item_received, replacement_sent). Never moves money.
+  @Prop({ type: String, enum: ['item_received', 'replacement_sent', null], default: null })
+  followUp: 'item_received' | 'replacement_sent' | null;
+
+  @Prop({ type: String, default: null })
+  followUpNote: string | null;
+
+  // Status trail [{status, at, by, byRole, note}]; old requests have none (the drawer rebuilds it).
+  @Prop({ type: [Object], default: undefined })
+  history?: Record<string, any>[];
+
   @Prop({ default: false })
   isDelete: boolean;
 

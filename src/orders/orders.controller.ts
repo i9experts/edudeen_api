@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Put,
+  Patch,
   Post,
   Param,
   Query,
@@ -184,6 +185,43 @@ export class OrdersController {
   async getSellerReturns(@Req() req: any, @Query() query: any) {
     const { userId: sellerId } = req.user;
     return this.ordersService.getSellerReturns(sellerId, query);
+  }
+
+  /** One merged list of item returns + item refund requests, open first by respond-by (read-only). */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Get('seller-returns-all/:storeId')
+  async getSellerReturnsAll(
+    @Req() req: any,
+    @Param('storeId', ParseObjectIdPipe) storeId: string,
+    @Query() query: any,
+  ) {
+    return this.ordersService.getSellerReturnsAll(req.user.userId, storeId, query);
+  }
+
+  /** Drawer detail of one return / refund request (own store only). requestId: return = "<orderId>:<itemId>". */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Get('seller-returns-all/:storeId/:source/:requestId')
+  async getSellerReturnDetail(
+    @Req() req: any,
+    @Param('storeId', ParseObjectIdPipe) storeId: string,
+    @Param('source') source: string,
+    @Param('requestId') requestId: string,
+  ) {
+    return this.ordersService.getSellerReturnDetail(req.user.userId, storeId, source, requestId);
+  }
+
+  /** Tracking-only step after a return is approved (item received back / replacement sent). No money. */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Patch('return-follow-up/:orderId')
+  async returnFollowUp(
+    @Req() req: any,
+    @Param('orderId', ParseObjectIdPipe) orderId: string,
+    @Body() body: any,
+  ) {
+    return this.ordersService.returnFollowUp(req.user.userId, orderId, body);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

@@ -70,7 +70,18 @@ describe('refund request evidence', () => {
 
   it('rejects photos on a digital item', async () => {
     const { svc } = build('digital');
-    await expect(svc.createRequest('buyer-1', 'user', dto({ reasonCode: 'cant_access_file', evidenceImages: [IMG] }))).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.createRequest('buyer-1', 'user', dto({ reasonCode: 'digital_not_working', evidenceImages: [IMG] }))).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('stores the opening trail entry', async () => {
+    const { svc, rows } = build();
+    await svc.createRequest('buyer-1', 'user', dto());
+    expect(rows[0].history).toEqual([expect.objectContaining({ status: 'requested', by: 'buyer-1', byRole: 'user' })]);
+  });
+
+  it('a code from the OLD list is no longer accepted for new requests', async () => {
+    const { svc } = build();
+    await expect(svc.createRequest('buyer-1', 'user', dto({ reasonCode: 'incomplete' }))).rejects.toBeInstanceOf(BadRequestException);
   });
 });
 
@@ -83,8 +94,10 @@ describe('refund evidence validation', () => {
       'http://res.cloudinary.com/demo/image/upload/a.jpg',
     ]) expect(() => cleanEvidenceImages([bad])).toThrow(BadRequestException);
   });
-  it('max 3 photos', () => {
-    expect(() => cleanEvidenceImages([IMG, IMG + '1', IMG + '2', IMG.replace('a.jpg', 'b.jpg')])).toThrow(BadRequestException);
+  it('max 4 photos', () => {
+    const imgs = ['a', 'b', 'c', 'd', 'e'].map((n) => IMG.replace('a.jpg', `${n}.jpg`));
+    expect(cleanEvidenceImages(imgs.slice(0, 4))).toHaveLength(4);
+    expect(() => cleanEvidenceImages(imgs)).toThrow(BadRequestException);
   });
   it('note must be 20-1000 chars', () => {
     expect(() => cleanRefundEvidence({ reasonCode: 'damaged', note: 'short' }, ['physical'])).toThrow(BadRequestException);
@@ -92,6 +105,8 @@ describe('refund evidence validation', () => {
   });
   it('unknown reason code and file-access reason on physical are refused', () => {
     expect(() => cleanRefundEvidence({ reasonCode: 'nope', note: NOTE }, ['physical'])).toThrow(BadRequestException);
-    expect(() => cleanRefundEvidence({ reasonCode: 'cant_access_file', note: NOTE }, ['physical'])).toThrow(BadRequestException);
+    expect(() => cleanRefundEvidence({ reasonCode: 'digital_not_working', note: NOTE }, ['physical'])).toThrow(BadRequestException);
+    expect(() => cleanRefundEvidence({ reasonCode: 'cant_access_file', note: NOTE }, ['digital'])).toThrow(BadRequestException);
+    expect(cleanRefundEvidence({ reasonCode: 'other', note: NOTE }, ['physical']).reasonCode).toBe('other');
   });
 });

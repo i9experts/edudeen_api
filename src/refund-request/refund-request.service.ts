@@ -19,6 +19,7 @@ import { isValidObjectId } from 'mongoose';
 import { escapeRegex } from 'src/common/query-safety.util';
 import { CreateRefundRequestDto, AdminRefundQueryDto } from './dto/refund-request.dto';
 import { cleanRefundEvidence, REFUND_REASON_CODES } from './refund-evidence.util';
+import { cleanFollowUpNote, cleanRejectReason, requiredPreviousFollowUp, trailEntry } from './return-trail.util';
 
 @Injectable()
 export class RefundRequestService {
@@ -140,6 +141,7 @@ export class RefundRequestService {
         reason,
         ...(evidence.reasonCode ? { reasonCode: evidence.reasonCode, note: evidence.note, evidenceImages: evidence.evidenceImages } : {}),
         status: 'pending',
+        history: [trailEntry('requested', userId, role)],
       });
     };
     let created: any;
@@ -471,6 +473,8 @@ export class RefundRequestService {
       sellerDebitCurrency: settlementCurrency,
       stripeRefundId,
     });
+    // Trail entry only (kept out of the claim above on purpose: the refund path stays as it was).
+    await this.pushHistory(request._id, trailEntry('approved', actorId, actorRole));
 
     await this.activityLogService.log({
       storeId: sellerOrder.storeId,
@@ -497,7 +501,54 @@ export class RefundRequestService {
     };
   }
 
-  async reject(actorId: string, actorRole: 'seller' | 'admin', requestId: string, notes: string) {
+  /** Best-effort trail write; a failure here must never undo or block a decision that already happened. */
+  private async pushHistory(id: unknown, entry: ReturnType<typeof trailEntry>) {
+    try {
+      await this.model.updateOne({ _id: id as any }, { $push: { history: entry } } as any);
+    } catch { /* tracking only */ }
+  }
+
+  /**
+   * Tracking-only step after approval (item received back / replacement sent).
+   * Conditional update from the exact previous step; any other jump is a 400.
+   * No money moves here.
+   */
+  async followUp(actorId: string, actorRole: 'seller' | 'admin', requestId: string, step: string, noteRaw?: string) {
+    const existing: any = await this.model.findOne({ _id: requestId, isDelete: false }).lean();
+    if (!existing) throw new NotFoundException('Refund request not found');
+    await this.assertCanReview(actorRole, actorId, existing);
+    if (existing.status !== 'approved') throw new BadRequestException('Only an approved request can be followed up');
+
+    const order: any = await this.databaseService.repositories.orderModel
+      .findOne({ _id: existing.orderId, isDelete: false }).select('sellerOrders').lean();
+    const so = (order?.sellerOrders ?? []).find((s: any) => String(s._id) === String(existing.sellerOrderId));
+    const ids = new Set((existing.itemIds ?? []).map(String));
+    const isPhysical = ((so?.items ?? []) as any[]).filter((i) => ids.has(String(i._id))).some((i) => i.type !== 'digital');
+
+    const previous = requiredPreviousFollowUp(step, isPhysical);
+    const note = cleanFollowUpNote(noteRaw);
+    const updated = await this.model.findOneAndUpdate(
+      { _id: requestId, isDelete: false, status: 'approved', followUp: previous },
+      { $set: { followUp: step, followUpNote: note }, $push: { history: trailEntry(step, actorId, actorRole, note) } },
+      { returnDocument: 'after' },
+    );
+    if (!updated) throw new BadRequestException('This step is not available for the request in its current state');
+
+    await this.activityLogService.log({
+      storeId: existing.storeId,
+      category: 'orders',
+      action: `refund_${step}`,
+      description: `Refund request marked "${step === 'item_received' ? 'item received back' : 'replacement sent'}"${note ? ` — ${note}` : ''}`,
+      actorId,
+      actorRole,
+      targetId: String(requestId),
+      targetType: 'refund_request',
+    });
+    return { success: true, message: 'Updated', data: { followUp: step } };
+  }
+
+  async reject(actorId: string, actorRole: 'seller' | 'admin', requestId: string, rawNotes: string) {
+    const notes = cleanRejectReason(rawNotes);
     const existing = await this.model.findOne({ _id: requestId, isDelete: false }).lean();
     if (!existing) throw new NotFoundException('Refund request not found');
     await this.assertCanReview(actorRole, actorId, existing as any);
@@ -510,6 +561,7 @@ export class RefundRequestService {
     if (!request) {
       throw new BadRequestException('Refund request not found or already reviewed');
     }
+    await this.pushHistory(request._id, trailEntry('rejected', actorId, actorRole, notes));
     await this.activityLogService.log({
       storeId: request.storeId,
       category: 'orders',
