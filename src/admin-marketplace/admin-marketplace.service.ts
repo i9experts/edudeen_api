@@ -1,4 +1,4 @@
-/* eslint-disable prettier/prettier */
+/* eslint-disable prettier/prettier */
 import { courseTotals } from '../classroom/course.util';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { isValidObjectId } from 'mongoose';
@@ -634,5 +634,53 @@ export class AdminMarketplaceService {
     }).catch(() => {});
 
     return { success: true, message: 'Store rejected' };
+  }
+
+  /**
+   * Deletes a store AND every one of its products in one action — the bulk,
+   * store-scoped counterpart to `remove()` above (which takes down a single
+   * listing). Same soft-delete convention throughout: nothing is ever
+   * hard-deleted, so historical orders, reviews and finance records that
+   * reference this store's id keep resolving correctly. Works from any
+   * status (active, suspended, pending, rejected) — unlike approve/reject,
+   * there's no lifecycle gate, since the point is to take the store down
+   * for good regardless of where it stood.
+   */
+  async deleteStore(id: string, reason: string, meta: AuditMeta) {
+    const why = reason.trim().slice(0, 500);
+    const store = await this.r.storeModel.findOne({ _id: id, isDelete: false });
+    if (!store) throw new NotFoundException('Store not found');
+
+    const products = await this.r.productModel.find({ storeId: id, isDelete: false }, { _id: 1 }).lean();
+    const productIds = products.map((p: any) => String(p._id));
+
+    await this.r.storeModel.updateOne(
+      { _id: id },
+      { $set: { isDelete: true, status: 'suspended', rejectionReason: why, reviewedAt: new Date() } },
+    );
+
+    if (productIds.length) {
+      await this.r.productModel.updateMany(
+        { _id: { $in: productIds } },
+        { $set: { isDelete: true, status: 'inactive', isFeatured: false, removedByAdmin: true, removalReason: `Store deleted: ${why}` } },
+      );
+      // Same cleanup as a single listing removal, just across every one of this store's products at once.
+      await Promise.all([
+        this.r.cartModel.updateMany({ 'items.productId': { $in: productIds } }, { $pull: { items: { productId: { $in: productIds } } } }),
+        this.r.wishListModel.deleteMany({ productId: { $in: productIds } }),
+      ]);
+    }
+
+    this.log('store_deleted', `Store "${store.name}" deleted along with ${productIds.length} product(s): ${why}`, meta, id, 'store');
+    this.notificationsService.notify({
+      recipientId: store.sellerId,
+      recipientRole: 'seller',
+      type: NOTIFICATION_TYPES.STORE_DELETED,
+      title: 'Your store was removed',
+      body: `"${store.name}" and its ${productIds.length} product(s) were removed from Edudeen. Reason: ${why}`,
+      data: { storeId: id },
+    }).catch(() => {});
+
+    return { success: true, message: `Store deleted along with ${productIds.length} product(s)`, data: { deletedProducts: productIds.length } };
   }
 }

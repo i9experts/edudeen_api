@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Body, Controller, Get, Param, Patch, Query, Req, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Query, Req, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -16,6 +16,7 @@ import { SetFulfillmentModeDto } from './dto/set-fulfillment-mode.dto';
 import { SetFeaturedRankDto } from './dto/set-featured-rank.dto';
 import { LeadsQueryDto } from './dto/leads-query.dto';
 import { RejectLeadDto } from './dto/reject-lead.dto';
+import { DeleteStoreDto } from './dto/delete-store.dto';
 import { ApproveListingDto, RejectListingDto } from './dto/review-listing.dto';
 
 @ApiTags('Admin Marketplace')
@@ -122,5 +123,10 @@ export class AdminMarketplaceController {
   @Patch('leads/:id/reject')
   rejectLead(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: RejectLeadDto) {
     return this.adminMarketplaceService.rejectLead(id, dto.reason, this.meta(req));
+  }
+
+  @Delete('leads/:id')
+  deleteStore(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: DeleteStoreDto) {
+    return this.adminMarketplaceService.deleteStore(id, dto.reason, this.meta(req));
   }
 }

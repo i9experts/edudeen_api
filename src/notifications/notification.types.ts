@@ -62,6 +62,7 @@ export const NOTIFICATION_TYPES = {
   PRODUCT_SCHEDULED: 'product_scheduled',
   PRODUCT_PUBLISHED: 'product_published',
   LISTING_IN_REVIEW: 'listing_in_review',
+  STORE_DELETED: 'store_deleted',
   CATEGORY_REQUEST_APPROVED: 'category_request_approved',
   CATEGORY_REQUEST_REJECTED: 'category_request_rejected',
 } as const;
