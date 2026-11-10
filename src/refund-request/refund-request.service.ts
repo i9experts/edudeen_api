@@ -15,7 +15,9 @@ import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { verifyStoreOwnershipOrForbidden } from 'src/common/store-ownership.util';
 import { isPackagePaid } from 'src/orders/package-paid.util';
 import { RedisService } from 'src/redis/redis.service';
-import { CreateRefundRequestDto } from './dto/refund-request.dto';
+import { isValidObjectId } from 'mongoose';
+import { escapeRegex } from 'src/common/query-safety.util';
+import { CreateRefundRequestDto, AdminRefundQueryDto } from './dto/refund-request.dto';
 import { cleanRefundEvidence, REFUND_REASON_CODES } from './refund-evidence.util';
 
 @Injectable()
@@ -204,12 +206,76 @@ export class RefundRequestService {
     return { success: true, data: items };
   }
 
-  async listPending(page = 1, limit = 20) {
+  /**
+   * Full admin view: every status (not just pending), filterable by store,
+   * date range, and a free-text search across order number/id or the
+   * requester's name/email — enriched with the order number, store name and
+   * requester's name/email so the admin UI isn't resolving each row itself.
+   * A pending-only view keeps the existing oldest-first order (what needs
+   * action soonest); any other view reads newest-first, like the Orders console.
+   */
+  async listForAdmin(filters: AdminRefundQueryDto) {
+    const page = filters.page ?? 1;
+    const limit = filters.limit ?? 20;
+    const { orderModel, userModel, storeModel } = this.databaseService.repositories;
+
+    const match: Record<string, unknown> = { isDelete: false };
+    if (filters.status) match.status = filters.status;
+    if (filters.storeId) match.storeId = filters.storeId;
+    if (filters.from || filters.to) {
+      const createdAt: Record<string, Date> = {};
+      if (filters.from) createdAt.$gte = new Date(filters.from);
+      if (filters.to) { const end = new Date(filters.to); end.setHours(23, 59, 59, 999); createdAt.$lte = end; }
+      match.createdAt = createdAt;
+    }
+
+    const q = filters.q?.trim();
+    if (q) {
+      const rx = new RegExp(escapeRegex(q), 'i');
+      const [matchingOrders, matchingUsers] = await Promise.all([
+        orderModel.find({ $or: [{ orderNumber: rx }, ...(isValidObjectId(q) ? [{ _id: q }] : [])] }).select('_id').limit(200).lean(),
+        userModel.find({ $or: [{ email: rx }, { name: rx }] }).select('_id').limit(200).lean(),
+      ]);
+      const orderIds = matchingOrders.map((o: any) => String(o._id));
+      const userIds = matchingUsers.map((u: any) => String(u._id));
+      const or: Record<string, unknown>[] = [
+        ...(orderIds.length ? [{ orderId: { $in: orderIds } }] : []),
+        ...(userIds.length ? [{ requestedBy: { $in: userIds } }] : []),
+        ...(isValidObjectId(q) ? [{ _id: q }] : []),
+      ];
+      if (or.length === 0) return { success: true, data: { items: [], total: 0, page, limit } };
+      match.$or = or;
+    }
+
+    const sort: Record<string, 1 | -1> = filters.status === 'pending' ? { createdAt: 1 } : { createdAt: -1 };
+
     const [items, total] = await Promise.all([
-      this.model.find({ status: 'pending', isDelete: false }).sort({ createdAt: 1 }).skip((page - 1) * limit).limit(limit).lean(),
-      this.model.countDocuments({ status: 'pending', isDelete: false }),
+      this.model.find(match).sort(sort).skip((page - 1) * limit).limit(limit).lean(),
+      this.model.countDocuments(match),
     ]);
-    return { success: true, data: { items, total, page, limit } };
+
+    const orderIds = [...new Set(items.map((i: any) => i.orderId))];
+    const storeIds = [...new Set(items.map((i: any) => i.storeId))];
+    const requesterIds = [...new Set(items.map((i: any) => i.requestedBy))];
+    const [orders, stores, requesters] = await Promise.all([
+      orderModel.find({ _id: { $in: orderIds } }).select('orderNumber').lean(),
+      storeModel.find({ _id: { $in: storeIds } }).select('name').lean(),
+      userModel.find({ _id: { $in: requesterIds } }).select('name email').lean(),
+    ]);
+    const orderById = new Map(orders.map((o: any) => [String(o._id), o]));
+    const storeById = new Map(stores.map((s: any) => [String(s._id), s]));
+    const requesterById = new Map(requesters.map((u: any) => [String(u._id), u]));
+
+    const enriched = items.map((i: any) => ({
+      ...i,
+      orderNumber: orderById.get(i.orderId)?.orderNumber ?? null,
+      storeName: storeById.get(i.storeId)?.name ?? null,
+      requester: requesterById.has(i.requestedBy)
+        ? { name: requesterById.get(i.requestedBy).name, email: requesterById.get(i.requestedBy).email }
+        : null,
+    }));
+
+    return { success: true, data: { items: enriched, total, page, limit } };
   }
 
   /** Refund requests targeting one of the seller's own stores — ownership

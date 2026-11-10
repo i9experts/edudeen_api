@@ -18,7 +18,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { IdempotencyInterceptor } from '../common/idempotency.interceptor';
 import { RefundRequestService } from './refund-request.service';
-import { CreateRefundRequestDto, RejectRefundRequestDto } from './dto/refund-request.dto';
+import { CreateRefundRequestDto, RejectRefundRequestDto, AdminRefundQueryDto } from './dto/refund-request.dto';
 
 @ApiTags('Refund Requests')
 @ApiBearerAuth()
@@ -44,11 +44,14 @@ export class RefundRequestController {
     return this.refundRequestService.listForOrder(req.user.userId, req.user.role, orderId);
   }
 
+  // The admin Refunds queue's list — every status unless `status` narrows it,
+  // filterable by store/date/search.
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
-  @Get('admin/pending')
-  async listPending(@Query('page') page = '1', @Query('limit') limit = '20') {
-    return this.refundRequestService.listPending(Number(page) || 1, Number(limit) || 20);
+  @UsePipes(new ValidationPipe({ transform: true }))
+  @Get('admin')
+  async listForAdmin(@Query() query: AdminRefundQueryDto) {
+    return this.refundRequestService.listForAdmin(query);
   }
 
   // Seller's own refund requests, across just their store — ownership

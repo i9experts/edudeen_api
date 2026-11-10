@@ -201,4 +201,74 @@ export class VisitsService {
       },
     };
   }
+
+  // ── Admin read (platform-wide, every store) ─────────────────────────────
+  async getAdminStats(query: { range?: string; from?: string; to?: string }) {
+    const { from, to } = resolveDateRange(query, { pkt: true });
+    const fromDate = pktDateOf(from);
+    const toDate = pktDateOf(to);
+
+    const first: any = await this.visitModel.findOne({}).sort({ pktDate: 1 }).select('pktDate').lean();
+    const trackingSince: string | null = first?.pktDate ?? null;
+
+    const [bySource, byDay, topStores] = await Promise.all([
+      this.visitModel.aggregate([
+        { $match: { productId: '', pktDate: { $gte: fromDate, $lte: toDate } } },
+        { $group: { _id: '$source', visits: { $sum: '$visits' } } },
+      ]),
+      this.visitModel.aggregate([
+        { $match: { productId: '', pktDate: { $gte: fromDate, $lte: toDate } } },
+        { $group: { _id: '$pktDate', visits: { $sum: '$visits' } } },
+        { $sort: { _id: 1 } },
+      ]),
+      this.visitModel.aggregate([
+        { $match: { productId: '', pktDate: { $gte: fromDate, $lte: toDate } } },
+        { $group: { _id: '$storeId', visits: { $sum: '$visits' } } },
+        { $sort: { visits: -1 } },
+        { $limit: 10 },
+      ]),
+    ]);
+
+    const visits = bySource.reduce((s: number, r: any) => s + r.visits, 0);
+    const sources = VISIT_SOURCES.map((source) => {
+      const v = (bySource.find((r: any) => r._id === source) as any)?.visits ?? 0;
+      return { source, visits: v, percent: visits > 0 ? Math.round((v / visits) * 1000) / 10 : 0 };
+    });
+
+    const storeIds = topStores.map((r: any) => r._id).filter(Boolean);
+    const stores = storeIds.length
+      ? await this.storeModel.find({ _id: { $in: storeIds } }).select('name slug').lean()
+      : [];
+    const storeById = new Map(stores.map((s: any) => [String(s._id), s]));
+    const stores_: { storeId: string; name: string; slug: string | null; visits: number }[] = topStores.map((r: any) => ({
+      storeId: r._id,
+      name: (storeById.get(String(r._id)) as any)?.name ?? 'Unknown store',
+      slug: (storeById.get(String(r._id)) as any)?.slug ?? null,
+      visits: r.visits,
+    }));
+
+    // Same "only count orders from the first tracked day" rule as the seller view,
+    // just without a storeId filter — platform-wide conversion.
+    let paidOrders = 0;
+    if (trackingSince) {
+      const effFrom = new Date(Math.max(from.getTime(), pktDayStartOf(trackingSince).getTime()));
+      if (effFrom.getTime() <= to.getTime()) {
+        paidOrders = (await paidPeriodTotals(this.orderModel, effFrom, to, {})).orderCount;
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        range: { from: fromDate, to: toDate },
+        trackingSince,
+        visits,
+        paidOrders,
+        conversionRate: conversionRate(paidOrders, visits),
+        sources,
+        byDay: byDay.map((r: any) => ({ date: r._id, visits: r.visits })),
+        topStores: stores_,
+      },
+    };
+  }
 }

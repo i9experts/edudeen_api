@@ -4,9 +4,15 @@ import { AdminOrdersService } from './admin-orders.service';
 
 const chain = (v: any) => ({ select: () => ({ limit: () => ({ lean: () => Promise.resolve(v) }), lean: () => Promise.resolve(v) }), lean: () => Promise.resolve(v) });
 
-function make(orders: any[] = []) {
+function make(orders: any[] = [], dupPool: any[] = []) {
   const orderModel: any = {
-    find: jest.fn(() => ({ sort: () => ({ skip: () => ({ limit: () => ({ lean: () => Promise.resolve(orders) }) }) }) })),
+    // list()'s own page fetch: find().sort().skip().limit().lean()
+    // findPossibleDuplicatesAcrossStores' pool query: find().select().limit().lean()
+    // Both are plain `find(filter)` calls — branch on which chain method is called next.
+    find: jest.fn(() => ({
+      sort: () => ({ skip: () => ({ limit: () => ({ lean: () => Promise.resolve(orders) }) }) }),
+      select: () => ({ limit: () => ({ lean: () => Promise.resolve(dupPool) }) }),
+    })),
     countDocuments: jest.fn().mockResolvedValue(orders.length),
     aggregate: jest.fn().mockResolvedValue([{ _id: 'paid', count: orders.length }]),
     findOne: jest.fn(() => ({ lean: () => Promise.resolve(orders[0] ?? null) })),
@@ -37,7 +43,7 @@ describe('Admin orders console', () => {
     expect(filter.$or).toEqual(expect.arrayContaining([{ orderNumber: /sara/i }, { userId: { $in: ['u1'] } }]));
     expect(res.data.items[0]).toEqual(expect.objectContaining({
       orderNumber: 'ED-1042', buyer: expect.objectContaining({ name: 'Sara Khan' }),
-      stores: [{ id: 's1', name: 'Uzair Book Center', status: 'processing' }], itemCount: 2,
+      stores: [{ id: 's1', name: 'Uzair Book Center', status: 'processing', possibleDuplicate: null }], itemCount: 2,
     }));
   });
 
@@ -51,5 +57,24 @@ describe('Admin orders console', () => {
   it('404s for an unknown order', async () => {
     const { svc } = make([]);
     await expect(svc.detail('64b0000000000000000000c9')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('flags a possible duplicate on the matching store package only', async () => {
+    // toDupCandidate needs a real productId on each item to build a candidate at all.
+    const withProduct = {
+      ...ORDER,
+      sellerOrders: [{ _id: 'so1', storeId: 's1', status: 'processing', fulfillmentType: 'physical', items: [{ quantity: 2, productId: 'p1' }] }],
+    };
+    const earlier = { ...withProduct, _id: 'prior1', orderNumber: 'ED-1041', createdAt: new Date(withProduct.createdAt.getTime() - 60 * 60 * 1000) };
+    const { svc } = make([withProduct], [withProduct, earlier]);
+    const res: any = await svc.list({ page: 1, limit: 20 } as any);
+    expect(res.data.items[0].stores[0].possibleDuplicate).toEqual({ orderId: 'prior1', orderNumber: 'ED-1041' });
+  });
+
+  it('surfaces address warnings on a physical order with a bad shipping address', async () => {
+    const bad = { ...ORDER, shippingAddress: { addressLine1: 'H5', city: 'Karachi', zipCode: '753', phoneNumber: '03001234567' } };
+    const { svc } = make([bad]);
+    const res: any = await svc.detail(bad._id);
+    expect(res.data.addressWarnings.map((w: any) => w.code)).toContain('bad_postal');
   });
 });

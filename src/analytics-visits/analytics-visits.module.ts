@@ -7,7 +7,7 @@ import { Product, ProductSchema } from '../products/schemas/product.schema';
 import { Store, StoreSchema } from '../store/schemas/store.schema';
 import { TermDaily, TermDailySchema, VisitDaily, VisitDailySchema } from './visit-daily.schema';
 import { VisitsService } from './visits.service';
-import { VisitsBeaconController, VisitsStatsController } from './visits.controller';
+import { VisitsAdminController, VisitsBeaconController, VisitsStatsController } from './visits.controller';
 
 @Module({
   imports: [
@@ -21,7 +21,7 @@ import { VisitsBeaconController, VisitsStatsController } from './visits.controll
       { name: Store.name, schema: StoreSchema },
     ]),
   ],
-  controllers: [VisitsBeaconController, VisitsStatsController],
+  controllers: [VisitsBeaconController, VisitsStatsController, VisitsAdminController],
   providers: [VisitsService],
 })
 export class AnalyticsVisitsModule {}

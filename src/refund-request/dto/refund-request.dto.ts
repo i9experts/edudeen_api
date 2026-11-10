@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsIn, IsInt, IsISO8601, IsMongoId, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 
 export class CreateRefundRequestDto {
   @ApiProperty({ example: '65f1...' })
@@ -27,4 +28,27 @@ export class CreateRefundRequestDto {
 export class RejectRefundRequestDto {
   @ApiProperty({ example: 'Return window has already closed' })
   @IsString() @MinLength(3) @MaxLength(500) notes: string;
+}
+
+export class AdminRefundQueryDto {
+  @ApiProperty({ required: false, enum: ['pending', 'approved', 'rejected'] })
+  @IsOptional() @IsIn(['pending', 'approved', 'rejected']) status?: 'pending' | 'approved' | 'rejected';
+
+  @ApiProperty({ required: false })
+  @IsOptional() @IsMongoId() storeId?: string;
+
+  @ApiProperty({ required: false, description: 'Order number, order id, or requester name / email' })
+  @IsOptional() @IsString() @MaxLength(100) q?: string;
+
+  @ApiProperty({ required: false, example: '2026-10-01' })
+  @IsOptional() @IsISO8601() from?: string;
+
+  @ApiProperty({ required: false, example: '2026-10-31' })
+  @IsOptional() @IsISO8601() to?: string;
+
+  @ApiProperty({ required: false, default: 1 })
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(1000) page?: number = 1;
+
+  @ApiProperty({ required: false, default: 20 })
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit?: number = 20;
 }

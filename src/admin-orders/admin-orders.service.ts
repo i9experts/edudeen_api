@@ -4,6 +4,7 @@ import { isValidObjectId } from 'mongoose';
 import { DatabaseService } from '../database/databaseservice';
 import { escapeRegex } from '../common/query-safety.util';
 import { AdminOrdersQueryDto } from './dto/admin-orders-query.dto';
+import { addressWarnings, findPossibleDuplicatesAcrossStores } from '../orders/order-warnings.util';
 
 /**
  * Read-only order console for the Edudeen team: find any order by number,
@@ -59,9 +60,11 @@ export class AdminOrdersService {
 
     const userIds = [...new Set(orders.map((o: any) => o.userId).filter(Boolean))];
     const storeIds = [...new Set(orders.flatMap((o: any) => (o.sellerOrders ?? []).map((s: any) => s.storeId)).filter(Boolean))];
-    const [users, stores] = await Promise.all([
+    const [users, stores, dupMap] = await Promise.all([
       this.r.userModel.find({ _id: { $in: userIds } }).select('name email').lean(),
       this.r.storeModel.find({ _id: { $in: storeIds } }).select('name slug').lean(),
+      // One bounded query for the whole page, same pattern as the seller order list.
+      findPossibleDuplicatesAcrossStores(this.r.orderModel, orders),
     ]);
     const userById = new Map(users.map((u: any) => [String(u._id), u]));
     const storeById = new Map(stores.map((s: any) => [String(s._id), s]));
@@ -73,7 +76,12 @@ export class AdminOrdersService {
         orderNumber: o.orderNumber,
         createdAt: o.createdAt,
         buyer: buyer ? { id: String(buyer._id), name: buyer.name, email: buyer.email } : null,
-        stores: (o.sellerOrders ?? []).map((s: any) => ({ id: s.storeId, name: (storeById.get(String(s.storeId)) as any)?.name ?? 'Unknown store', status: s.status })),
+        stores: (o.sellerOrders ?? []).map((s: any) => ({
+          id: s.storeId,
+          name: (storeById.get(String(s.storeId)) as any)?.name ?? 'Unknown store',
+          status: s.status,
+          possibleDuplicate: dupMap.get(`${String(o._id)}:${s.storeId}`) ?? null,
+        })),
         itemCount: (o.sellerOrders ?? []).reduce((n: number, s: any) => n + (s.items ?? []).reduce((m: number, i: any) => m + (i.quantity ?? 0), 0), 0),
         totalAmount: o.totalAmount,
         currency: o.currency,
@@ -92,11 +100,14 @@ export class AdminOrdersService {
     const order: any = await this.r.orderModel.findOne({ _id: id }).lean();
     if (!order) throw new NotFoundException('Order not found');
     const storeIds = (order.sellerOrders ?? []).map((s: any) => s.storeId).filter(Boolean);
-    const [buyer, stores] = await Promise.all([
+    const [buyer, stores, dupMap] = await Promise.all([
       order.userId ? this.r.userModel.findById(order.userId).select('name email phone').lean() : null,
       this.r.storeModel.find({ _id: { $in: storeIds } }).select('name slug sellerId').lean(),
+      findPossibleDuplicatesAcrossStores(this.r.orderModel, [order]),
     ]);
     const storeById = new Map(stores.map((s: any) => [String(s._id), s]));
+    // Same "does this order need a street address" rule as the seller detail view.
+    const needsAddress = (order.sellerOrders ?? []).some((s: any) => s.fulfillmentType === 'physical' || s.fulfillmentType === 'mixed');
     return {
       success: true,
       data: {
@@ -108,7 +119,9 @@ export class AdminOrdersService {
           id: String(s._id),
           storeName: (storeById.get(String(s.storeId)) as any)?.name ?? 'Unknown store',
           storeSlug: (storeById.get(String(s.storeId)) as any)?.slug ?? null,
+          possibleDuplicate: dupMap.get(`${String(order._id)}:${s.storeId}`) ?? null,
         })),
+        addressWarnings: needsAddress ? addressWarnings(order.shippingAddress, (buyer as any)?.phone) : [],
       },
     };
   }
