@@ -1246,6 +1246,7 @@ export class StoreService {
     if (qTag && qTag !== 'all') filter.tags = qTag;
     // In-store search (`q`, or the older `search`): escaped, case-insensitive, any script (Urdu titles included).
     if (cp.q) filter.name = { $regex: escapeRegex(cp.q), $options: 'i' };
+    let collectionOrder: string[] | null = null;
     const andClauses: any[] = [];
     if (cp.classClause) andClauses.push(cp.classClause);
     // Subject = a category/sub-category of this store's products, with everything filed under it.
@@ -1259,8 +1260,11 @@ export class StoreService {
     // shaping pipeline is reused as-is rather than duplicated inside the
     // collections module.
     if (qCollection && qCollection !== 'all') {
-      const ids = await this.collectionsService.resolveProductIds(storeId, qCollection);
+      const resolved = await this.collectionsService.resolveForStore(storeId, qCollection);
+      const ids = resolved.ids;
       filter._id = { $in: ids.length ? ids : ['__none__'] };
+      // The seller chose a sort for this collection and the buyer did not pick one: keep the collection's order.
+      if (resolved.useOrder && !queryString(query.sort)) collectionOrder = ids;
     }
     // Same real "on sale" definition the product card's own discount badge
     // already uses (compareAtPrice > price). compareAtPrice/price live on
@@ -1287,7 +1291,16 @@ export class StoreService {
     let total: number;
     let products: any[];
     const { productModel, productVariantModel } = this.databaseService.repositories;
-    if (cp.min !== undefined || cp.max !== undefined || priceSort) {
+    if (collectionOrder && cp.min === undefined && cp.max === undefined) {
+      // Collection order: filter the ordered ids by the other filters, then page — same ids as the count/preview.
+      const kept = new Set((await productModel.find(filter).select('_id').lean()).map((p: any) => String(p._id)));
+      const ordered = collectionOrder.filter((id) => kept.has(id));
+      total = ordered.length;
+      const pageIds = ordered.slice(skip, skip + limit);
+      const docs = pageIds.length ? await productModel.find({ _id: { $in: pageIds } }).lean() : [];
+      const byId = new Map(docs.map((d: any) => [String(d._id), d]));
+      products = pageIds.map((id) => byId.get(id)).filter(Boolean);
+    } else if (cp.min !== undefined || cp.max !== undefined || priceSort) {
       const ids = (await productModel.find(filter).select('_id').lean()).map((p: any) => String(p._id));
       const rows: { _id: string; min: number }[] = ids.length
         ? await productVariantModel.aggregate([
@@ -1491,7 +1504,7 @@ export class StoreService {
     const colList = ((await this.collectionsService.listPublic(storeId)).data as any[]).slice(0, 20);
     const collections = (await Promise.all(colList.map(async (c) => {
       const members = await this.collectionsService.resolveProductIds(storeId, String(c._id));
-      return { id: String(c._id), name: c.name, slug: c.slug, count: members.filter((id) => idSet.has(id)).length };
+      return { id: String(c._id), name: c.name, nameUr: c.nameUr ?? null, slug: c.slug, count: members.filter((id) => idSet.has(id)).length };
     }))).filter((c) => c.count > 0);
 
     const data = { total: ids.length, classes: classFacetCounts(agg?.classes ?? []), subjects, kinds, price, collections };

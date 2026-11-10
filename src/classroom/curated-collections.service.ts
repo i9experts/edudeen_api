@@ -143,6 +143,13 @@ export class CuratedCollectionsService {
     if (!isValidObjectId(id)) throw new NotFoundException('Collection not found');
     const input = cleanCollectionInput(body, true);
     if (input.slug && await this.model.exists({ slug: input.slug, _id: { $ne: id } })) throw new BadRequestException('Another collection already uses that web address');
+    if (input.startsAt !== undefined || input.endsAt !== undefined) {
+      // Check the window the shelf WOULD have, not just the fields sent (changing one end must respect the other).
+      const cur: any = await this.model.findById(id).select('startsAt endsAt').lean();
+      const s = input.startsAt !== undefined ? input.startsAt : cur?.startsAt ?? null;
+      const e = input.endsAt !== undefined ? input.endsAt : cur?.endsAt ?? null;
+      if (s && e && new Date(e) <= new Date(s)) throw new BadRequestException('The end date must be after the start date');
+    }
     const c = await this.model.findByIdAndUpdate(id, { $set: input }, { returnDocument: 'after' });
     if (!c) throw new NotFoundException('Collection not found');
     return { success: true, message: 'Collection saved', data: c };

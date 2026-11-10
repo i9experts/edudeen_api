@@ -10,11 +10,13 @@ import { slugify } from '../common/slug.util';
 import { CreateCollectionDto } from './dto/create-collection.dto';
 import { UpdateCollectionDto } from './dto/update-collection.dto';
 import { UpdateCollectionProductsDto } from './dto/update-collection-products.dto';
+import {
+  cleanCollectionRules, cleanCollectionSort, cleanCollectionWindow, collectionWindowState,
+  evaluateCollectionIds, liveWindowClause, CollectionLike,
+} from './collection-rules.util';
 
-// Real cap on how many products an `automatic` collection resolves to at
-// read time — same "bounded, not unlimited" spirit as other placement caps
-// in the codebase (e.g. Store.pinnedProductIds' PlatformConfig.placementLimits).
-const AUTOMATIC_COLLECTION_PRODUCT_CAP = 250;
+const PREVIEW_THUMBS = 8;
+const trimOrNull = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
 
 @Injectable()
 export class CollectionsService {
@@ -80,8 +82,18 @@ export class CollectionsService {
       throw new BadRequestException('A manual collection needs at least one product — add products after creating it, or switch to automatic.');
     }
     const slug = await this.generateStoreScopedSlug(storeId, dto.name);
+    // Validate every smart rule / sort / schedule BEFORE writing (bad value = 400).
+    const rules = dto.type === 'automatic' ? cleanCollectionRules(dto.rules) : undefined;
+    const sortBy = cleanCollectionSort(dto.sortBy);
+    const { startAt, endAt } = cleanCollectionWindow(dto.startAt, dto.endAt);
 
     const collection = await this.r.collectionModel.create({
+      sortBy, startAt, endAt,
+      // The seller form creates "Show on store" collections and only follows up with status:'draft' for hidden ones;
+      // the schema default is 'draft', so without this a new visible collection never appeared on the store.
+      status: 'active',
+      nameUr: trimOrNull(dto.nameUr, 100),
+      descriptionUr: trimOrNull(dto.descriptionUr, 500),
       storeId,
       name: dto.name,
       normalizedName: normalizeCollectionName(dto.name),
@@ -91,7 +103,7 @@ export class CollectionsService {
       image: dto.image ?? null,
       type: dto.type,
       productIds: dto.type === 'manual' ? (dto.productIds ?? []) : [],
-      rules: dto.type === 'automatic' ? { categoryId: dto.rules?.categoryId ?? null, tags: dto.rules?.tags ?? [], matchType: dto.rules?.matchType ?? 'any' } : undefined,
+      rules,
     });
 
     this.activityLogService.log({
@@ -106,7 +118,34 @@ export class CollectionsService {
   async listForSeller(storeId: string, sellerId: string) {
     await verifyStoreOwnershipStrict(this.r.storeModel, storeId, sellerId);
     const collections = await this.r.collectionModel.find({ storeId, isDelete: false }).sort({ sortOrder: 1, createdAt: -1 }).lean();
-    return { success: true, data: collections };
+    const now = new Date();
+    // Same evaluator as the store tab, so the number here == what buyers see (max 20 collections per store).
+    const data = await Promise.all(collections.map(async (c: any) => ({
+      ...c,
+      windowState: collectionWindowState(c, now),
+      productCount: (await evaluateCollectionIds(this.r, storeId, c as CollectionLike, now)).length,
+    })));
+    return { success: true, data };
+  }
+
+  /** Live preview for the New/Edit modal: nothing is saved. Same evaluator as the store tab and the count. */
+  async preview(storeId: string, sellerId: string, body: any) {
+    await verifyStoreOwnershipStrict(this.r.storeModel, storeId, sellerId);
+    const type = body?.type === 'automatic' ? 'automatic' : body?.type === 'manual' ? 'manual' : null;
+    if (!type) throw new BadRequestException('type must be manual or automatic');
+    const productIds = Array.isArray(body?.productIds) ? body.productIds.filter((x: unknown) => typeof x === 'string' && isValidObjectId(x)).slice(0, 500) : [];
+    const col: CollectionLike = {
+      type,
+      productIds,
+      rules: type === 'automatic' ? cleanCollectionRules(body?.rules) : null,
+      sortBy: cleanCollectionSort(body?.sortBy),
+    };
+    const ids = await evaluateCollectionIds(this.r, storeId, col);
+    const head = ids.slice(0, PREVIEW_THUMBS);
+    const docs: any[] = head.length ? await this.r.productModel.find({ _id: { $in: head }, storeId }).select('name images').lean() : [];
+    const byId = new Map(docs.map((d) => [String(d._id), d]));
+    const products = head.map((id) => byId.get(id)).filter(Boolean).map((d: any) => ({ _id: String(d._id), name: d.name, image: d.images?.[0] ?? null }));
+    return { success: true, data: { count: ids.length, products } };
   }
 
   async getForSeller(storeId: string, sellerId: string, collectionId: string) {
@@ -127,8 +166,19 @@ export class CollectionsService {
     if (dto.description !== undefined) set.description = dto.description;
     if (dto.image !== undefined) set.image = dto.image;
     if (dto.type !== undefined) set.type = dto.type;
-    if (dto.rules !== undefined) {
-      set.rules = { categoryId: dto.rules.categoryId ?? null, tags: dto.rules.tags ?? [], matchType: dto.rules.matchType ?? 'any' };
+    if (dto.rules !== undefined) set.rules = cleanCollectionRules(dto.rules);
+    if (dto.sortBy !== undefined) set.sortBy = cleanCollectionSort(dto.sortBy);
+    if (dto.nameUr !== undefined) set.nameUr = trimOrNull(dto.nameUr, 100);
+    if (dto.descriptionUr !== undefined) set.descriptionUr = trimOrNull(dto.descriptionUr, 500);
+    let scheduleChanged = false;
+    if (dto.startAt !== undefined || dto.endAt !== undefined) {
+      const w = cleanCollectionWindow(
+        dto.startAt !== undefined ? dto.startAt : (collection as any).startAt,
+        dto.endAt !== undefined ? dto.endAt : (collection as any).endAt,
+      );
+      set.startAt = w.startAt;
+      set.endAt = w.endAt;
+      scheduleChanged = true;
     }
     if (dto.status !== undefined) set.status = dto.status;
 
@@ -137,7 +187,9 @@ export class CollectionsService {
     const changes: string[] = [];
     if (set.name) changes.push(`renamed "${collection.name}" -> "${dto.name}"`);
     if (dto.status !== undefined && dto.status !== collection.status) changes.push(dto.status === 'draft' ? 'hidden from store' : 'shown on store');
-    if (dto.type !== undefined || dto.rules !== undefined || dto.description !== undefined || dto.image !== undefined) changes.push('details edited');
+    if (scheduleChanged) changes.push('schedule changed');
+    if (dto.sortBy !== undefined) changes.push('sort changed');
+    if (dto.type !== undefined || dto.rules !== undefined || dto.description !== undefined || dto.image !== undefined || dto.nameUr !== undefined || dto.descriptionUr !== undefined) changes.push('details edited');
     if (changes.length) {
       await this.activityLogService.log({
         storeId, category: 'marketing', action: 'collection_updated',
@@ -197,6 +249,12 @@ export class CollectionsService {
   // duplicate that. ─────────────────────────────────────────────────────
 
   async resolveProductIds(storeId: string, collectionIdOrSlug: string): Promise<string[]> {
+    return (await this.resolveForStore(storeId, collectionIdOrSlug)).ids;
+  }
+
+  /** ids in the collection's own order. `useOrder` = the seller chose a sort (old collections: false, so the
+   *  store tab keeps its newest-first paging exactly as before). Hidden while outside its schedule window. */
+  async resolveForStore(storeId: string, collectionIdOrSlug: string): Promise<{ ids: string[]; useOrder: boolean }> {
     // Callers pass whatever a `FeaturedProductsSection`/`ProductCatalogSection`
     // settings field or a `CollectionDetailPage` route param happens to hold —
     // usually a real id (picked via `EntityPickerModal`), but the storefront
@@ -204,40 +262,16 @@ export class CollectionsService {
     // same `isValidObjectId` guard as `getPublicBySlug`/`findByIdOrSlugForStore`.
     const collection = await this.r.collectionModel.findOne({
       storeId, isDelete: false, status: 'active',
+      ...liveWindowClause(),
       $or: isValidObjectId(collectionIdOrSlug) ? [{ slug: collectionIdOrSlug }, { _id: collectionIdOrSlug }] : [{ slug: collectionIdOrSlug }],
     }).lean();
-    if (!collection) return [];
+    if (!collection) return { ids: [], useOrder: false };
 
     // A collection of a pending/suspended store resolves to nothing.
-    if (!(await this.r.storeModel.exists({ _id: storeId, status: 'active', isDelete: false }))) return [];
-    if (collection.type === 'manual') {
-      if (collection.productIds.length === 0) return [];
-      // Preserve the seller's chosen order, but only ever include products
-      // that are still real/active — a collection never silently shows a
-      // deleted/archived product.
-      const active = await this.r.productModel
-        .find({ _id: { $in: collection.productIds }, storeId, isDelete: false, status: 'active' })
-        .select('_id')
-        .lean();
-      const activeIds = new Set(active.map((p: any) => p._id.toString()));
-      return collection.productIds.filter((id) => activeIds.has(id));
-    }
-
-    // automatic
-    const filter: any = { storeId, isDelete: false, status: 'active' };
-    const clauses: any[] = [];
-    if (collection.rules?.categoryId) clauses.push({ categoryId: collection.rules.categoryId });
-    if (collection.rules?.tags?.length) clauses.push({ tags: { $in: collection.rules.tags } });
-    if (clauses.length > 0) {
-      filter[collection.rules.matchType === 'all' ? '$and' : '$or'] = clauses;
-    }
-    const products = await this.r.productModel
-      .find(filter)
-      .select('_id')
-      .sort({ createdAt: -1 })
-      .limit(AUTOMATIC_COLLECTION_PRODUCT_CAP)
-      .lean();
-    return products.map((p: any) => p._id.toString());
+    if (!(await this.r.storeModel.exists({ _id: storeId, status: 'active', isDelete: false }))) return { ids: [], useOrder: false };
+    // ONE evaluator (collection-rules.util) — never a deleted/inactive/test product.
+    const ids = await evaluateCollectionIds(this.r, storeId, collection as unknown as CollectionLike);
+    return { ids, useOrder: !!(collection as any).sortBy };
   }
 
   /** `idOrSlug` matches either — never casts a non-ObjectId string into the
@@ -250,6 +284,7 @@ export class CollectionsService {
       storeId,
       isDelete: false,
       status: 'active',
+      ...liveWindowClause(),
       $or: isValidObjectId(idOrSlug) ? [{ slug: idOrSlug }, { _id: idOrSlug }] : [{ slug: idOrSlug }],
     }).lean();
   }
@@ -258,8 +293,8 @@ export class CollectionsService {
 
   async listPublic(storeId: string) {
     const collections = await this.r.collectionModel
-      .find({ storeId, isDelete: false, status: 'active' })
-      .select('name slug description image type sortOrder seo')
+      .find({ storeId, isDelete: false, status: 'active', ...liveWindowClause() })
+      .select('name slug description image type sortOrder seo nameUr descriptionUr')
       .sort({ sortOrder: 1, createdAt: -1 })
       .lean();
     return { success: true, data: collections };
@@ -275,9 +310,10 @@ export class CollectionsService {
         storeId,
         isDelete: false,
         status: 'active',
+        ...liveWindowClause(),
         $or: isValidObjectId(slugOrId) ? [{ slug: slugOrId }, { _id: slugOrId }] : [{ slug: slugOrId }],
       })
-      .select('name slug description image type seo')
+      .select('name slug description image type seo nameUr descriptionUr')
       .lean();
     if (!collection) throw new NotFoundException('Collection not found');
     return { success: true, data: collection };

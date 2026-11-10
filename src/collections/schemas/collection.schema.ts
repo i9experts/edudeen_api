@@ -55,10 +55,42 @@ export class Collection {
       categoryId: { type: String, default: null },
       tags: { type: [String], default: [] },
       matchType: { type: String, enum: ['all', 'any'], default: 'any' },
+      // Smart rules (all optional, ANDed with the above). Missing on old docs = no such rule.
+      priceMin: { type: Number, default: null },
+      priceMax: { type: Number, default: null },
+      createdWithinDays: { type: Number, default: null },
+      minRating: { type: Number, default: null },
+      hasDiscount: { type: Boolean, default: false },
+      bestSellersTopN: { type: Number, default: null },
+      language: { type: String, default: null },
+      classFrom: { type: String, default: null },
+      classTo: { type: String, default: null },
     },
     default: () => ({ categoryId: null, tags: [], matchType: 'any' }),
   })
-  rules: { categoryId: string | null; tags: string[]; matchType: 'all' | 'any' };
+  rules: {
+    categoryId: string | null; tags: string[]; matchType: 'all' | 'any';
+    priceMin?: number | null; priceMax?: number | null; createdWithinDays?: number | null; minRating?: number | null;
+    hasDiscount?: boolean; bestSellersTopN?: number | null; language?: string | null; classFrom?: string | null; classTo?: string | null;
+  };
+
+  // How products are ordered inside the collection. null/'manual' = old behaviour (seller order / newest).
+  @Prop({ type: String, default: null })
+  sortBy: string | null;
+
+  // Optional schedule: outside [startAt, endAt) the collection is hidden from the public store.
+  @Prop({ type: Date, default: null })
+  startAt: Date | null;
+
+  @Prop({ type: Date, default: null })
+  endAt: Date | null;
+
+  // Optional Urdu text, shown in buyer Urdu mode only.
+  @Prop({ type: String, default: null })
+  nameUr: string | null;
+
+  @Prop({ type: String, default: null })
+  descriptionUr: string | null;
 
   @Prop({ type: String, enum: ['active', 'draft'], default: 'draft' })
   status: 'active' | 'draft';

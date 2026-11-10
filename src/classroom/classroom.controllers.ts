@@ -80,6 +80,33 @@ export class BundlesController {
     return this.bundles.listPublic(Number(limit) || 6, req.user?.userId ?? null);
   }
 
+  @UseGuards(OptionalJwtAuthGuard)
+  @Get('store/:storeId')
+  forStore(@Req() req: any, @Param('storeId') storeId: string) {
+    return this.bundles.forStore(storeId, req.user?.userId ?? null);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Post('seller/:storeId/quote')
+  quote(@Req() req: any, @Param('storeId') storeId: string, @Body() body: any) {
+    return this.bundles.quote(storeId, req.user.userId, body?.productIds, body?.discountPercent);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Post('seller/:storeId/suggestions')
+  suggestions(@Req() req: any, @Param('storeId') storeId: string, @Body() body: any) {
+    return this.bundles.suggestions(storeId, req.user.userId, body?.productIds);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Post('seller/:storeId/:id/duplicate')
+  duplicate(@Req() req: any, @Param('storeId') storeId: string, @Param('id') id: string) {
+    return this.bundles.duplicate(storeId, req.user.userId, id);
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Get('seller/:storeId')

@@ -138,6 +138,10 @@ export class InventoryService {
       const ids = await getDescendantIds(this.databaseService.repositories.categoryModel as any, String(query.categoryId));
       and.push({ $or: [{ categoryId: { $in: ids } }, { subCategoryId: { $in: ids } }] });
     }
+    // Seller Categories page: "products with no subcategory" (additive, only when asked for).
+    if (query.noSubcategory === '1' || query.noSubcategory === 1 || query.noSubcategory === true) {
+      and.push({ $or: [{ subCategoryId: null }, { subCategoryId: '' }] });
+    }
     if (and.length) filter.$and = and;
 
     // ?q= — case-insensitive name or SKU match (SKU lives on the variants, so

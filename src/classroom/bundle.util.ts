@@ -8,7 +8,13 @@ export const round = (n: number) => Math.round(n * 100) / 100;
 
 /** Validates the seller's bundle form. Product ownership is checked separately (needs the DB). */
 export function cleanBundleInput(body: any, partial = false) {
-  const out: { name?: string; description?: string; productIds?: string[]; discountPercent?: number; isActive?: boolean } = {};
+  const out: { name?: string; description?: string; productIds?: string[]; discountPercent?: number; isActive?: boolean; coverImage?: string | null; nameUr?: string | null } = {};
+  if (body?.coverImage !== undefined) {
+    const u = typeof body.coverImage === 'string' ? body.coverImage.trim() : '';
+    if (u && !/^https:\/\/\S{1,500}$/.test(u)) throw new BadRequestException('Cover image must be an https link');
+    out.coverImage = u || null;
+  }
+  if (body?.nameUr !== undefined) out.nameUr = str(body.nameUr, 100) || null;
   if (!partial || body?.name !== undefined) {
     out.name = str(body?.name, 100);
     if (!out.name) throw new BadRequestException('Give the bundle a name');
@@ -29,6 +35,16 @@ export function cleanBundleInput(body: any, partial = false) {
   }
   if (typeof body?.isActive === 'boolean') out.isActive = body.isActive;
   return out;
+}
+
+/**
+ * THE bundle price formula (read-only): `unitPrices` = each product's default-variant price, one of each.
+ * Public bundle cards, the seller's modal preview and the cart's discount all derive from this arithmetic
+ * (the cart's `bundleSavings` below applies the same percentage to the buyer's line totals).
+ */
+export function bundleQuote(unitPrices: number[], discountPercent: number) {
+  const total = unitPrices.reduce((s, p) => s + (Number.isFinite(p) ? p : 0), 0);
+  return { totalPrice: round(total), bundlePrice: round(total * (1 - discountPercent / 100)), savings: round(total * discountPercent / 100) };
 }
 
 /**

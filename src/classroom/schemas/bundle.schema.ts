@@ -39,6 +39,13 @@ export class Bundle {
   @Prop({ type: Number, required: true })
   discountPercent: number;
 
+  // Optional cover picture and Urdu name (buyer Urdu mode). Missing on old bundles = none.
+  @Prop({ type: String, default: null })
+  coverImage: string | null;
+
+  @Prop({ type: String, default: null })
+  nameUr: string | null;
+
   @Prop({ type: Boolean, default: true })
   isActive: boolean;
 
