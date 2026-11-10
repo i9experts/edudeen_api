@@ -1,3 +1,4 @@
+import { DISPATCH_DAYS_DEFAULT } from 'src/common/dispatch.util';
 import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../database/databaseservice';
 import { RedisService } from '../redis/redis.service';
@@ -16,10 +17,11 @@ export class StoreHealthService {
 
   async getHealth(sellerId: string, storeId: string, range: HealthRange, now = new Date()) {
     const { storeModel } = this.db.repositories;
-    const store: any = await storeModel.findOne({ _id: storeId, sellerId, isDelete: false }).select('averageRating reviewCount').lean();
+    const store: any = await storeModel.findOne({ _id: storeId, sellerId, isDelete: false }).select('averageRating reviewCount dispatchDays').lean();
     if (!store) throw new ForbiddenException('Store not found or unauthorized');
 
-    const key = `store-health:${storeId}:${range}`;
+    // dispatchDays is part of the key so changing the setting shows the new explanation at once (no 15 min wait).
+    const key = `store-health:${storeId}:${range}:d${store.dispatchDays ?? DISPATCH_DAYS_DEFAULT}`;
     try {
       const hit = await this.redis.get(key);
       if (hit) return JSON.parse(hit);
@@ -51,6 +53,7 @@ export class StoreHealthService {
         rating: { average: Number(store.averageRating) || 0, count: Number(store.reviewCount) || 0 },
         sentBack,
         cancellation,
+        dispatchDays: store.dispatchDays ?? null,
       }),
       sentBackItems,
       generatedAt: now.toISOString(),
@@ -108,7 +111,7 @@ export class StoreHealthService {
       {
         $project: {
           _id: 0, paymentType: 1, paidAt: 1, createdAt: 1,
-          status: '$sellerOrders.status', shippedAt: '$sellerOrders.shippedAt',
+          status: '$sellerOrders.status', shippedAt: '$sellerOrders.shippedAt', dispatchDays: '$sellerOrders.dispatchDays',
           items: { $map: { input: { $filter: { input: '$sellerOrders.items', as: 'i', cond: { $eq: ['$$i.type', 'physical'] } } }, as: 'i', in: { status: '$$i.status', returnStatus: '$$i.returnStatus' } } },
         },
       },

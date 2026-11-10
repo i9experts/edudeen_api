@@ -23,6 +23,12 @@ export class CollectionsController {
     return this.collectionsService.create(storeId, req.user.userId, dto);
   }
 
+  // Live preview (nothing saved): count + first 8 products. Static 'preview' segment cannot clash with ':storeId'.
+  @Post(':storeId/preview')
+  preview(@Req() req: any, @Param('storeId') storeId: string, @Body() body: any) {
+    return this.collectionsService.preview(storeId, req.user.userId, body);
+  }
+
   @Get(':storeId')
   list(@Req() req: any, @Param('storeId') storeId: string) {
     return this.collectionsService.listForSeller(storeId, req.user.userId);

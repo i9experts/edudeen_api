@@ -69,7 +69,7 @@ describe('CouriersService', () => {
 
   it('options: self always, a courier only when admin-enabled AND configured', async () => {
     const { svc } = make(baseOrder());
-    (svc as any).shippingRates = { getCourierSettings: async () => ({ enabled: { tcs: true, leopards: true, postex: false }, useLiveRates: false, markupPct: 0, handlingFeePKR: 0 }) };
+    (svc as any).shippingRates = { get: async () => ({ enabled: true }), getCourierSettings: async () => ({ enabled: { tcs: true, leopards: true, postex: false }, useLiveRates: false, markupPct: 0, handlingFeePKR: 0 }) };
     process.env.LEOPARDS_API_KEY = 'k'; process.env.LEOPARDS_API_PASSWORD = 'p'; // postex configured (beforeEach) but admin-disabled; tcs enabled but no credentials
     const { data } = await svc.deliveryOptions();
     const by: any = Object.fromEntries(data.couriers.map((c: any) => [c.id, c]));
@@ -78,6 +78,7 @@ describe('CouriersService', () => {
     expect(by.tcs).toMatchObject({ available: false, reason: expect.stringContaining('not connected') });
     expect(by.postex).toMatchObject({ available: false, reason: expect.stringContaining('Not offered') });
     expect(data.auto.available).toBe(true);
+    expect(data.weightBasedRates).toBe(true);
   });
 
   it('webhook needs the shared secret', async () => {

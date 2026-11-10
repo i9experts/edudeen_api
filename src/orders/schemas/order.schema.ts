@@ -166,6 +166,27 @@ export class OrderItem {
 
   @Prop({ type: String, default: null })
   returnRejectReason!: string | null;
+
+  // Optional structured detail (additive; old returns have none of these).
+  @Prop({ type: String, default: null })
+  returnReasonCode!: string | null;
+
+  @Prop({ type: String, default: null })
+  returnNote!: string | null;
+
+  @Prop({ type: [String], default: [] })
+  returnEvidence!: string[];
+
+  // Tracking-only steps after approval (item_received, replacement_sent). Never moves money.
+  @Prop({ type: String, enum: ['item_received', 'replacement_sent', null], default: null })
+  returnFollowUp!: string | null;
+
+  @Prop({ type: String, default: null })
+  returnFollowUpNote!: string | null;
+
+  // Status trail [{status, at, by, byRole, note}].
+  @Prop({ type: [Object], default: undefined })
+  returnHistory?: Record<string, any>[];
 }
 
 export const OrderItemSchema = SchemaFactory.createForClass(OrderItem);
@@ -180,6 +201,13 @@ export class OrderTracking {
 
   @Prop({ type: String, default: null })
   trackingUrl: string | null;
+
+  // Self-delivery ("I deliver myself"): no tracking number, optional expected date + note. Old orders: absent.
+  @Prop({ type: Date, default: null })
+  expectedDeliveryDate: Date | null;
+
+  @Prop({ type: String, default: null })
+  note: string | null;
 }
 
 export const OrderTrackingSchema = SchemaFactory.createForClass(OrderTracking);
@@ -262,6 +290,11 @@ export class SellerOrder {
 
   @Prop({ type: Number, default: 0 })
   settlementShippingFee: number;
+
+  // Dispatch time (working days, Sundays not counted) snapshotted at order creation: store value or the largest
+  // per-product override. null/absent = legacy order (old 48 h rule) or a digital package.
+  @Prop({ type: Number, default: null })
+  dispatchDays: number | null;
 
   // Per-package cash on delivery (multi-seller COD orders): each package is collected and confirmed on its own.
   // Absent/false on every order placed before this existed - readers then fall back to the order-level isPaid.
@@ -593,6 +626,8 @@ OrderSchema.index({ attributionSource: 1 });
 OrderSchema.index({ checkoutId: 1 });
 OrderSchema.index({ 'sellerOrders.sellerId': 1, 'sellerOrders.status': 1 });
 OrderSchema.index({ 'sellerOrders.storeId': 1 });
+// Dashboard to-ship / overdue counts and the Needs-action tab: bound the scan to a store's WAITING packages (elemMatch on both fields).
+OrderSchema.index({ 'sellerOrders.storeId': 1, 'sellerOrders.status': 1 });
 OrderSchema.index({ 'sellerOrders.items.status': 1 });
 OrderSchema.index({ paymentStatus: 1 });
 OrderSchema.index({ createdAt: -1 });

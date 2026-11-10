@@ -212,6 +212,19 @@ describe('updateStore', () => {
     }
   });
 
+  it('dispatchDays: 1..7 saved (own store only), 0 / 8 / text rejected with 400', async () => {
+    const { svc, repos } = make({ store: liveStore() });
+    for (const bad of [0, 8, -1, 2.5, '3', null, 'x']) {
+      await expect(svc.updateStore('seller1', OID, { dispatchDays: bad })).rejects.toThrow(/1 to 7/);
+    }
+    for (const ok of [1, 3, 7]) {
+      repos.storeModel.findByIdAndUpdate.mockClear();
+      await svc.updateStore('seller1', OID, { dispatchDays: ok });
+      expect(JSON.stringify(repos.storeModel.findByIdAndUpdate.mock.calls[0])).toContain(`"dispatchDays":${ok}`);
+    }
+    await expect(svc.updateStore('someone-else', OID, { dispatchDays: 3 })).rejects.toBeDefined();
+  });
+
   it('the store category is locked once the store has products (products denormalise it)', async () => {
     const { svc, repos } = make({ store: liveStore({ categoryId: 'catA' }) });
     repos.productModel.exists.mockResolvedValue({ _id: 'p1' });

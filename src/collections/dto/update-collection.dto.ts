@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsOptional, IsEnum, IsArray, ValidateNested, IsIn, Length } from 'class-validator';
+import { IsString, IsOptional, IsEnum, IsArray, ValidateNested, IsIn, Length, IsNumber, IsBoolean, MaxLength } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 import { cleanCollectionName, COLLECTION_NAME_MIN, COLLECTION_NAME_MAX } from '../collection-name.util';
 
@@ -20,9 +20,25 @@ class CollectionRulesDto {
   @IsOptional()
   @IsIn(['all', 'any'])
   matchType?: 'all' | 'any';
+
+  @IsOptional() @IsNumber() priceMin?: number | null;
+  @IsOptional() @IsNumber() priceMax?: number | null;
+  @IsOptional() @IsNumber() createdWithinDays?: number | null;
+  @IsOptional() @IsNumber() minRating?: number | null;
+  @IsOptional() @IsBoolean() hasDiscount?: boolean;
+  @IsOptional() @IsNumber() bestSellersTopN?: number | null;
+  @IsOptional() @IsString() language?: string | null;
+  @IsOptional() @IsString() classFrom?: string | null;
+  @IsOptional() @IsString() classTo?: string | null;
 }
 
 export class UpdateCollectionDto {
+  @IsOptional() @IsString() sortBy?: string | null;
+  @IsOptional() @IsString() startAt?: string | null;
+  @IsOptional() @IsString() endAt?: string | null;
+  @IsOptional() @IsString() @MaxLength(100) nameUr?: string | null;
+  @IsOptional() @IsString() @MaxLength(500) descriptionUr?: string | null;
+
   @ApiProperty({ required: false })
   @IsOptional()
   @Transform(({ value }) => cleanCollectionName(value))

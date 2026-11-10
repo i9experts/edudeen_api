@@ -84,8 +84,22 @@ describe('OrdersService.returnAction (legacy return flow)', () => {
 
   it('rejecting a return moves no money', async () => {
     const { svc, finance, payment } = build();
-    await svc.returnAction('seller-1', 'order-1', { storeId: 'store-1', itemIds: ['item-1'], action: 'reject', rejectReason: 'used' });
+    await svc.returnAction('seller-1', 'order-1', { storeId: 'store-1', itemIds: ['item-1'], action: 'reject', rejectReason: 'The item was used' });
     expect(payment.refundStripePaymentIntent).not.toHaveBeenCalled();
     expect(finance.recordRefund).not.toHaveBeenCalled();
+  });
+
+  it('rejecting without a real reason (under 10 characters) is a 400 and claims nothing', async () => {
+    const { svc, orderModel } = build();
+    for (const rejectReason of [undefined, '', 'used', '         ']) {
+      await expect(svc.returnAction('seller-1', 'order-1', { storeId: 'store-1', itemIds: ['item-1'], action: 'reject', rejectReason })).rejects.toBeInstanceOf(BadRequestException);
+    }
+    expect(orderModel.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('approve keeps its claim shape and adds the trail entry in a separate write', async () => {
+    const { svc, orderModel } = build();
+    await approve(svc);
+    expect(orderModel.updateOne).toHaveBeenCalledWith({ _id: 'order-1' }, { $push: { 'sellerOrders.0.items.0.returnHistory': expect.objectContaining({ status: 'approved', byRole: 'seller' }) } });
   });
 });

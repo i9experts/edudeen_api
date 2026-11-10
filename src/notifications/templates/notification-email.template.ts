@@ -71,13 +71,21 @@ export function downloadLinkEmail(productName: string, orderNumber: string): { s
 export function orderStatusEmail(
   orderNumber: string,
   status: 'shipped' | 'delivered',
-  tracking?: { carrier?: string; trackingNumber?: string; trackingUrl?: string } | null,
+  tracking?: { carrier?: string; trackingNumber?: string; trackingUrl?: string; expectedDeliveryDate?: string; note?: string } | null,
 ): { subject: string; html: string } {
   const title = status === 'shipped' ? 'Your order is on its way' : 'Your order was delivered';
-  const trackingHtml =
-    status === 'shipped' && tracking?.trackingNumber
-      ? `<div class="box"><div class="row"><span class="label">${escapeHtml(tracking.carrier || 'Courier')}</span><span class="value">${escapeHtml(tracking.trackingNumber)}</span></div></div>`
-      : '';
+  // With a number: carrier + number. Self-delivery has no number: show carrier + expected date / note instead (never blank).
+  const rows: string[] = [];
+  if (status === 'shipped' && tracking) {
+    if (tracking.trackingNumber) {
+      rows.push(`<div class="row"><span class="label">${escapeHtml(tracking.carrier || 'Courier')}</span><span class="value">${escapeHtml(tracking.trackingNumber)}</span></div>`);
+    } else {
+      rows.push(`<div class="row"><span class="label">Delivered by</span><span class="value">${escapeHtml(tracking.carrier || 'The seller')}</span></div>`);
+    }
+    if (tracking.expectedDeliveryDate) rows.push(`<div class="row"><span class="label">Expected by</span><span class="value">${escapeHtml(tracking.expectedDeliveryDate)}</span></div>`);
+    if (tracking.note) rows.push(`<div class="row"><span class="label">Note</span><span class="value">${escapeHtml(tracking.note)}</span></div>`);
+  }
+  const trackingHtml = rows.length ? `<div class="box">${rows.join('')}</div>` : '';
   const trackUrl = tracking?.trackingUrl && /^https?:\/\//i.test(tracking.trackingUrl) ? tracking.trackingUrl : null;
   const body = `<p>Order <strong>#${escapeHtml(orderNumber)}</strong> ${status === 'shipped' ? 'has shipped.' : 'has been delivered. We hope you enjoy it!'}</p>${trackingHtml}`;
   return {

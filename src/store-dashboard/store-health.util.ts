@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
+import { DISPATCH_DAYS_DEFAULT } from 'src/common/dispatch.util';
 import {
-  buildDispatchRate, buildResponseRate, median, DISPATCH_HOURS, RESPONSE_RATE_HOURS, TRUST_MIN_SAMPLES,
+  buildDispatchRate, buildResponseRate, median, RESPONSE_RATE_HOURS, TRUST_MIN_SAMPLES,
   type DispatchPackage, type FirstInquiry,
 } from '../messaging/response-stats.util';
 
@@ -85,6 +86,8 @@ export interface HealthInput {
   returnedItems: number;
   /** Store.averageRating / Store.reviewCount (all-time, same as the public page). */
   rating: { average: number; count: number };
+  /** The store's CURRENT dispatch time (working days) - only used for the explanatory text. */
+  dispatchDays?: number | null;
   /** Listings an admin sent back (status rejected) with a review inside the window. */
   sentBack: number;
   /** Eligible physical packages (created since tracking began) and how many the SELLER cancelled. */
@@ -97,7 +100,7 @@ export function buildStoreHealth(input: HealthInput) {
   const now = input.now ?? new Date();
   const { range } = input;
 
-  // Late dispatch = 100 - dispatch-on-time (same 48 h rule and same package filter as the public strip).
+  // Late dispatch = 100 - dispatch-on-time (same due-date rule and same package filter as the public strip).
   const dispatch = buildDispatchRate(input.packages, now);
   const latePct = dispatch.pct === null ? null : 100 - dispatch.pct;
 
@@ -122,7 +125,7 @@ export function buildStoreHealth(input: HealthInput) {
       status: st(latePct, (latePct ?? 0) <= HEALTH_TARGETS.lateDispatchMaxPct),
       hint: latePct === null
         ? notEnough
-        : `Physical parcels not marked shipped within ${DISPATCH_HOURS} hours of payment (${dispatch.sample} parcels). Free claims and digital orders are not counted.`,
+        : `Physical parcels not marked shipped within your ${input.dispatchDays ?? DISPATCH_DAYS_DEFAULT}-day dispatch time (Sundays not counted) of payment (${dispatch.sample} parcels). Parcels placed before this setting existed use a 48-hour limit. Free claims and digital orders are not counted.`,
     },
     {
       // Seller cancels / eligible physical packages. Buyer and system cancels never count against the seller.

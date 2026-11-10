@@ -18,7 +18,8 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { IdempotencyInterceptor } from '../common/idempotency.interceptor';
 import { RefundRequestService } from './refund-request.service';
-import { CreateRefundRequestDto, RejectRefundRequestDto, AdminRefundQueryDto } from './dto/refund-request.dto';
+import { CreateRefundRequestDto, RejectRefundRequestDto, AdminRefundQueryDto, FollowUpDto } from './dto/refund-request.dto';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 
 @ApiTags('Refund Requests')
 @ApiBearerAuth()
@@ -74,6 +75,15 @@ export class RefundRequestController {
   @Patch(':id/approve')
   async approve(@Req() req: any, @Param('id') id: string) {
     return this.refundRequestService.approve(req.user.userId, req.user.role, id);
+  }
+
+  // Tracking-only step after approval (item received back / replacement sent). No money.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller', 'admin')
+  @UsePipes(new ValidationPipe({ transform: true }))
+  @Patch(':id/follow-up')
+  async followUp(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: FollowUpDto) {
+    return this.refundRequestService.followUp(req.user.userId, req.user.role, id, dto.step, dto.note);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

@@ -219,6 +219,10 @@ export class Product {
   @Prop({ type: String, enum: ['document', 'standard', 'fragile', 'bulky'], default: null })
   parcelType: 'document' | 'standard' | 'fragile' | 'bulky' | null;
 
+  // Physical products: optional dispatch time in working days (1-7) that overrides the store's. A package uses the largest value among its items.
+  @Prop({ type: Number, default: null, min: 1, max: 7 })
+  dispatchDaysOverride: number | null;
+
   @Prop({ type: Object, default: null })
   packageCm: { l: number; w: number; h: number } | null;
 
@@ -308,6 +312,10 @@ export class Product {
   // a store-wide default). A product has EITHER a Premium offer OR a platform sale, never both.
   @Prop({ type: Boolean, default: false })
   premiumOptOut: boolean;
+
+  // Seller's own "running low" line (whole 0..1000). null / missing = platform default 10 (see inventory/stock-threshold.util).
+  @Prop({ type: Number, default: null })
+  lowStockThreshold: number | null;
 
   // admin marketplace-management toggle — highlights the listing on the
   // marketplace homepage, separate from seller-controlled fields above

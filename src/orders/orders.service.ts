@@ -20,8 +20,12 @@ import { LoyaltyService } from 'src/loyalty/loyalty.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 import { isPackagePaid } from './package-paid.util';
+import { cleanRefundEvidence, REFUND_REASON_CODES, reasonDisplayLabel } from 'src/refund-request/refund-evidence.util';
+import { cleanFollowUpNote, cleanRejectReason, requiredPreviousFollowUp, trailEntry } from 'src/refund-request/return-trail.util';
+import { buildReturnDetail } from './return-detail.util';
 import { addressWarnings, findPossibleDuplicates, itemReturnFlags } from './order-warnings.util';
 import { round } from 'src/common/number.util';
+import { cleanTracking, isSelfDelivery } from './tracking.util';
 import { PaymentService } from 'src/payment/payment.service';
 import { orderStatusEmail, downloadLinkEmail } from 'src/notifications/templates/notification-email.template';
 
@@ -30,6 +34,11 @@ import {
   escapeRegex,
   searchTerm,
 } from 'src/common/query-safety.util';
+import { verifyStoreOwnershipOrForbidden } from 'src/common/store-ownership.util';
+import {
+  buildReturnsStats, filterRows, isOverdue, normalizeStatus, respondBy, sortReturnsRows,
+  type ReturnsListRow,
+} from './seller-returns-all.util';
 /** A sellerOrder's true payout basis for FinanceService.recordSale, in the
  *  SELLER'S OWN currency (so.settlementCurrency) â€” independent of what
  *  currency the buyer actually paid in (order.currency). Computed once at
@@ -688,6 +697,31 @@ export class OrdersService {
     const dupMap = await findPossibleDuplicates(orderModel, [order], () => storeId);
     const needsAddress = so.fulfillmentType === 'physical' || so.fulfillmentType === 'mixed';
 
+    // Money breakdown: stored values only, nothing recalculated. Gift orders and free claims show no prices.
+    // Gift wrap is folded into this package's shipping line at checkout (not stored apart), so it is not listed separately.
+    const pricesHidden = !!(order.giftWrap || order.giftMessage) || order.isFreeClaim === true;
+    let earnings: { amount: number; currency: string } | null = null;
+    if (!pricesHidden) {
+      try {
+        const saleTx: any = await this.databaseService.repositories.transactionModel
+          .findOne({ storeId, referenceId: String(order._id), referenceType: 'order', type: 'sale' })
+          .select('metadata.netAmount currency')
+          .lean();
+        const net = saleTx?.metadata?.netAmount;
+        if (typeof net === 'number' && Number.isFinite(net)) earnings = { amount: net, currency: saleTx.currency ?? 'USD' };
+      } catch { earnings = null; }
+    }
+    const amounts = pricesHidden
+      ? { pricesHidden: true, currency: order.currency ?? 'USD' }
+      : {
+          pricesHidden: false,
+          currency: order.currency ?? 'USD',
+          itemsSubtotal: so.subtotal ?? 0,
+          deliveryCharge: so.shippingFee ?? 0,
+          buyerPays: (so.subtotal ?? 0) + (so.shippingFee ?? 0),
+          earnings,
+        };
+
     return {
       success: true,
       data: {
@@ -695,6 +729,7 @@ export class OrdersService {
         orderNumber: order.orderNumber,
         date: order.createdAt,
         currency: order.currency ?? 'USD',
+        amounts,
         warnings: {
           possibleDuplicate: dupMap.get(String(order._id)) ?? null,
           address: needsAddress ? addressWarnings(order.shippingAddress, user?.phone) : [],
@@ -744,6 +779,83 @@ export class OrdersService {
     };
   }
 
+  /** Print data for up to 50 of this store's orders (packing slips / invoices). READ-ONLY.
+   *  Same fields the seller already sees in the order detail, minus the advisory warnings.
+   *  Any id that is not an order of this store makes the whole request 404 (no hint which).
+   *  Gift orders (gift wrap or message) carry NO prices: the parcel may go to someone else. */
+  async getSellerOrdersForPrint(sellerId: string, storeId: string, idsRaw: unknown) {
+    const { orderModel, storeModel, userModel, productVariantModel } = this.databaseService.repositories;
+
+    const ids = Array.from(new Set(String(idsRaw ?? '').split(',').map(s => s.trim()).filter(Boolean)));
+    if (ids.length === 0) throw new BadRequestException('ids is required');
+    if (ids.length > 50) throw new BadRequestException('You can print at most 50 orders at a time');
+    if (ids.some(id => !isValidObjectId(id))) throw new BadRequestException('ids must be valid order ids');
+
+    const store: any = await storeModel
+      .findOne({ _id: storeId, sellerId, isDelete: false })
+      .select('name logo')
+      .lean();
+    if (!store) throw new ForbiddenException('Store not found or unauthorized');
+
+    const orders: any[] = await orderModel
+      .find({ _id: { $in: ids }, isDelete: false, 'sellerOrders.storeId': storeId })
+      .lean();
+    if (orders.length !== ids.length) throw new NotFoundException('Order not found');
+
+    const userIds = Array.from(new Set(orders.map(o => String(o.userId)).filter(isValidObjectId)));
+    const users: any[] = userIds.length ? await userModel.find({ _id: { $in: userIds } }).select('name phone').lean() : [];
+    const userById = new Map(users.map(u => [String(u._id), u]));
+
+    const variantIds = orders.flatMap(o => (o.sellerOrders.find((s: any) => s.storeId === storeId)?.items ?? []))
+      .map((it: any) => it.variantId).filter((v: any) => v && isValidObjectId(v));
+    const liveSkus = new Map<string, string>();
+    if (variantIds.length) {
+      const vs: any[] = await productVariantModel.find({ _id: { $in: variantIds } }).select('sku').lean();
+      for (const v of vs) if (v.sku) liveSkus.set(String(v._id), v.sku);
+    }
+
+    const byId = new Map(orders.map(o => [String(o._id), o]));
+    const rows = ids.map(id => {
+      const order = byId.get(id);
+      const so = order.sellerOrders.find((s: any) => s.storeId === storeId);
+      const user = userById.get(String(order.userId));
+      const isGift = !!(order.giftWrap || order.giftMessage);
+      const needsAddress = so.fulfillmentType === 'physical' || so.fulfillmentType === 'mixed';
+      return {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        date: order.createdAt,
+        currency: order.currency ?? 'USD',
+        type: so.fulfillmentType,
+        status: so.status,
+        isGift,
+        pricesHidden: isGift,
+        giftMessage: order.giftMessage ?? null,
+        giftWrap: !!order.giftWrap,
+        paymentType: order.paymentType,
+        isPaid: order.isPaid || so.isPaid === true,
+        codAmount: isGift ? null : (so.codAmount ?? 0),
+        subtotal: isGift ? null : so.subtotal,
+        shippingFee: isGift ? null : (so.shippingFee ?? 0),
+        customer: { name: user?.name || 'Unknown', phone: user?.phone || null },
+        shippingAddress: needsAddress ? (order.shippingAddress ?? null) : null,
+        items: (so.items ?? []).map((it: any) => ({
+          name: it.name,
+          sku: it.sku || (it.variantId && liveSkus.get(String(it.variantId))) || null,
+          type: it.type,
+          options: it.options ?? [],
+          licenseType: it.licenseType ?? null,
+          quantity: it.quantity,
+          price: isGift ? null : it.price,
+          totalPrice: isGift ? null : it.totalPrice,
+          status: it.status ?? null,
+        })),
+      };
+    });
+
+    return { success: true, data: { store: { name: store.name, logo: store.logo ?? null }, orders: rows } };
+  }
+
   async updateSellerOrderStatus(
     sellerId: string,
     body: any,
@@ -751,7 +863,7 @@ export class OrdersService {
     userAgent?: string,
     actorRole: string = 'seller',
   ) {
-    const { orderId, storeId, status, tracking } = body;
+    const { orderId, storeId, status } = body;
     const isAdmin = actorRole === 'admin';
 
     if (!orderId) throw new BadRequestException('orderId is required');
@@ -819,11 +931,9 @@ export class OrdersService {
       throw new BadRequestException('Mark this order as paid before completing it');
     }
 
-    if (status === 'shipped' && !tracking) {
-      throw new BadRequestException(
-        'tracking info required when status is shipped',
-      );
-    }
+    // Courier carriers need a tracking number; "I deliver myself" does not (see tracking.util.ts).
+    const tracking = status === 'shipped' ? cleanTracking(body.tracking) : null;
+    const viaSelf = !!tracking && isSelfDelivery(tracking.carrier);
 
     const updateData: any = {};
 
@@ -934,16 +1044,16 @@ export class OrdersService {
               : 'Your order was delivered',
           body:
             status === 'shipped'
-              ? `Order #${order.orderNumber ?? orderId} is on its way${tracking?.carrier ? ` via ${tracking.carrier}` : ''}.`
+              ? `Order #${order.orderNumber ?? orderId} is on its way${viaSelf ? ' - the seller is delivering it themselves' : tracking?.carrier ? ` via ${tracking.carrier}` : ''}${viaSelf && tracking?.expectedDeliveryDate ? `. Expected by ${tracking.expectedDeliveryDate.toISOString().slice(0, 10)}` : ''}.`
               : `Order #${order.orderNumber ?? orderId} has been delivered.`,
           data: { orderId, orderNumber: order.orderNumber, status, link: `/account/orders/${orderId}` },
-          email: orderStatusEmail(order.orderNumber ?? orderId, status, tracking),
+          email: orderStatusEmail(order.orderNumber ?? orderId, status, tracking ? { ...tracking, trackingNumber: tracking.trackingNumber ?? undefined, trackingUrl: tracking.trackingUrl ?? undefined, expectedDeliveryDate: tracking.expectedDeliveryDate?.toISOString().slice(0, 10), note: tracking.note ?? undefined } : null),
           channelEvent: {
             event: status === 'shipped' ? 'order_shipped' : 'order_delivered',
             vars: {
               orderNumber: String(order.orderNumber ?? orderId),
-              carrier: String(tracking?.carrier ?? 'Courier'),
-              trackingNumber: String(tracking?.trackingNumber ?? ''),
+              carrier: viaSelf ? 'the seller (own delivery)' : String(tracking?.carrier ?? 'Courier'),
+              trackingNumber: tracking?.trackingNumber || 'not applicable',
             },
             fallbackPhone: order.shippingAddress?.phoneNumber ?? null,
           },
@@ -1635,8 +1745,254 @@ export class OrdersService {
     };
   }
 
+  /**
+   * ONE list for the seller: item returns (order items) + item refund requests,
+   * open first by respond-by. Read-only; the 48 h deadline is display only.
+   */
+  async getSellerReturnsAll(sellerId: string, storeId: string, query: any, now: Date = new Date()) {
+    const { orderModel, storeModel, userModel, refundRequestModel } = this.databaseService.repositories;
+    await verifyStoreOwnershipOrForbidden(storeModel, storeId, sellerId);
+
+    const page = Math.max(1, parseInt(query?.page) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(query?.limit) || 10));
+    const cutoff = new Date(now.getTime() - 30 * 86_400_000);
+
+    const [returnOrders, refundDocs, shippedAgg] = await Promise.all([
+      orderModel
+        .find({
+          isDelete: false,
+          sellerOrders: { $elemMatch: { storeId, 'items.returnStatus': { $in: ['requested', 'partial_requested', 'approved', 'rejected'] } } },
+        })
+        .select('orderNumber userId sellerOrders')
+        .lean(),
+      refundRequestModel.find({ storeId, isDelete: false }).sort({ createdAt: -1 }).limit(1000).lean(),
+      orderModel.aggregate([
+        { $match: { 'sellerOrders.storeId': storeId, isDelete: false, isFreeClaim: { $ne: true } } },
+        { $unwind: '$sellerOrders' },
+        {
+          $match: {
+            'sellerOrders.storeId': storeId,
+            'sellerOrders.items.type': 'physical',
+            'sellerOrders.status': { $in: ['shipped', 'delivered', 'completed'] },
+            'sellerOrders.shippedAt': { $gte: cutoff },
+          },
+        },
+        { $count: 'n' },
+      ]),
+    ]);
+
+    // Orders behind refund requests that were not already loaded (one batched read).
+    const orderMap = new Map<string, any>();
+    for (const o of returnOrders as any[]) orderMap.set(String(o._id), o);
+    const missing = [...new Set((refundDocs as any[]).map((r) => String(r.orderId)))].filter(
+      (id) => !orderMap.has(id) && isValidObjectId(id),
+    );
+    if (missing.length) {
+      const extra = await orderModel.find({ _id: { $in: missing } }).select('orderNumber userId sellerOrders').lean();
+      for (const o of extra as any[]) orderMap.set(String(o._id), o);
+    }
+
+    const buyerIds = [...new Set([...orderMap.values()].map((o) => String(o.userId)))].filter((id) => isValidObjectId(id));
+    const buyers = buyerIds.length ? await userModel.find({ _id: { $in: buyerIds } }).select('name').lean() : [];
+    const buyerName = new Map((buyers as any[]).map((u) => [String(u._id), u.name || 'Unknown']));
+
+    const rows: ReturnsListRow[] = [];
+    const returnedPackages = new Set<string>();
+    const countedItemIds = new Set<string>();
+    let refunded30d = 0;
+
+    for (const order of returnOrders as any[]) {
+      for (const so of order.sellerOrders ?? []) {
+        if (so.storeId !== storeId) continue;
+        for (const item of so.items ?? []) {
+          const rs = String(item.returnStatus ?? 'none');
+          if (rs === 'none') continue;
+          const status = normalizeStatus(rs);
+          const requestedAt = item.returnRequestedAt ? new Date(item.returnRequestedAt) : null;
+          const deadline = respondBy(requestedAt, status);
+          if (requestedAt && requestedAt >= cutoff) {
+            if (item.type === 'physical') returnedPackages.add(`${order._id}:${so._id}`);
+            if (status === 'approved') {
+              refunded30d += item.refundedAmount || 0;
+              countedItemIds.add(String(item._id));
+            }
+          }
+          rows.push({
+            source: 'return',
+            requestId: `${order._id}:${item._id}`,
+            itemIds: [String(item._id)],
+            orderId: String(order._id),
+            orderNumber: order.orderNumber,
+            storeId,
+            item: item.name,
+            buyer: buyerName.get(String(order.userId)) ?? 'Unknown',
+            type: 'Return',
+            reason: item.returnReason || '',
+            status,
+            requestedAt,
+            respondBy: deadline,
+            isOverdue: isOverdue(deadline, now),
+            amount: item.totalPrice || 0,
+            followUp: item.returnFollowUp ?? null,
+            reasonLabel: reasonDisplayLabel(item.returnReasonCode, item.returnReason),
+          });
+        }
+      }
+    }
+
+    for (const r of refundDocs as any[]) {
+      const order = orderMap.get(String(r.orderId));
+      const so = (order?.sellerOrders ?? []).find((s: any) => String(s._id) === String(r.sellerOrderId));
+      const ids = new Set((r.itemIds ?? []).map(String));
+      const items = (so?.items ?? []).filter((i: any) => ids.has(String(i._id)));
+      const status = normalizeStatus(r.status === 'pending' ? 'requested' : r.status);
+      const requestedAt = r.createdAt ? new Date(r.createdAt) : null;
+      const deadline = respondBy(requestedAt, status);
+      const amount = status === 'approved' && r.buyerRefundAmount != null
+        ? r.buyerRefundAmount
+        : items.reduce((s: number, i: any) => s + (i.totalPrice || 0), 0);
+      if (status === 'approved' && r.reviewedAt && new Date(r.reviewedAt) >= cutoff && ![...ids].some((id) => countedItemIds.has(id as string))) {
+        refunded30d += r.buyerRefundAmount || 0;
+      }
+      rows.push({
+        source: 'refund',
+        requestId: String(r._id),
+        itemIds: [...ids] as string[],
+        orderId: String(r.orderId),
+        orderNumber: order?.orderNumber ?? '',
+        storeId,
+        item: items.map((i: any) => i.name).join(', ') || 'Item',
+        buyer: buyerName.get(String(order?.userId)) ?? 'Unknown',
+        type: 'Refund only',
+        reason: r.reason,
+        status,
+        requestedAt,
+        respondBy: deadline,
+        isOverdue: isOverdue(deadline, now),
+        amount,
+        note: r.note ?? null,
+        evidenceImages: r.evidenceImages ?? [],
+        followUp: r.followUp ?? null,
+        reasonLabel: reasonDisplayLabel(r.reasonCode, r.reason),
+      });
+    }
+
+    const stats = buildReturnsStats(rows, { returns: returnedPackages.size, orders: shippedAgg?.[0]?.n ?? 0 }, refunded30d);
+    const filtered = sortReturnsRows(filterRows(rows, query?.status, searchTerm(query?.q)));
+    const total = filtered.length;
+    return {
+      success: true,
+      data: {
+        stats,
+        pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+        items: filtered.slice((page - 1) * limit, page * limit),
+      },
+    };
+  }
+
+  /**
+   * Detail of ONE return or refund request for the seller's drawer. Read-only,
+   * own store only (ownership check first; a request of another store is a 404).
+   * requestId: return = "<orderId>:<itemId>", refund = the refund request id.
+   */
+  async getSellerReturnDetail(sellerId: string, storeId: string, source: string, requestId: string, now: Date = new Date()) {
+    const { orderModel, storeModel, userModel, refundRequestModel } = this.databaseService.repositories;
+    await verifyStoreOwnershipOrForbidden(storeModel, storeId, sellerId);
+    if (source !== 'return' && source !== 'refund') throw new BadRequestException('source must be return or refund');
+
+    let order: any;
+    let sellerOrder: any;
+    let items: any[] = [];
+    let refund: any;
+
+    if (source === 'return') {
+      const [orderId, itemId] = String(requestId).split(':');
+      if (!isValidObjectId(orderId) || !isValidObjectId(itemId)) throw new BadRequestException('Invalid request id');
+      order = await orderModel.findOne({ _id: orderId, isDelete: false }).lean();
+      sellerOrder = (order?.sellerOrders ?? []).find((s: any) => s.storeId === storeId);
+      const item = (sellerOrder?.items ?? []).find((i: any) => String(i._id) === itemId);
+      if (!order || !sellerOrder || !item || !item.returnStatus || item.returnStatus === 'none') {
+        throw new NotFoundException('Return request not found');
+      }
+      items = [item];
+    } else {
+      if (!isValidObjectId(requestId)) throw new BadRequestException('Invalid request id');
+      refund = await refundRequestModel.findOne({ _id: requestId, isDelete: false }).lean();
+      if (!refund || refund.storeId !== storeId) throw new NotFoundException('Refund request not found');
+      order = await orderModel.findOne({ _id: refund.orderId, isDelete: false }).lean();
+      sellerOrder = (order?.sellerOrders ?? []).find((s: any) => String(s._id) === String(refund.sellerOrderId));
+      if (!order || !sellerOrder) throw new NotFoundException('Order not found');
+      const ids = new Set((refund.itemIds ?? []).map(String));
+      items = (sellerOrder.items ?? []).filter((i: any) => ids.has(String(i._id)));
+    }
+
+    const buyer: any = isValidObjectId(String(order.userId))
+      ? await userModel.findById(order.userId).select('name').lean()
+      : null;
+    return {
+      success: true,
+      data: buildReturnDetail({
+        source, requestId, order, sellerOrder, items, refund, buyer: buyer?.name || 'Unknown', now,
+      }),
+    };
+  }
+
+  /**
+   * Tracking-only step on an APPROVED item return (item received back / replacement sent).
+   * Conditional update from the exact previous step; any other jump is a 400. No money moves.
+   */
+  async returnFollowUp(sellerId: string, orderId: string, body: any) {
+    const { storeId, itemId, step } = body ?? {};
+    if (!storeId || !isValidObjectId(String(storeId))) throw new BadRequestException('storeId is required');
+    if (!itemId || !isValidObjectId(String(itemId))) throw new BadRequestException('itemId is required');
+    const note = cleanFollowUpNote(body?.note);
+    const { orderModel, storeModel } = this.databaseService.repositories;
+    await verifyStoreOwnershipOrForbidden(storeModel, storeId, sellerId);
+
+    const order: any = await orderModel.findOne({ _id: orderId, isDelete: false }).lean();
+    if (!order) throw new NotFoundException('Order not found');
+    const soIndex = (order.sellerOrders ?? []).findIndex((s: any) => s.storeId === storeId);
+    if (soIndex === -1) throw new NotFoundException('No orders found for this store');
+    const itemIndex = order.sellerOrders[soIndex].items.findIndex((i: any) => String(i._id) === String(itemId));
+    if (itemIndex === -1) throw new NotFoundException('Item not found');
+    const item = order.sellerOrders[soIndex].items[itemIndex];
+    if (item.returnStatus !== 'approved') throw new BadRequestException('Only an approved return can be followed up');
+
+    const previous = requiredPreviousFollowUp(step, item.type !== 'digital');
+    const base = `sellerOrders.${soIndex}.items.${itemIndex}`;
+    const updated = await orderModel.findOneAndUpdate(
+      { _id: orderId, isDelete: false, [`${base}.returnStatus`]: 'approved', [`${base}.returnFollowUp`]: previous },
+      {
+        $set: { [`${base}.returnFollowUp`]: step, [`${base}.returnFollowUpNote`]: note },
+        $push: { [`${base}.returnHistory`]: trailEntry(step, sellerId, 'seller', note) },
+      },
+    );
+    if (!updated) throw new BadRequestException('This step is not available for the return in its current state');
+
+    await this.activityLogService.log({
+      storeId,
+      category: 'orders',
+      action: `return_${step}`,
+      description: `Order #${order.orderNumber ?? orderId} — return marked "${step === 'item_received' ? 'item received back' : 'replacement sent'}"${note ? ` — ${note}` : ''}`,
+      actorId: sellerId,
+      actorRole: 'seller',
+      targetId: orderId,
+      targetType: 'order',
+    });
+    return { success: true, message: 'Updated', data: { followUp: step } };
+  }
+
   async returnRequest(userId: string, orderId: string, body: any) {
-    const { reason, itemIds } = body;
+    const { itemIds } = body;
+    // Optional structured reason + note + photos (same rules and reason list as refund requests).
+    // Physical only: returns never apply to digital items.
+    const evidence = cleanRefundEvidence(
+      { reasonCode: body.reasonCode, note: body.note, evidenceImages: body.evidenceImages },
+      ['physical'],
+    );
+    const reason: string = String(
+      body.reason ?? (evidence.reasonCode ? REFUND_REASON_CODES[evidence.reasonCode] : ''),
+    );
     if (!reason) throw new BadRequestException('reason is required');
 
     const { orderModel } = this.databaseService.repositories;
@@ -1709,6 +2065,13 @@ export class OrdersService {
       updateData[
         `sellerOrders.${soIndex}.items.${itemIndex}.returnRequestedAt`
       ] = now;
+      const base = `sellerOrders.${soIndex}.items.${itemIndex}`;
+      updateData[`${base}.returnHistory`] = [trailEntry('requested', userId, 'user', null, now)];
+      if (evidence.reasonCode) {
+        updateData[`${base}.returnReasonCode`] = evidence.reasonCode;
+        updateData[`${base}.returnNote`] = evidence.note;
+        updateData[`${base}.returnEvidence`] = evidence.evidenceImages;
+      }
     }
 
     // sellerOrder returnStatus recalculate
@@ -1782,6 +2145,8 @@ export class OrdersService {
       throw new BadRequestException('itemIds are required');
     if (!action || !['approve', 'reject'].includes(action))
       throw new BadRequestException('action must be approve or reject');
+    // A rejection must say why: the buyer reads it in the notification.
+    const cleanedRejectReason = action === 'reject' ? cleanRejectReason(rejectReason) : null;
 
     const { orderModel, storeModel } = this.databaseService.repositories;
 
@@ -1831,11 +2196,9 @@ export class OrdersService {
       } else {
         updateData[`sellerOrders.${soIndex}.items.${itemIndex}.returnStatus`] =
           'rejected';
-        if (rejectReason) {
-          updateData[
-            `sellerOrders.${soIndex}.items.${itemIndex}.returnRejectReason`
-          ] = rejectReason;
-        }
+        updateData[
+          `sellerOrders.${soIndex}.items.${itemIndex}.returnRejectReason`
+        ] = cleanedRejectReason;
       }
     }
 
@@ -1939,6 +2302,14 @@ export class OrdersService {
       throw err;
     }
 
+    // Trail entry per item (tracking only; a failure here never undoes the decision).
+    try {
+      const entry = trailEntry(action === 'approve' ? 'approved' : 'rejected', sellerId, 'seller', cleanedRejectReason);
+      const push: Record<string, any> = {};
+      for (const t of targetItems) push[`sellerOrders.${soIndex}.items.${t.itemIndex}.returnHistory`] = entry;
+      await orderModel.updateOne({ _id: orderId }, { $push: push });
+    } catch { /* tracking only */ }
+
     // Returned goods go back on the shelf.
     if (action === 'approve') {
       const { productVariantModel } = this.databaseService.repositories;
@@ -2041,7 +2412,7 @@ export class OrdersService {
           title: action === 'approve' ? 'Return approved' : 'Return not approved',
           body: action === 'approve'
             ? `Your return for ${n} item(s) from order #${num} was approved.${isPackagePaid(order, sellerOrder) ? ' Your refund is on its way.' : ''}`
-            : `Your return for ${n} item(s) from order #${num} was not approved.${rejectReason ? ` Reason: ${String(rejectReason).slice(0, 200)}` : ''}`,
+            : `Your return for ${n} item(s) from order #${num} was not approved.${cleanedRejectReason ? ` Reason: ${cleanedRejectReason.slice(0, 200)}` : ''}`,
           data: { orderId, orderNumber: String(num), link: `/account/orders/${orderId}` },
         })
         .catch(() => {});

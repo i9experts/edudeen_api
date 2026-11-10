@@ -357,6 +357,11 @@ export class Store {
   @Prop({ type: Object, default: null })
   shipFrom: { city: string; province: string | null } | null;
 
+  // Working days (Sundays not counted) the seller has to mark a physical package shipped. 2 = the old 48 h rule.
+  // Snapshotted onto each physical sellerOrder at creation; changing it never rewrites existing orders.
+  @Prop({ type: Number, default: 2, min: 1, max: 7 })
+  dispatchDays: number;
+
   // Gift wrap the seller offers on physical orders (store currency). null = offered for free (the original behaviour).
   @Prop({ type: Object, default: null })
   giftWrap: { enabled: boolean; fee: number } | null;
