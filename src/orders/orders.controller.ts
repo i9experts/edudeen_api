@@ -128,6 +128,18 @@ export class OrdersController {
     return this.ordersService.getSellerOrders(userId, storeId, query);
   }
 
+  // Print data for up to 50 orders (?ids=a,b). Static `print` segment, declared before `:orderId`.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller', 'admin')
+  @Get('seller-orders/:storeId/print')
+  async getSellerOrdersForPrint(
+    @Req() req: any,
+    @Param('storeId', ParseObjectIdPipe) storeId: string,
+    @Query('ids') ids: string,
+  ) {
+    return this.ordersService.getSellerOrdersForPrint(req.user.userId, storeId, ids);
+  }
+
   // Seller's view of a single order (only their store's part of it).
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller', 'admin')

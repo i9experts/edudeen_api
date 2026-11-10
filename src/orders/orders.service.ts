@@ -744,6 +744,83 @@ export class OrdersService {
     };
   }
 
+  /** Print data for up to 50 of this store's orders (packing slips / invoices). READ-ONLY.
+   *  Same fields the seller already sees in the order detail, minus the advisory warnings.
+   *  Any id that is not an order of this store makes the whole request 404 (no hint which).
+   *  Gift orders (gift wrap or message) carry NO prices: the parcel may go to someone else. */
+  async getSellerOrdersForPrint(sellerId: string, storeId: string, idsRaw: unknown) {
+    const { orderModel, storeModel, userModel, productVariantModel } = this.databaseService.repositories;
+
+    const ids = Array.from(new Set(String(idsRaw ?? '').split(',').map(s => s.trim()).filter(Boolean)));
+    if (ids.length === 0) throw new BadRequestException('ids is required');
+    if (ids.length > 50) throw new BadRequestException('You can print at most 50 orders at a time');
+    if (ids.some(id => !isValidObjectId(id))) throw new BadRequestException('ids must be valid order ids');
+
+    const store: any = await storeModel
+      .findOne({ _id: storeId, sellerId, isDelete: false })
+      .select('name logo')
+      .lean();
+    if (!store) throw new ForbiddenException('Store not found or unauthorized');
+
+    const orders: any[] = await orderModel
+      .find({ _id: { $in: ids }, isDelete: false, 'sellerOrders.storeId': storeId })
+      .lean();
+    if (orders.length !== ids.length) throw new NotFoundException('Order not found');
+
+    const userIds = Array.from(new Set(orders.map(o => String(o.userId)).filter(isValidObjectId)));
+    const users: any[] = userIds.length ? await userModel.find({ _id: { $in: userIds } }).select('name phone').lean() : [];
+    const userById = new Map(users.map(u => [String(u._id), u]));
+
+    const variantIds = orders.flatMap(o => (o.sellerOrders.find((s: any) => s.storeId === storeId)?.items ?? []))
+      .map((it: any) => it.variantId).filter((v: any) => v && isValidObjectId(v));
+    const liveSkus = new Map<string, string>();
+    if (variantIds.length) {
+      const vs: any[] = await productVariantModel.find({ _id: { $in: variantIds } }).select('sku').lean();
+      for (const v of vs) if (v.sku) liveSkus.set(String(v._id), v.sku);
+    }
+
+    const byId = new Map(orders.map(o => [String(o._id), o]));
+    const rows = ids.map(id => {
+      const order = byId.get(id);
+      const so = order.sellerOrders.find((s: any) => s.storeId === storeId);
+      const user = userById.get(String(order.userId));
+      const isGift = !!(order.giftWrap || order.giftMessage);
+      const needsAddress = so.fulfillmentType === 'physical' || so.fulfillmentType === 'mixed';
+      return {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        date: order.createdAt,
+        currency: order.currency ?? 'USD',
+        type: so.fulfillmentType,
+        status: so.status,
+        isGift,
+        pricesHidden: isGift,
+        giftMessage: order.giftMessage ?? null,
+        giftWrap: !!order.giftWrap,
+        paymentType: order.paymentType,
+        isPaid: order.isPaid || so.isPaid === true,
+        codAmount: isGift ? null : (so.codAmount ?? 0),
+        subtotal: isGift ? null : so.subtotal,
+        shippingFee: isGift ? null : (so.shippingFee ?? 0),
+        customer: { name: user?.name || 'Unknown', phone: user?.phone || null },
+        shippingAddress: needsAddress ? (order.shippingAddress ?? null) : null,
+        items: (so.items ?? []).map((it: any) => ({
+          name: it.name,
+          sku: it.sku || (it.variantId && liveSkus.get(String(it.variantId))) || null,
+          type: it.type,
+          options: it.options ?? [],
+          licenseType: it.licenseType ?? null,
+          quantity: it.quantity,
+          price: isGift ? null : it.price,
+          totalPrice: isGift ? null : it.totalPrice,
+          status: it.status ?? null,
+        })),
+      };
+    });
+
+    return { success: true, data: { store: { name: store.name, logo: store.logo ?? null }, orders: rows } };
+  }
+
   async updateSellerOrderStatus(
     sellerId: string,
     body: any,
