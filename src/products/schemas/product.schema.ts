@@ -313,6 +313,10 @@ export class Product {
   @Prop({ type: Boolean, default: false })
   premiumOptOut: boolean;
 
+  // Seller's own "running low" line (whole 0..1000). null / missing = platform default 10 (see inventory/stock-threshold.util).
+  @Prop({ type: Number, default: null })
+  lowStockThreshold: number | null;
+
   // admin marketplace-management toggle — highlights the listing on the
   // marketplace homepage, separate from seller-controlled fields above
   @Prop({ default: false })

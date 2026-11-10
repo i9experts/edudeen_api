@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { DatabaseService } from 'src/database/databaseservice';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
+import { isLowStock } from 'src/inventory/stock-threshold.util';
 import { PromotionsService } from 'src/promotions/promotions.service';
 import { FinanceService } from 'src/finance/finance.service';
 import { AdminConfigService } from 'src/admin-config/admin-config.service';
@@ -83,9 +84,6 @@ export class PaymentService {
     return Math.round(n * 100) / 100;
   }
 
-  /** Same threshold the seller Inventory page uses for "low stock". */
-  private static readonly LOW_STOCK_THRESHOLD = 10;
-
   /**
    * Tells a seller when an order takes a physical variant to "low" or "out of stock".
    * Fires only on the crossing (stock was above the line before this order), one notice per variant.
@@ -104,18 +102,24 @@ export class PaymentService {
     if (!lines.length) return;
     const variants: any[] = await this.databaseService.repositories.productVariantModel
       .find({ _id: { $in: [...new Set(lines.map((l) => l.variantId))] } })
-      .select('stock unlimitedStock')
+      .select('stock unlimitedStock productId')
       .lean();
     const byId = new Map(variants.map((v) => [String(v._id), v]));
+    // Each product may have its own "running low" line; the rule itself is the shared isLowStock helper.
+    const prodRows: any[] = await (this.databaseService.repositories.productModel as any)
+      .find({ _id: { $in: [...new Set(variants.map((v) => String(v.productId)))] } })
+      .select('lowStockThreshold')
+      .lean();
+    const thresholdOf = new Map(prodRows.map((p) => [String(p._id), p.lowStockThreshold]));
     const done = new Set<string>();
-    const limit = PaymentService.LOW_STOCK_THRESHOLD;
     for (const l of lines) {
       const v = byId.get(l.variantId);
       if (!v || v.unlimitedStock || done.has(l.variantId)) continue;
       const now = Number(v.stock ?? 0);
       const before = now + l.qty;
+      const limit = thresholdOf.get(String(v.productId));
       const out = now <= 0 && before > 0;
-      const low = !out && now <= limit && before > limit;
+      const low = !out && isLowStock(now, limit) && !isLowStock(before, limit) && before > 0;
       if (!out && !low) continue;
       done.add(l.variantId);
       this.notificationsService

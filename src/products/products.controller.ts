@@ -288,6 +288,8 @@ export class productController {
   @Patch('stock/bulk')
   async bulkUpdateStock(@Req() req: any, @Body() body: any) {
     const { userId: sellerId } = req.user;
+    // Additive: { storeId, ids, mode: set|add|subtract, value } = product-level adjust (Inventory bulk bar).
+    if (body?.mode !== undefined) return this.productStockService.bulkAdjustStock(sellerId, String(body?.storeId ?? ''), body);
     return this.productStockService.bulkUpdateStock(sellerId, String(body?.storeId ?? ''), body?.updates);
   }
 

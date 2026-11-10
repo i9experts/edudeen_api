@@ -5,7 +5,7 @@ const CAT = 'a'.repeat(24);
 
 function build(storeExists = true) {
   const find = jest.fn();
-  const chain = (rows: any[]) => ({ sort: () => ({ skip: () => ({ limit: () => ({ lean: async () => rows }) }) }), select: () => ({ lean: async () => rows }) });
+  const chain = (rows: any[]) => ({ sort: () => ({ select: () => ({ lean: async () => rows }), skip: () => ({ limit: () => ({ lean: async () => rows }) }) }), select: () => ({ lean: async () => rows }) });
   find.mockImplementation(() => chain([]));
   const productModel: any = {
     find,
@@ -45,6 +45,34 @@ describe('getStoreInventory filters', () => {
   it('another seller gets 403', async () => {
     const { svc } = build(false);
     await expect(svc.getStoreInventory('other', 'st1', {})).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('stockState / sortBy / order: bad value = 400, valid ones are accepted', async () => {
+    const { svc } = build();
+    await expect(svc.getStoreInventory('s1', 'st1', { stockState: 'nope' })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.getStoreInventory('s1', 'st1', { sortBy: 'colour' })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.getStoreInventory('s1', 'st1', { order: 'up' })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.getStoreInventory('s1', 'st1', { stockState: 'low', sortBy: 'stock', order: 'desc' })).resolves.toBeTruthy();
+  });
+
+  it('stock buckets match scanStock and sort works across pages', async () => {
+    const mk = (id: string, name: string, type = 'physical') => ({ _id: id, name, type, status: 'active' });
+    const prods = [mk('a', 'A'), mk('b', 'B'), mk('c', 'C'), mk('d', 'D', 'digital'), mk('e', 'E')];
+    const variants = [
+      { productId: 'a', stock: 0 }, { productId: 'b', stock: 4 }, { productId: 'c', stock: 50 },
+      { productId: 'd', stock: 0 }, { productId: 'e', stock: 10 },
+    ];
+    const { svc, productModel } = build();
+    const lean = (rows: any[]) => ({ sort: () => ({ select: () => ({ lean: async () => rows }), skip: () => ({ limit: () => ({ lean: async () => [] }) }) }), select: () => ({ lean: async () => rows }), lean: async () => rows });
+    productModel.find.mockImplementation(() => lean(prods));
+    (svc as any).databaseService.repositories.productVariantModel.find = jest.fn(() => lean(variants));
+    const low: any = await svc.getStoreInventory('s1', 'st1', { stockState: 'low' });
+    const filter = productModel.countDocuments.mock.calls.at(-1)[0];
+    expect(filter._id.$in.sort()).toEqual(['b', 'e']); // 4 and 10 (<=10), not 0 / 50 / digital
+    expect(low.data.stats).toBeDefined();
+    const asc: any = await svc.getStoreInventory('s1', 'st1', { sortBy: 'stock', order: 'asc', limit: 2, page: 1 });
+    expect(asc.success).toBe(true);
+    expect(productModel.countDocuments.mock.calls.at(-1)[0]._id.$in).toHaveLength(5);
   });
 
   it('category filter covers the category and its descendants', async () => {
