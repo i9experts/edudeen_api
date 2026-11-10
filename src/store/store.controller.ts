@@ -1,15 +1,17 @@
 /* eslint-disable prettier/prettier */
-import { Controller, Post, Get, Patch, Body, Req, Param, Query, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
+import { Controller, Post, Get, Put, Patch, Body, Req, Param, Query, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { StoreService } from './store.service';
-import { UpdateStoreCustomerDto } from './dto/update-store-customer.dto';
+import { StoreCustomersService } from './store-customers.service';
+import { StoreCustomerNoteDto } from './dto/store-customer-note.dto';
 
 @Controller('api/store')
 export class StoreController {
-  constructor(private readonly storeService: StoreService) {}
+  constructor(private readonly storeService: StoreService, private readonly customersService: StoreCustomersService) {}
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
@@ -175,34 +177,42 @@ export class StoreController {
   @Get(':storeId/followers')
   async getStoreFollowers(
     @Req() req: any,
-    @Param('storeId') storeId: string,
+    @Param('storeId', ParseObjectIdPipe) storeId: string,
     @Query() query: any,
   ) {
-    const { userId } = req.user;
-    return this.storeService.getStoreFollowers(userId, storeId, query);
+    return this.customersService.getFollowers(req.user.userId, storeId, query);
   }
 
-  // ── Customers (staff-facing) ─────────────────────────────────────────────
+  // ── Customers (seller-facing, contact details masked; read-only — a seller can never edit a buyer) ──
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Get(':storeId/customers')
-  async getStoreCustomers(@Req() req: any, @Param('storeId') storeId: string, @Query() query: any) {
-    const { userId } = req.user;
-    return this.storeService.getStoreCustomers(userId, storeId, query);
+  async getStoreCustomers(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Query() query: any) {
+    return this.customersService.getCustomers(req.user.userId, storeId, query);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
-  @Patch(':storeId/customers/:customerId')
-  @UsePipes(new ValidationPipe({ transform: true }))
-  async updateStoreCustomer(
+  @Get(':storeId/customers/:customerId')
+  async getStoreCustomer(
     @Req() req: any,
-    @Param('storeId') storeId: string,
-    @Param('customerId') customerId: string,
-    @Body() dto: UpdateStoreCustomerDto,
+    @Param('storeId', ParseObjectIdPipe) storeId: string,
+    @Param('customerId', ParseObjectIdPipe) customerId: string,
   ) {
-    const { userId } = req.user;
-    return this.storeService.updateStoreCustomer(userId, storeId, customerId, dto, req.ip, req.headers['user-agent']);
+    return this.customersService.getCustomerDetail(req.user.userId, storeId, customerId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Put(':storeId/customers/:customerId/note')
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  async saveCustomerNote(
+    @Req() req: any,
+    @Param('storeId', ParseObjectIdPipe) storeId: string,
+    @Param('customerId', ParseObjectIdPipe) customerId: string,
+    @Body() dto: StoreCustomerNoteDto,
+  ) {
+    return this.customersService.saveNote(req.user.userId, storeId, customerId, dto);
   }
 }

@@ -1,4 +1,7 @@
 import { Module } from '@nestjs/common';
+import { MongooseModule } from '@nestjs/mongoose';
+import { StoreCustomersService } from './store-customers.service';
+import { StoreCustomerNote, StoreCustomerNoteSchema } from './schemas/store-customer-note.schema';
 import { StoreController } from './store.controller';
 import { StoreService } from './store.service';
 import { AuthModule } from 'src/auth/auth.module';
@@ -11,9 +14,9 @@ import { StorePagesModule } from '../store-pages/store-pages.module';
 import { CollectionsModule } from '../collections/collections.module';
 
 @Module({
-  imports: [AuthModule, RedisModule, AdminConfigModule, MarketingModule, UploadModule, StoreThemeModule, StorePagesModule, CollectionsModule],
+  imports: [MongooseModule.forFeature([{ name: StoreCustomerNote.name, schema: StoreCustomerNoteSchema }]), AuthModule, RedisModule, AdminConfigModule, MarketingModule, UploadModule, StoreThemeModule, StorePagesModule, CollectionsModule],
   controllers: [StoreController],
-  providers: [StoreService],
+  providers: [StoreService, StoreCustomersService],
   exports: [StoreService],
 })
 export class StoreModule {}

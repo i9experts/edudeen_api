@@ -454,6 +454,12 @@ export class OrdersService {
         matchFilter['sellerOrders.status'] = query.status;
       }
     }
+    // ?buyer=<userId> (seller Customers panel "View all"): store-scoped by the base filter above, read-only.
+    const buyerFilter = typeof query.buyer === 'string' ? query.buyer.trim() : '';
+    if (buyerFilter) {
+      if (!isValidObjectId(buyerFilter)) throw new BadRequestException('Invalid buyer');
+      matchFilter.userId = buyerFilter;
+    }
     // ?action=toship|overdue — the dashboard "Action required" lists (same predicate as its counts).
     const actionKind = parseOrderAction(query.action);
     if (actionKind) {

@@ -96,24 +96,6 @@ describe('getStoreById (unauthenticated route)', () => {
   });
 });
 
-describe('updateStoreCustomer', () => {
-  it("a seller can no longer change a buyer's login email (forgot-password account takeover)", async () => {
-    const { svc, repos } = make({
-      store: liveStore(),
-      repos: {
-        orderModel: { exists: jest.fn().mockResolvedValue(true) },
-        userModel: { findByIdAndUpdate: jest.fn() },
-      },
-    });
-    await expect(
-      svc.updateStoreCustomer('seller1', OID, 'buyer1', {
-        email: 'attacker@evil.co',
-      }),
-    ).rejects.toThrow(/only be changed by the customer/);
-    expect(repos.userModel.findByIdAndUpdate).not.toHaveBeenCalled();
-  });
-});
-
 describe('custom domain', () => {
   it.each([
     'edudeen.com',
