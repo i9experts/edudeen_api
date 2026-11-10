@@ -144,7 +144,7 @@ describe('StoreHealthService ownership + cache', () => {
     expect(r.range).toBe(90);
     expect(r.isNew).toBe(false); // 3 reviews = some evidence
     expect(db.repositories.productModel.countDocuments).toHaveBeenCalledWith(expect.objectContaining({ storeId: 'store1', sellerId: 'seller1', status: 'rejected' }));
-    expect(redis.set).toHaveBeenCalledWith('store-health:store1:90', expect.any(String), 900);
+    expect(redis.set).toHaveBeenCalledWith('store-health:store1:90:d2', expect.any(String), 900);
   });
 
   it('serves a cached copy only after the ownership check', async () => {

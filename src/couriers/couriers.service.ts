@@ -42,6 +42,9 @@ export class CouriersService {
       };
     });
     const anyCourier = couriers.some((c) => c.available);
+    // Read-only hint for the seller Shipping page: is the admin's weight-based table switched on?
+    let weightBasedRates = false;
+    try { weightBasedRates = (await this.shippingRates?.get?.())?.enabled === true; } catch { weightBasedRates = false; }
     return {
       success: true,
       data: {
@@ -49,6 +52,7 @@ export class CouriersService {
         couriers,
         auto: { available: anyCourier, reason: anyCourier ? null : switchedOn ? 'No courier is available yet' : 'Coming soon' },
         useLiveRates: settings.useLiveRates,
+        weightBasedRates,
       },
     };
   }

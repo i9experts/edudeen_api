@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { parseDispatchDays } from '../common/dispatch.util';
 import { cleanClassRange } from './class-levels';
 import { cleanDimensions, ParcelType, PARCEL_TYPES } from '../checkout/shipping-rate.util';
 import { CURRICULA, DELIVERY_FORMATS, DeliveryFormat, DownloadLimit, LicenseType, LICENSE_OPTION_LABEL, LICENSE_OPTION_NAME } from './schemas/product.schema';
@@ -12,8 +13,17 @@ export function licenseFromVariant(variant: any): string | null {
 
 /** Physical parcel info for the delivery charge. `forCreate` always sets a parcelType ('standard' when not sent);
  *  otherwise only keys present in the request are returned. Throws 400 on a bad type or size. */
-export function cleanParcelMeta(body: Record<string, unknown>, forCreate: boolean): { parcelType?: ParcelType; packageCm?: { l: number; w: number; h: number } | null } {
-  const out: { parcelType?: ParcelType; packageCm?: { l: number; w: number; h: number } | null } = {};
+export function cleanParcelMeta(body: Record<string, unknown>, forCreate: boolean): { parcelType?: ParcelType; packageCm?: { l: number; w: number; h: number } | null; dispatchDaysOverride?: number | null } {
+  const out: { parcelType?: ParcelType; packageCm?: { l: number; w: number; h: number } | null; dispatchDaysOverride?: number | null } = {};
+  // Optional per-product dispatch time (working days, 1-7). null/'' = use the store's. 0 and 8 are rejected.
+  if (body.dispatchDaysOverride !== undefined) {
+    if (body.dispatchDaysOverride === null || body.dispatchDaysOverride === '') out.dispatchDaysOverride = null;
+    else {
+      const d = parseDispatchDays(body.dispatchDaysOverride);
+      if (d === null || typeof body.dispatchDaysOverride !== 'number') throw new BadRequestException('Dispatch time must be a whole number of days from 1 to 7');
+      out.dispatchDaysOverride = d;
+    }
+  }
   if (body.parcelType !== undefined && body.parcelType !== null && body.parcelType !== '') {
     if (!PARCEL_TYPES.includes(body.parcelType as ParcelType)) throw new BadRequestException('parcelType must be document, standard, fragile or bulky');
     out.parcelType = body.parcelType as ParcelType;

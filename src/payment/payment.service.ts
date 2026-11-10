@@ -1,3 +1,4 @@
+import { resolvePackageDispatchDays } from 'src/common/dispatch.util';
 import {
   Injectable,
   Optional,
@@ -1979,9 +1980,19 @@ export class PaymentService {
     const allStoreIds = [...new Set(checkout.items.map((i: any) => i.storeId))] as string[];
     const storesById = new Map(
       (
-        await storeModel.find({ _id: { $in: allStoreIds } }).select('baseCurrency fulfillmentMode').lean()
+        await storeModel.find({ _id: { $in: allStoreIds } }).select('baseCurrency fulfillmentMode dispatchDays').lean()
       ).map((s: any) => [s._id.toString(), s]),
     );
+
+    // Per-product dispatch-time overrides (working days) for the physical lines; a failed read just means the store value is used.
+    const dispatchOverrides = new Map<string, number | null>();
+    try {
+      const pids: string[] = [...new Set<string>(physicalItems.map((i: any) => String(i.productId)))];
+      if (pids.length) {
+        const prods: any[] = await productModel.find({ _id: { $in: pids } }).select('dispatchDaysOverride').lean();
+        for (const p of prods) dispatchOverrides.set(String(p._id), p.dispatchDaysOverride ?? null);
+      }
+    } catch { /* store value applies */ }
 
     // Each store with physical items has its own shipping line on the checkout
     // (CheckoutService.addShippingInCheckout). A checkout created before per-store
@@ -2055,6 +2066,8 @@ export class PaymentService {
           // Snapshot of who ships this sub-order (Store.fulfillmentMode now, not whenever it is read later).
           // Digital sub-orders ship nothing, so they carry none.
           fulfillmentMode: storeItems[0].type === 'physical' ? (storesById.get(sellerStoreId)?.fulfillmentMode ?? 'seller') : null,
+          // Snapshot of the dispatch time (working days) at order creation: Store value, or the largest per-product override. Digital: none.
+          dispatchDays: storeItems[0].type === 'physical' ? resolvePackageDispatchDays(storesById.get(sellerStoreId)?.dispatchDays, storeItems.map((i: any) => dispatchOverrides.get(String(i.productId)))) : null,
           settlementCurrency,
           settlementAmount,
           shippingFee: sellerShippingFee,

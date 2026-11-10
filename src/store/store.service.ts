@@ -1,6 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { isValidObjectId } from 'mongoose';
 import { courierDeliveryEnabled } from 'src/checkout/courier-settings.util';
+import { DISPATCH_DAYS_DEFAULT, parseDispatchDays } from 'src/common/dispatch.util';
 import { getDescendantIds } from '../categories/category-tree.util';
 import { sanitizeDigitalForPublicView, clampInt, queryString } from 'src/products/product-public-view.util';
 import { assertSafePublicJson, escapeRegex, searchTerm } from 'src/common/query-safety.util';
@@ -791,6 +792,14 @@ export class StoreService {
         updateData.shipFrom = { city, province };
       }
     }
+    // Dispatch time (working days, Sundays not counted). Only NEW orders use it: each order snapshots its own value.
+    let newDispatchDays: number | null = null;
+    if (body.dispatchDays !== undefined) {
+      const dd = parseDispatchDays(body.dispatchDays);
+      if (dd === null || typeof body.dispatchDays !== 'number') throw new BadRequestException('Dispatch time must be a whole number of days from 1 to 7');
+      updateData.dispatchDays = dd;
+      newDispatchDays = dd;
+    }
     if (body.giftWrap !== undefined) {
       const gw = body.giftWrap;
       if (gw === null) updateData.giftWrap = null;
@@ -824,6 +833,14 @@ export class StoreService {
       updateData,
       { returnDocument: 'after' },
     );
+
+    if (newDispatchDays !== null && newDispatchDays !== ((store as any).dispatchDays ?? DISPATCH_DAYS_DEFAULT)) {
+      this.activityLogService.log({
+        storeId, category: 'orders', action: 'dispatch_days_updated',
+        description: `Dispatch time changed from ${(store as any).dispatchDays ?? DISPATCH_DAYS_DEFAULT} to ${newDispatchDays} working day(s)`,
+        actorId: sellerId, actorRole: 'seller', targetId: storeId, targetType: 'store',
+      });
+    }
 
     return {
       success: true,

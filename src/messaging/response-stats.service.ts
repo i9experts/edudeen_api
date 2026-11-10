@@ -103,6 +103,7 @@ export class ResponseStatsService {
           storeId: '$sellerOrders.storeId',
           status: '$sellerOrders.status',
           shippedAt: '$sellerOrders.shippedAt',
+          dispatchDays: '$sellerOrders.dispatchDays',
           paymentType: 1,
           paidAt: 1,
           createdAt: 1,

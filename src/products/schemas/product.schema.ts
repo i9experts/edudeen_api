@@ -219,6 +219,10 @@ export class Product {
   @Prop({ type: String, enum: ['document', 'standard', 'fragile', 'bulky'], default: null })
   parcelType: 'document' | 'standard' | 'fragile' | 'bulky' | null;
 
+  // Physical products: optional dispatch time in working days (1-7) that overrides the store's. A package uses the largest value among its items.
+  @Prop({ type: Number, default: null, min: 1, max: 7 })
+  dispatchDaysOverride: number | null;
+
   @Prop({ type: Object, default: null })
   packageCm: { l: number; w: number; h: number } | null;
 

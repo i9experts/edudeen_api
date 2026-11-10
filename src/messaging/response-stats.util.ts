@@ -1,3 +1,5 @@
+import { dispatchDueAt, LEGACY_DISPATCH_HOURS } from '../common/dispatch.util';
+
 /** Pure helpers for the seller "usually replies within..." statistic. */
 
 /** Median reply time looks at the last 30 days; response rate + dispatch look at the last 90. */
@@ -8,8 +10,8 @@ export const TRUST_MIN_SAMPLES = 10;
 export const MIN_REPLIED_CONVERSATIONS = TRUST_MIN_SAMPLES;
 /** A buyer inquiry counts as "answered in time" when the seller replies within this many hours. */
 export const RESPONSE_RATE_HOURS = 24;
-/** A physical package counts as "dispatched on time" when it is marked shipped within this many hours of payment. */
-export const DISPATCH_HOURS = 48;
+/** LEGACY rule (packages with no dispatchDays snapshot): marked shipped within 48 hours of payment. New packages use their own dispatch days (working days, Sundays not counted) - see common/dispatch.util.ts. */
+export const DISPATCH_HOURS = LEGACY_DISPATCH_HOURS;
 
 export interface StatMessage { senderRole: string; at: Date | string | number }
 
@@ -78,6 +80,8 @@ export interface DispatchPackage {
   baseAt: Date | string | number | null;
   shippedAt: Date | string | number | null;
   cancelled: boolean;
+  /** Working days snapshotted on the package at order creation; absent/null = legacy 48 h rule. */
+  dispatchDays?: number | null;
 }
 
 const SHIPPED_LIKE = new Set(['shipped', 'delivered', 'completed']);
@@ -88,7 +92,7 @@ const SHIPPED_LIKE = new Set(['shipped', 'delivered', 'completed']);
  * and the seller Store Health page so both use the identical rule.
  */
 export function toDispatchPackage(r: {
-  status?: string | null; shippedAt?: Date | string | null; paymentType?: string | null; paidAt?: Date | string | null; createdAt?: Date | string | null;
+  status?: string | null; shippedAt?: Date | string | null; paymentType?: string | null; paidAt?: Date | string | null; createdAt?: Date | string | null; dispatchDays?: number | null;
 }): DispatchPackage | null {
   const status = String(r.status ?? '');
   if (!r.shippedAt && SHIPPED_LIKE.has(status)) return null;
@@ -96,25 +100,26 @@ export function toDispatchPackage(r: {
     baseAt: r.paymentType === 'cash_on_delivery' ? r.createdAt ?? null : r.paidAt ?? null,
     shippedAt: r.shippedAt ?? null,
     cancelled: status === 'cancelled' || status === 'refunded',
+    dispatchDays: r.dispatchDays ?? null,
   };
 }
 
 /**
- * Dispatch on time = share of physical packages shipped within 48 h of payment. A package not shipped yet only
- * counts as late once 48 h have passed; cancelled/refunded and unpaid packages are left out. Fewer than
+ * Dispatch on time = share of physical packages shipped within their dispatch time of payment. A package not shipped yet only
+ * counts as late once that time has passed; cancelled/refunded and unpaid packages are left out. Fewer than
  * TRUST_MIN_SAMPLES counted packages -> pct null.
  */
 export function buildDispatchRate(pkgs: DispatchPackage[], now = new Date()): { pct: number | null; sample: number } {
-  const limitMs = DISPATCH_HOURS * 3_600_000;
   let sample = 0;
   let onTime = 0;
   for (const p of pkgs) {
     if (p.cancelled || p.baseAt == null) continue;
-    const base = new Date(p.baseAt).getTime();
+    // Due moment = payment + the package's own dispatch days (legacy: + 48 h). On time = shipped at or before it.
+    const due = dispatchDueAt(p.baseAt, p.dispatchDays).getTime();
     if (p.shippedAt != null) {
       sample++;
-      if (new Date(p.shippedAt).getTime() - base <= limitMs) onTime++;
-    } else if (now.getTime() - base > limitMs) {
+      if (new Date(p.shippedAt).getTime() <= due) onTime++;
+    } else if (now.getTime() > due) {
       sample++;
     }
   }

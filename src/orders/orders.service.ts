@@ -25,6 +25,7 @@ import { cleanFollowUpNote, cleanRejectReason, requiredPreviousFollowUp, trailEn
 import { buildReturnDetail } from './return-detail.util';
 import { addressWarnings, findPossibleDuplicates, itemReturnFlags } from './order-warnings.util';
 import { round } from 'src/common/number.util';
+import { cleanTracking, isSelfDelivery } from './tracking.util';
 import { PaymentService } from 'src/payment/payment.service';
 import { orderStatusEmail, downloadLinkEmail } from 'src/notifications/templates/notification-email.template';
 
@@ -696,6 +697,31 @@ export class OrdersService {
     const dupMap = await findPossibleDuplicates(orderModel, [order], () => storeId);
     const needsAddress = so.fulfillmentType === 'physical' || so.fulfillmentType === 'mixed';
 
+    // Money breakdown: stored values only, nothing recalculated. Gift orders and free claims show no prices.
+    // Gift wrap is folded into this package's shipping line at checkout (not stored apart), so it is not listed separately.
+    const pricesHidden = !!(order.giftWrap || order.giftMessage) || order.isFreeClaim === true;
+    let earnings: { amount: number; currency: string } | null = null;
+    if (!pricesHidden) {
+      try {
+        const saleTx: any = await this.databaseService.repositories.transactionModel
+          .findOne({ storeId, referenceId: String(order._id), referenceType: 'order', type: 'sale' })
+          .select('metadata.netAmount currency')
+          .lean();
+        const net = saleTx?.metadata?.netAmount;
+        if (typeof net === 'number' && Number.isFinite(net)) earnings = { amount: net, currency: saleTx.currency ?? 'USD' };
+      } catch { earnings = null; }
+    }
+    const amounts = pricesHidden
+      ? { pricesHidden: true, currency: order.currency ?? 'USD' }
+      : {
+          pricesHidden: false,
+          currency: order.currency ?? 'USD',
+          itemsSubtotal: so.subtotal ?? 0,
+          deliveryCharge: so.shippingFee ?? 0,
+          buyerPays: (so.subtotal ?? 0) + (so.shippingFee ?? 0),
+          earnings,
+        };
+
     return {
       success: true,
       data: {
@@ -703,6 +729,7 @@ export class OrdersService {
         orderNumber: order.orderNumber,
         date: order.createdAt,
         currency: order.currency ?? 'USD',
+        amounts,
         warnings: {
           possibleDuplicate: dupMap.get(String(order._id)) ?? null,
           address: needsAddress ? addressWarnings(order.shippingAddress, user?.phone) : [],
@@ -836,7 +863,7 @@ export class OrdersService {
     userAgent?: string,
     actorRole: string = 'seller',
   ) {
-    const { orderId, storeId, status, tracking } = body;
+    const { orderId, storeId, status } = body;
     const isAdmin = actorRole === 'admin';
 
     if (!orderId) throw new BadRequestException('orderId is required');
@@ -904,11 +931,9 @@ export class OrdersService {
       throw new BadRequestException('Mark this order as paid before completing it');
     }
 
-    if (status === 'shipped' && !tracking) {
-      throw new BadRequestException(
-        'tracking info required when status is shipped',
-      );
-    }
+    // Courier carriers need a tracking number; "I deliver myself" does not (see tracking.util.ts).
+    const tracking = status === 'shipped' ? cleanTracking(body.tracking) : null;
+    const viaSelf = !!tracking && isSelfDelivery(tracking.carrier);
 
     const updateData: any = {};
 
@@ -1019,16 +1044,16 @@ export class OrdersService {
               : 'Your order was delivered',
           body:
             status === 'shipped'
-              ? `Order #${order.orderNumber ?? orderId} is on its way${tracking?.carrier ? ` via ${tracking.carrier}` : ''}.`
+              ? `Order #${order.orderNumber ?? orderId} is on its way${viaSelf ? ' - the seller is delivering it themselves' : tracking?.carrier ? ` via ${tracking.carrier}` : ''}${viaSelf && tracking?.expectedDeliveryDate ? `. Expected by ${tracking.expectedDeliveryDate.toISOString().slice(0, 10)}` : ''}.`
               : `Order #${order.orderNumber ?? orderId} has been delivered.`,
           data: { orderId, orderNumber: order.orderNumber, status, link: `/account/orders/${orderId}` },
-          email: orderStatusEmail(order.orderNumber ?? orderId, status, tracking),
+          email: orderStatusEmail(order.orderNumber ?? orderId, status, tracking ? { ...tracking, trackingNumber: tracking.trackingNumber ?? undefined, trackingUrl: tracking.trackingUrl ?? undefined, expectedDeliveryDate: tracking.expectedDeliveryDate?.toISOString().slice(0, 10), note: tracking.note ?? undefined } : null),
           channelEvent: {
             event: status === 'shipped' ? 'order_shipped' : 'order_delivered',
             vars: {
               orderNumber: String(order.orderNumber ?? orderId),
-              carrier: String(tracking?.carrier ?? 'Courier'),
-              trackingNumber: String(tracking?.trackingNumber ?? ''),
+              carrier: viaSelf ? 'the seller (own delivery)' : String(tracking?.carrier ?? 'Courier'),
+              trackingNumber: tracking?.trackingNumber || 'not applicable',
             },
             fallbackPhone: order.shippingAddress?.phoneNumber ?? null,
           },

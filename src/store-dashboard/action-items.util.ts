@@ -1,4 +1,4 @@
-import { DISPATCH_HOURS } from 'src/messaging/response-stats.util';
+import { dispatchDueAt, dispatchDueExpr, DISPATCH_DAYS_MIN, LEGACY_DISPATCH_HOURS } from 'src/common/dispatch.util';
 
 /**
  * Seller dashboard "Action required" counts. READ-ONLY. Every count uses the same filter the target page
@@ -46,7 +46,8 @@ export function packageStatusesForTab(tab: OrderTab): string[] | null {
 }
 
 /**
- * Ship-by time of a package = payment time (COD / unpaid-time: order creation) + DISPATCH_HOURS.
+ * Ship-by time of a package = payment time (COD / unpaid-time: order creation) + the package's dispatch days
+ * (working days, Sundays not counted; legacy packages without the snapshot: + 48 h).
  * Only for packages the dashboard counts as "to ship" (same conditions as `sellerOrdersActionFilter`), else null.
  */
 export function sellerShipBy(order: any, so: any): Date | null {
@@ -56,7 +57,7 @@ export function sellerShipBy(order: any, so: any): Date | null {
   if (!(order?.isPaid === true || order?.paymentType === 'cash_on_delivery' || so.isPaid === true)) return null;
   const base = order?.paidAt ?? order?.createdAt;
   if (!base) return null;
-  return new Date(new Date(base).getTime() + DISPATCH_HOURS * 3_600_000);
+  return dispatchDueAt(base, so.dispatchDays);
 }
 
 /** Mongo pipeline stages that put the most urgent ship-by first (packages with no ship-by last, newest first). */
@@ -75,7 +76,7 @@ export function shipByUrgencySort(storeIds: string[]): any[] {
                 { $or: [{ $eq: ['$isPaid', true] }, { $eq: ['$paymentType', 'cash_on_delivery'] }, { $eq: ['$_pkg.isPaid', true] }] },
               ],
             },
-            { $add: [{ $ifNull: ['$paidAt', '$createdAt'] }, DISPATCH_HOURS * 3_600_000] },
+            dispatchDueExpr('$_pkg', { $ifNull: ['$paidAt', '$createdAt'] }),
             new Date('9999-01-01T00:00:00Z'),
           ],
         },
@@ -92,7 +93,8 @@ export function shipByUrgencySort(storeIds: string[]): any[] {
  * - not handled by Edudeen (fulfillmentMode 'platform' excluded)
  * - paid (order or package) or cash on delivery
  * - not a free claim, not deleted
- * 'overdue' adds the dispatch rule (DISPATCH_HOURS from payment; COD / unpaid-time = order creation, as in response-stats).
+ * 'overdue' adds the dispatch rule: due moment (payment + dispatch days; legacy +48 h; COD = order creation) has passed.
+ * Same due expression as the list sort and the JS ship-by, so card count == list rows.
  */
 export function sellerOrdersActionFilter(storeIds: string[], kind: OrderActionKind, now: Date = new Date()): Record<string, any> {
   const scope = { $in: storeIds };
@@ -116,9 +118,27 @@ export function sellerOrdersActionFilter(storeIds: string[], kind: OrderActionKi
     },
   ];
   if (kind === 'overdue') {
-    const cutoff = new Date(now.getTime() - DISPATCH_HOURS * 3_600_000);
+    // Cheap bound first (index-friendly): nothing is due before the shortest possible window (1 working day >= 24 h, legacy 48 h).
+    const earliest = new Date(now.getTime() - Math.min(DISPATCH_DAYS_MIN * 24, LEGACY_DISPATCH_HOURS) * 3_600_000);
+    and.push({ $or: [{ paidAt: { $lte: earliest } }, { paidAt: null, createdAt: { $lte: earliest } }] });
+    // Exact rule per package of the scoped stores (same due expression as the list sort and the JS ship-by).
     and.push({
-      $or: [{ paidAt: { $lte: cutoff } }, { paidAt: null, createdAt: { $lte: cutoff } }],
+      $expr: {
+        $anyElementTrue: [{
+          $map: {
+            input: '$sellerOrders', as: 'p',
+            in: {
+              $and: [
+                { $in: ['$$p.storeId', storeIds] },
+                { $in: ['$$p.fulfillmentType', ['physical', 'mixed']] },
+                { $in: ['$$p.status', ['pending', 'processing']] },
+                { $ne: ['$$p.fulfillmentMode', 'platform'] },
+                { $lte: [dispatchDueExpr('$$p', { $ifNull: ['$paidAt', '$createdAt'] }), now] },
+              ],
+            },
+          },
+        }],
+      },
     });
   }
   return { isDelete: false, isFreeClaim: { $ne: true }, $and: and };

@@ -48,10 +48,11 @@ describe('action items', () => {
     expect(f.$and).toHaveLength(2);
   });
 
-  it('overdue adds the 48h dispatch cutoff', () => {
+  it('overdue adds a cheap 24h bound plus the exact per-package due rule', () => {
     const f = sellerOrdersActionFilter(['s1'], 'overdue', NOW) as any;
-    expect(f.$and).toHaveLength(3);
-    const cutoff = new Date(NOW.getTime() - 48 * 3_600_000);
+    expect(f.$and).toHaveLength(4);
+    expect(f.$and[3].$expr.$anyElementTrue).toBeDefined();
+    const cutoff = new Date(NOW.getTime() - 24 * 3_600_000);
     expect(f.$and[2].$or[0]).toEqual({ paidAt: { $lte: cutoff } });
     expect(f.$and[2].$or[1]).toEqual({ paidAt: null, createdAt: { $lte: cutoff } });
   });
