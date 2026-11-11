@@ -163,6 +163,10 @@ export class CheckoutItem {
   // seller is credited the full price (same reimbursement path as platform-sponsored campaigns).
   @Prop({ type: String, enum: ['platform'], default: null })
   couponSponsorType: 'platform' | null;
+
+  // Id of the Coupon document that produced couponDiscountUSD (reporting only, never used for pricing).
+  @Prop({ type: String, default: null })
+  couponId: string | null;
 }
 
 export const CheckoutItemSchema = SchemaFactory.createForClass(CheckoutItem);

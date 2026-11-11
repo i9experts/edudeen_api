@@ -67,6 +67,28 @@ export class Coupon {
   // true = the discount is funded by the platform; the seller is credited the full price.
   @Prop({ type: Boolean, default: false })
   platformFunded: boolean;
+
+  // --- Seller coupon rules (all optional; old docs read as store-wide / no start / unlimited / private) ---
+  @Prop({ type: String, enum: ['store', 'categories', 'products'], default: 'store' })
+  appliesTo: 'store' | 'categories' | 'products';
+
+  // product ids (appliesTo 'products') or category ids (appliesTo 'categories'; descendants match too)
+  @Prop({ type: [String], default: [] })
+  targetIds: string[];
+
+  @Prop({ type: Date, default: null })
+  startsAt: Date | null;
+
+  // null = unlimited uses per buyer
+  @Prop({ type: Number, default: null })
+  perCustomerLimit: number | null;
+
+  @Prop({ type: Boolean, default: false })
+  firstOrderOnly: boolean;
+
+  // public = badge on matching product pages; private (default) = code required, no badge
+  @Prop({ type: String, enum: ['public', 'private'], default: 'private' })
+  visibility: 'public' | 'private';
 }
 
 export const CouponSchema = SchemaFactory.createForClass(Coupon);

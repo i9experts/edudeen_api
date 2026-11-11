@@ -57,7 +57,10 @@ export class GiftCardsService {
       // PKR stores get rupee-sized presets; USD keeps the schema default.
       const store: any = await this.r.storeModel.findById(storeId).select('baseCurrency').lean();
       const pkr = (store?.baseCurrency ?? 'USD') === 'PKR';
-      settings = await this.r.giftCardSettingsModel.create(pkr ? { storeId, denominations: [500, 1000, 2500, 5000] } : { storeId });
+      // New stores start with a 12-month expiry; existing stores' saved settings are never touched.
+      settings = await this.r.giftCardSettingsModel.create(
+        pkr ? { storeId, denominations: [500, 1000, 2000, 5000], neverExpires: false, expiryMonths: 12 } : { storeId, neverExpires: false, expiryMonths: 12 },
+      );
     }
     return settings;
   }

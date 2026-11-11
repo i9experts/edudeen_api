@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { MAX_CATEGORY_DEPTH, getDescendantIds } from 'src/categories/category-tree.util';
+import { isBadgeLive, couponScope, lineMatchesCoupon } from 'src/marketing/coupon-rules.util';
 import {
   Injectable,
   UnauthorizedException,
@@ -1348,6 +1349,33 @@ export class ProductsService {
     });
   }
 
+  /** Read-only badge data: best PUBLIC percentage coupon of this product's store that applies to it right now
+   *  (active, started, not expired, not used up). Private coupons never appear. */
+  private async findPublicCouponBadge(product: any): Promise<{ code: string; percent: number } | null> {
+    try {
+      if (!product?.storeId) return null;
+      const coupons: any[] = await (this.databaseService.repositories.couponModel as any)
+        .find({ storeId: String(product.storeId), scope: 'seller', visibility: 'public', discountType: 'percentage', isActive: true, isDelete: false })
+        .lean();
+      let best: { code: string; percent: number } | null = null;
+      for (const c of coupons) {
+        if (!isBadgeLive(c)) continue;
+        let targets = new Set<string>((c.targetIds ?? []).map(String));
+        if (couponScope(c) === 'categories') {
+          const expanded = new Set<string>();
+          for (const t of targets) for (const id of await getDescendantIds(this.databaseService.repositories.categoryModel as any, t)) expanded.add(id);
+          targets = expanded;
+        }
+        const line = { productId: String(product._id), categoryIds: [String(product.categoryId ?? ''), String(product.subCategoryId ?? '')] };
+        if (!lineMatchesCoupon(c, line, targets)) continue;
+        if (!best || c.discountValue > best.percent) best = { code: c.code, percent: c.discountValue };
+      }
+      return best;
+    } catch {
+      return null;
+    }
+  }
+
   async getProductById(idOrSlug: string, customerId?: string | null, viewerRole?: string | null) {
     // Products flagged as test are hidden from the public; an admin can still open them.
     const testFilter: any = viewerRole === 'admin' ? {} : { isTest: { $ne: true } };
@@ -1452,6 +1480,7 @@ export class ProductsService {
     }
     (productWithSeller as any).canonicalSlug = product.slug;
     (productWithSeller as any).slugRedirect = viaPreviousSlug;
+    (productWithSeller as any).publicCoupon = await this.findPublicCouponBadge(product as any);
 
     // Edudeen Premium: teaser percent for everyone, member price on the variants for active members.
     {

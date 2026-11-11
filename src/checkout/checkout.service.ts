@@ -6,6 +6,8 @@ import {
   Optional,
 } from '@nestjs/common';
 import { isValidObjectId } from 'mongoose';
+import { hasStarted, couponScope, lineMatchesCoupon } from '../marketing/coupon-rules.util';
+import { getDescendantIds } from '../categories/category-tree.util';
 import { licenseFromVariant } from 'src/products/product-input.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { MarketingService } from 'src/marketing/marketing.service';
@@ -1270,8 +1272,27 @@ export class CheckoutService {
     }
     if (coupon.expiresAt && coupon.expiresAt < new Date())
       throw new BadRequestException('This coupon has expired');
+    // Seller-coupon rules (start date / per-customer / scope). Personal + platform-funded (Premium/retention)
+    // coupons skip them entirely.
+    const sellerRules = !coupon.ownerUserId && !coupon.platformFunded;
+    if (sellerRules && !hasStarted(coupon as any))
+      throw new BadRequestException('This coupon is not active yet');
     if (coupon.usageLimit != null && coupon.usageCount >= coupon.usageLimit) {
       throw new BadRequestException('This coupon has reached its usage limit');
+    }
+    if (sellerRules && ((coupon as any).perCustomerLimit != null || (coupon as any).firstOrderOnly)) {
+      const orderModel = this.databaseService.repositories.orderModel as any;
+      const base: any = { userId, status: { $ne: 'cancelled' }, isFreeClaim: { $ne: true } };
+      if (coupon.storeId) base['sellerOrders.storeId'] = coupon.storeId;
+      if ((coupon as any).firstOrderOnly && (await orderModel.countDocuments(base)) > 0) {
+        throw new BadRequestException('This coupon is only for your first order');
+      }
+      const limit = (coupon as any).perCustomerLimit;
+      if (limit != null && (await orderModel.countDocuments({ ...base, couponCode: coupon.code })) >= limit) {
+        throw new BadRequestException(
+          limit === 1 ? 'You have already used this coupon' : `You have already used this coupon ${limit} times (the limit per customer)`,
+        );
+      }
     }
     // A personal (Premium member) coupon belongs to one buyer and needs an active membership; anyone else
     // gets the same message as an unknown code.
@@ -1299,9 +1320,32 @@ export class CheckoutService {
     // store/currency in the checkout, so its basis is the checkout's own
     // display currency, computed via per-line conversion like every other
     // checkout-level total.
-    const storeItems = isPlatformCoupon
+    let storeItems = isPlatformCoupon
       ? items
       : items.filter((i) => i.storeId === coupon.storeId);
+    // Scoped coupon (products / categories): only matching lines are discounted.
+    if (sellerRules && couponScope(coupon as any) !== 'store') {
+      const targets = new Set<string>((coupon as any).targetIds ?? []);
+      let lineCats = new Map<string, string[]>();
+      if (couponScope(coupon as any) === 'categories') {
+        const catModel = this.databaseService.repositories.categoryModel;
+        const expanded = new Set<string>();
+        for (const t of [...targets]) for (const id of await getDescendantIds(catModel as any, String(t))) expanded.add(id);
+        targets.clear();
+        expanded.forEach((id) => targets.add(id));
+        const prods: any[] = await (this.databaseService.repositories.productModel as any)
+          .find({ _id: { $in: [...new Set(storeItems.map((i) => i.productId))] } })
+          .select('categoryId subCategoryId')
+          .lean();
+        lineCats = new Map(prods.map((p) => [String(p._id), [String(p.categoryId ?? ''), String(p.subCategoryId ?? '')]]));
+      }
+      storeItems = storeItems.filter((i) =>
+        lineMatchesCoupon(coupon as any, { productId: i.productId, categoryIds: lineCats.get(String(i.productId)) ?? [] }, targets),
+      );
+      if (storeItems.length === 0) {
+        throw new BadRequestException("This coupon doesn't apply to the items in your cart");
+      }
+    }
     const couponStoreCurrency = isPlatformCoupon
       ? checkout.currency
       : storeItems[0]?.currency ?? checkout.currency;
@@ -1394,6 +1438,9 @@ export class CheckoutService {
     } else {
       this.distributeCouponDiscount(eligibleItems, totalDiscount);
     }
+
+    // Reporting only: remember which coupon discounted each line (seller promotion stats).
+    for (const i of eligibleItems) if ((i.couponDiscountUSD ?? 0) > 0) i.couponId = String((coupon as any)._id);
 
     // Platform-funded coupon (Premium monthly coupon): the platform, not the seller, bears this discount - tag the
     // lines so PaymentService credits the seller the full price (same path as platform-sponsored campaigns).
@@ -1790,6 +1837,7 @@ export class CheckoutService {
         item.totalPriceBeforeCoupon = null;
         item.couponDiscountUSD = 0;
         item.couponSponsorType = null;
+        item.couponId = null;
       }
     }
   }

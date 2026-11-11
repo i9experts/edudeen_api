@@ -70,6 +70,10 @@ export class OrderItem {
   @Prop({ type: Number, default: 0 })
   giftCardDiscountUSD: number;
 
+  // Coupon document that discounted this line (reporting only; null on older orders).
+  @Prop({ type: String, default: null })
+  couponId: string | null;
+
   // Automatic platform-campaign discount allocated to this line at checkout —
   // see CheckoutItem.campaignId/campaignDiscountUSD, copied through as-is.
   @Prop({ type: String, default: null })

@@ -8,8 +8,11 @@ import { ActiveCampaignForStore } from './campaign-pricing.util';
 import { parseCampaignIdsInput } from './campaign-eligibility.util';
 import { generateUniqueSlug } from 'src/common/slug.util';
 import { CAMPAIGN_WITHIN_CAP } from './schemas/campaign.schema';
+import { couponValueError, couponDateError, hasStarted } from './coupon-rules.util';
 
 import { clampInt } from 'src/common/query-safety.util';
+import { resolveDateRange } from 'src/analytics/utils/analytics-date.util';
+import { promotionStats } from './promotion-stats.util';
 @Injectable()
 export class MarketingService {
   constructor(
@@ -35,9 +38,11 @@ export class MarketingService {
   }
 
   /** Shared coupon checks (create + merged update). `expiresAt` null/undefined = no expiry. */
-  private assertCouponRules(code: string, type: string, value: number, minOrder: number | null | undefined, expiresAt: Date | null | undefined, checkExpiry: boolean) {
+  private assertCouponRules(code: string, type: string, value: number, minOrder: number | null | undefined, expiresAt: Date | null | undefined, checkExpiry: boolean, enforceCap = true) {
     if (!/^[A-Z0-9_-]{3,20}$/.test(code)) throw new BadRequestException('Code must be 3-20 characters: letters, numbers, - or _');
     this.assertDiscountValue(type, value);
+    const valueErr = couponValueError(type, value);
+    if (valueErr && enforceCap) throw new BadRequestException(valueErr);
     if (type === 'fixed' && minOrder && value > minOrder) throw new BadRequestException('Fixed discount cannot be more than the minimum order amount');
     if (checkExpiry && expiresAt) {
       if (Number.isNaN(expiresAt.getTime())) throw new BadRequestException('Invalid expiry date');
@@ -45,11 +50,33 @@ export class MarketingService {
     }
   }
 
-  /** Computed, never stored: Expired > Paused > Active. */
-  private couponStatus(c: any): 'expired' | 'paused' | 'active' {
+  /** Computed, never stored: Expired > Paused > Scheduled > Active. */
+  private couponStatus(c: any): 'expired' | 'paused' | 'scheduled' | 'active' {
     if (c.expiresAt && new Date(c.expiresAt).getTime() < Date.now()) return 'expired';
     if (c.isActive === false) return 'paused';
+    if (!hasStarted(c)) return 'scheduled';
     return 'active';
+  }
+
+  /** Scope targets must be this store's own live products, or existing active categories. */
+  private async cleanTargets(storeId: string, appliesTo: string, ids: string[] | undefined): Promise<string[]> {
+    if (appliesTo === 'store') return [];
+    const unique = [...new Set((ids ?? []).map(String))];
+    if (unique.length === 0) throw new BadRequestException(appliesTo === 'products' ? 'Pick at least one product' : 'Pick at least one category');
+    if (appliesTo === 'products') {
+      const n = await this.r.productModel.countDocuments({ _id: { $in: unique }, storeId, isDelete: false });
+      if (n !== unique.length) throw new BadRequestException('You can only pick your own products');
+    } else {
+      const n = await this.r.categoryModel.countDocuments({ _id: { $in: unique }, isDelete: { $ne: true }, isActive: { $ne: false } } as any);
+      if (n !== unique.length) throw new BadRequestException('One or more categories are not available');
+    }
+    return unique;
+  }
+
+  /** Date + per-customer rules on merged values. */
+  private assertCouponWindow(startsAt: Date | null | undefined, expiresAt: Date | null | undefined) {
+    const err = couponDateError(startsAt, expiresAt);
+    if (err) throw new BadRequestException(err);
   }
 
   async createCoupon(sellerId: string, storeId: string, dto: CreateCouponDto, ip?: string, userAgent?: string) {
@@ -60,8 +87,17 @@ export class MarketingService {
     if (existing) throw new ConflictException(`Coupon code "${code}" already exists for this store`);
 
     this.assertCouponRules(code, dto.discountType, dto.discountValue, dto.minOrderAmount, dto.expiresAt ? new Date(dto.expiresAt) : null, true);
+    const appliesTo = dto.appliesTo ?? 'store';
+    this.assertCouponWindow(dto.startsAt ? new Date(dto.startsAt) : null, dto.expiresAt ? new Date(dto.expiresAt) : null);
+    const targetIds = await this.cleanTargets(storeId, appliesTo, dto.targetIds);
 
     const coupon = await this.r.couponModel.create({
+      appliesTo,
+      targetIds,
+      startsAt: dto.startsAt ? new Date(dto.startsAt) : null,
+      perCustomerLimit: dto.perCustomerLimit ?? null,
+      firstOrderOnly: dto.firstOrderOnly === true,
+      visibility: dto.visibility ?? 'private',
       storeId,
       sellerId,
       code,
@@ -120,9 +156,21 @@ export class MarketingService {
     const mergedValue = dto.discountValue ?? coupon.discountValue;
     const mergedCode = dto.code !== undefined ? dto.code.trim().toUpperCase() : coupon.code;
     const mergedMin = dto.minOrderAmount !== undefined ? dto.minOrderAmount : coupon.minOrderAmount;
-    this.assertCouponRules(mergedCode, mergedType, mergedValue, mergedMin, dto.expiresAt !== undefined ? new Date(dto.expiresAt) : coupon.expiresAt, dto.expiresAt !== undefined);
+    this.assertCouponRules(mergedCode, mergedType, mergedValue, mergedMin, dto.expiresAt !== undefined ? new Date(dto.expiresAt) : coupon.expiresAt, dto.expiresAt !== undefined, dto.discountValue !== undefined || dto.discountType !== undefined);
+    const mergedExpires = dto.expiresAt !== undefined ? new Date(dto.expiresAt) : coupon.expiresAt;
+    const mergedStarts = dto.startsAt !== undefined ? (dto.startsAt === null ? null : new Date(dto.startsAt)) : coupon.startsAt;
+    this.assertCouponWindow(mergedStarts, mergedExpires);
+    const mergedApplies = dto.appliesTo ?? coupon.appliesTo ?? 'store';
 
     const update: any = {};
+    if (dto.appliesTo !== undefined || dto.targetIds !== undefined) {
+      update.appliesTo = mergedApplies;
+      update.targetIds = await this.cleanTargets(storeId, mergedApplies, dto.targetIds ?? (dto.appliesTo === undefined ? coupon.targetIds : undefined));
+    }
+    if (dto.startsAt !== undefined) update.startsAt = mergedStarts;
+    if (dto.perCustomerLimit !== undefined) update.perCustomerLimit = dto.perCustomerLimit;
+    if (dto.firstOrderOnly !== undefined) update.firstOrderOnly = dto.firstOrderOnly;
+    if (dto.visibility !== undefined) update.visibility = dto.visibility;
     if (dto.code !== undefined) {
       const newCode = dto.code.trim().toUpperCase();
       if (newCode !== coupon.code) {
@@ -181,6 +229,100 @@ export class MarketingService {
     });
 
     return { success: true, message: 'Coupon deleted' };
+  }
+
+  // ─── Marketing KPI row (read-only, last 30 Pakistan days) ───────────────
+
+  /**
+   * Active promotions = live coupons + live automatic discounts + platform sales this store has products in.
+   * Order numbers come from this store's own packages (booked: not cancelled, not a free claim) in the last 30 PKT days;
+   * "promotion" = any item carrying a coupon, platform-campaign or automatic discount. Amounts are summed as stored on
+   * the order (same convention as the Analytics Overview) and labelled with the store currency. Writes nothing.
+   */
+  async getKpis(sellerId: string, storeId: string) {
+    const store = await this.verifyStoreOwnership(storeId, sellerId);
+    const now = new Date();
+    const { from, to } = resolveDateRange({ range: '30d' }, { pkt: true });
+
+    const [coupons, discounts, liveCampaigns, orderRows] = await Promise.all([
+      this.r.couponModel.countDocuments({
+        storeId, isDelete: false, isActive: { $ne: false },
+        $or: [{ expiresAt: null }, { expiresAt: { $gte: now } }],
+      }),
+      this.r.automaticDiscountModel.countDocuments({
+        storeId, isDelete: false, isActive: true,
+        $and: [
+          { $or: [{ startsAt: null }, { startsAt: { $lte: now } }] },
+          { $or: [{ endsAt: null }, { endsAt: { $gte: now } }] },
+        ],
+      }),
+      this.r.campaignModel.find({ isDelete: false, status: 'active', startDate: { $lte: now }, endDate: { $gte: now } }).select('_id').lean(),
+      this.r.orderModel.aggregate([
+        { $match: { isDelete: false, createdAt: { $gte: from, $lte: to }, isFreeClaim: { $ne: true } } },
+        { $unwind: '$sellerOrders' },
+        { $match: { 'sellerOrders.storeId': storeId, 'sellerOrders.status': { $ne: 'cancelled' } } },
+        {
+          $addFields: {
+            promoDiscount: {
+              $sum: {
+                $map: {
+                  input: { $ifNull: ['$sellerOrders.items', []] },
+                  as: 'i',
+                  in: { $add: [{ $ifNull: ['$$i.couponDiscountUSD', 0] }, { $ifNull: ['$$i.campaignDiscountUSD', 0] }, { $ifNull: ['$$i.autoDiscountUSD', 0] }] },
+                },
+              },
+            },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            ordersWithPromotion: { $sum: { $cond: [{ $gt: ['$promoDiscount', 0] }, 1, 0] } },
+            discountGiven: { $sum: '$promoDiscount' },
+            promotedRevenue: { $sum: { $cond: [{ $gt: ['$promoDiscount', 0] }, '$sellerOrders.subtotal', 0] } },
+          },
+        },
+      ]),
+    ]);
+
+    // A platform sale counts for this store once at least one of its products is ticked into it (strict opt-in).
+    let platformSales = 0;
+    if (liveCampaigns.length) {
+      const ids = liveCampaigns.map((c: any) => String(c._id));
+      const used: string[] = await this.r.productModel.distinct('campaignIds', { storeId, isDelete: false, campaignIds: { $in: ids } });
+      platformSales = new Set(used.filter((id) => ids.includes(String(id)))).size;
+    }
+
+    const o = (orderRows as any[])[0] ?? {};
+    const round2 = (n: number) => Math.round((n ?? 0) * 100) / 100;
+    return {
+      success: true,
+      data: {
+        currency: store.baseCurrency ?? 'USD',
+        rangeDays: 30,
+        from, to,
+        activePromotions: { total: coupons + discounts + platformSales, coupons, discounts, platformSales },
+        ordersWithPromotion: (o.ordersWithPromotion ?? 0) as number,
+        discountGiven: round2(o.discountGiven),
+        promotedRevenue: round2(o.promotedRevenue),
+      },
+    };
+  }
+
+  /** Per coupon / automatic discount / platform sale results for one store (last 7/30/90 PKT days). Read-only. */
+  async getPromotionStats(sellerId: string, storeId: string, range: string) {
+    if (!['7d', '30d', '90d'].includes(range)) throw new BadRequestException('range must be 7d, 30d or 90d');
+    const store = await this.verifyStoreOwnership(storeId, sellerId);
+    const { from, to } = resolveDateRange({ range }, { pkt: true });
+    // Orders placed before couponId existed: match through the coupon code of THIS store.
+    const coupons = await this.r.couponModel.find({ storeId, isDelete: false }).select('_id code').lean();
+    const byCode: Record<string, string> = {};
+    for (const c of coupons as any[]) if (c.code) byCode[String(c.code)] = String(c._id);
+    const rows = await promotionStats(this.r.orderModel as any, storeId, from, to, byCode);
+    return {
+      success: true,
+      data: { currency: store.baseCurrency ?? 'USD', range, from, to, items: rows },
+    };
   }
 
   // ─── Platform-wide sale campaigns (admin-created, seller opt-in) ────────

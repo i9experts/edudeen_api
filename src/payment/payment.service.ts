@@ -2101,6 +2101,7 @@ export class PaymentService {
             subscriberDiscountUSD: convFrom(i.subscriberDiscountUSD ?? 0, storeCurrency),
             couponDiscountUSD: convFrom(i.couponDiscountUSD ?? 0, storeCurrency),
             giftCardDiscountUSD: convFrom(i.giftCardDiscountUSD ?? 0, storeCurrency),
+            couponId: i.couponId ?? null,
             campaignId: i.campaignId ?? null,
             campaignDiscountUSD: convFrom(i.campaignDiscountUSD ?? 0, storeCurrency),
             campaignSponsorType: i.campaignSponsorType ?? null,
