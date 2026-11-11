@@ -764,6 +764,7 @@ export class OrdersService {
         trackingEvents: so.trackingEvents ?? [],
         shippedAt: so.shippedAt ?? null,
         deliveredAt: so.deliveredAt ?? null,
+        reviewRequestedAt: so.reviewRequestedAt ?? null,
         items: (so.items ?? []).map((it: any) => ({
           productId: it.productId,
           variantId: it.variantId ?? null,

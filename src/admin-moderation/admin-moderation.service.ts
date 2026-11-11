@@ -1,5 +1,7 @@
 /* eslint-disable prettier/prettier */
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NOTIFICATION_TYPES } from '../notifications/notification.types';
 import { recalcProductRating, recalcStoreRating } from '../rating/rating-aggregate.util';
 import { isValidObjectId } from 'mongoose';
 import { DatabaseService } from '../database/databaseservice';
@@ -23,6 +25,7 @@ export class AdminModerationService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly activityLogService: ActivityLogService,
+    @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
   private get r() {
@@ -88,7 +91,7 @@ export class AdminModerationService {
       this.r.productModel.find({ _id: { $in: listingIds } }, { name: 1, sellerId: 1 }),
       this.r.sellerModel.find({ _id: { $in: sellerReportTargetIds } }, { name: 1 }),
       reviewIds.length
-        ? this.r.ratingModel.find({ _id: { $in: reviewIds } }, { rating: 1, comments: { $slice: 1 }, isDelete: 1 }).lean<any[]>()
+        ? this.r.ratingModel.find({ _id: { $in: reviewIds } }, { rating: 1, comments: { $slice: 1 }, isDelete: 1, orderId: 1 }).lean<any[]>()
         : Promise.resolve([] as any[]),
     ]);
     const reviewById = new Map(reviews.map((rv) => [String(rv._id), rv]));
@@ -115,8 +118,35 @@ export class AdminModerationService {
       const text: string = review.comments?.[0]?.text ?? '';
       const stars = review.rating ? `${review.rating}★ ` : '';
       const snippet = text ? `"${text.length > 80 ? `${text.slice(0, 80)}…` : text}"` : '(no comment)';
-      return { ...r, itemLabel: `${stars}review ${snippet}${review.isDelete ? ' — already removed' : ''}`, sellerName: null };
+      return {
+        ...r,
+        itemLabel: `${stars}review ${snippet}${review.isDelete ? ' — already removed' : ''}`,
+        sellerName: null,
+        orderId: review.orderId ?? null,
+      };
     });
+  }
+
+  /** A seller's report of a review: mirror the decision on the review (for the seller's inbox) and tell the seller. */
+  private async syncSellerReviewReport(report: any, decision: 'accepted' | 'rejected', note: string | null) {
+    if (report.targetType !== 'review' || report.reporterRole !== 'seller') return;
+    try {
+      await this.r.ratingModel.updateOne(
+        { _id: report.targetId, 'sellerReport.reportId': String(report._id) },
+        { $set: { 'sellerReport.status': decision, 'sellerReport.decidedAt': new Date(), 'sellerReport.adminNote': note } },
+      );
+      await this.notifications?.notify({
+        recipientId: String(report.reporterId), recipientRole: 'seller',
+        type: NOTIFICATION_TYPES.REVIEW_REPORT_DECIDED,
+        title: decision === 'accepted' ? 'Review report accepted' : 'Review report not accepted',
+        body: decision === 'accepted'
+          ? 'Edudeen removed the review you reported.'
+          : `The review you reported stays public.${note ? ` Note: ${note.slice(0, 160)}` : ''}`,
+        data: { link: '/store/reviews' },
+      } as any);
+    } catch (err) {
+      this.logger.warn(`Seller report sync failed for ${report._id}: ${(err as Error)?.message}`);
+    }
   }
 
   async getQueue(query: ModerationQueryDto) {
@@ -178,20 +208,23 @@ export class AdminModerationService {
     return { success: true, message: 'Report marked as reviewed' };
   }
 
-  async approve(id: string, meta: AuditMeta) {
+  async approve(id: string, meta: AuditMeta, note?: string) {
+    const clean = note ? String(note).trim().slice(0, 300) : null;
     const report = await this.claimReport(
       id,
-      { status: 'resolved', resolution: 'approved', resolvedAt: new Date(), reviewedBy: meta.adminId },
+      { status: 'resolved', resolution: 'approved', resolvedAt: new Date(), reviewedBy: meta.adminId, ...(clean ? { adminNotes: clean } : {}) },
       ['pending', 'reviewed'],
     );
-    this.log('report_approved', `Report ${id} (${report.targetType}) approved — no action taken on target`, meta, id);
+    await this.syncSellerReviewReport(report, 'rejected', clean);
+    this.log('report_approved', `Report ${id} (${report.targetType}) approved — no action taken on target${clean ? ` · note: ${clean}` : ''}`, meta, id);
     return { success: true, message: 'Report approved' };
   }
 
-  async remove(id: string, meta: AuditMeta) {
+  async remove(id: string, meta: AuditMeta, note?: string) {
+    const clean = note ? String(note).trim().slice(0, 300) : null;
     const report = await this.claimReport(
       id,
-      { status: 'resolved', resolution: 'removed', resolvedAt: new Date(), reviewedBy: meta.adminId },
+      { status: 'resolved', resolution: 'removed', resolvedAt: new Date(), reviewedBy: meta.adminId, ...(clean ? { adminNotes: clean } : {}) },
       ['pending', 'reviewed'],
     );
 
@@ -219,7 +252,8 @@ export class AdminModerationService {
       throw err;
     }
 
-    this.log('report_removed', `Report ${id} (${report.targetType}) actioned — target removed/suspended`, meta, id);
+    await this.syncSellerReviewReport(report, 'accepted', clean);
+    this.log('report_removed', `Report ${id} (${report.targetType}) actioned — target removed/suspended${clean ? ` · note: ${clean}` : ''}`, meta, id);
     return { success: true, message: 'Report actioned — target removed/suspended' };
   }
 }

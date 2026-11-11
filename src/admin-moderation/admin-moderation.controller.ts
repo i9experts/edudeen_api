@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Controller, Get, Param, Patch, Query, Req, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Query, Req, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -37,12 +37,12 @@ export class AdminModerationController {
   }
 
   @Patch(':id/approve')
-  approve(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
-    return this.adminModerationService.approve(id, this.meta(req));
+  approve(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() body: { note?: string }) {
+    return this.adminModerationService.approve(id, this.meta(req), body?.note);
   }
 
   @Patch(':id/remove')
-  remove(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
-    return this.adminModerationService.remove(id, this.meta(req));
+  remove(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() body: { note?: string }) {
+    return this.adminModerationService.remove(id, this.meta(req), body?.note);
   }
 }

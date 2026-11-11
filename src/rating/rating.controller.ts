@@ -21,11 +21,17 @@ import { RatingService } from './rating.service';
 import { AddReviewDto } from './dto/add-review.dto';
 import { EditReviewDto } from './dto/edit-review.dto';
 import { SellerReplyDto } from './dto/seller-reply.dto';
+import { RatingSellerService } from './rating-seller.service';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
+import { Throttle } from '@nestjs/throttler';
 
 @Controller('api/rating')
 @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
 export class RatingController {
-  constructor(private readonly ratingService: RatingService) {}
+  constructor(
+    private readonly ratingService: RatingService,
+    private readonly sellerTools: RatingSellerService,
+  ) {}
 
   // ═══════════════════════════════════════════════════════════════════════════
   // BUYER — write their own review
@@ -131,6 +137,51 @@ export class RatingController {
   ) {
     const { userId: sellerId, role } = req.user;
     return this.ratingService.getStoreReviews(sellerId, role, storeId, query);
+  }
+
+  // ── reply templates, review requests, insights, reports (seller) ──
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller', 'admin')
+  @Get('reply-templates/:storeId')
+  getTemplates(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string) {
+    return this.sellerTools.getTemplates(req.user.userId, req.user.role, storeId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller', 'admin')
+  @Put('reply-templates/:storeId')
+  saveTemplates(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Body() body: any) {
+    return this.sellerTools.saveTemplates(req.user.userId, req.user.role, storeId, body?.templates);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller', 'admin')
+  @Get('review-requests/:storeId')
+  listRequestable(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string) {
+    return this.sellerTools.listRequestable(req.user.userId, req.user.role, storeId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Throttle({ default: { limit: 40, ttl: 60_000 } })
+  @Post('review-request/:orderId')
+  requestReview(@Req() req: any, @Param('orderId', ParseObjectIdPipe) orderId: string) {
+    return this.sellerTools.requestReview(req.user.userId, orderId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller', 'admin')
+  @Get('store-insights/:storeId')
+  insights(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Query('range') range: string) {
+    return this.sellerTools.insights(req.user.userId, req.user.role, storeId, range);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post(':reviewId/report')
+  reportReview(@Req() req: any, @Param('reviewId', ParseObjectIdPipe) reviewId: string, @Body() body: any) {
+    return this.sellerTools.reportReview(req.user.userId, reviewId, { reasonCode: body?.reasonCode, text: body?.text });
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

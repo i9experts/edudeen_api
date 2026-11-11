@@ -383,6 +383,10 @@ export class SellerOrder {
   @Prop({ type: Date, default: null })
   deliveredAt: Date | null;
 
+  // Set once (atomically) when the seller asks the buyer for a review of this package.
+  @Prop({ type: Date, default: null })
+  reviewRequestedAt: Date | null;
+
   @Prop({ type: Date, default: null })
   cancelledAt: Date | null;
 

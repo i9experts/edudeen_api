@@ -17,6 +17,7 @@ import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 import { clampInt } from 'src/common/query-safety.util';
 import { recalcProductRating, recalcStoreRating } from './rating-aggregate.util';
 import { checkVerifiedPurchase } from './verified-purchase.util';
+import { canEditReply } from './review-request.util';
 const DELIVERED_ITEM_STATUSES = ['delivered', 'completed'];
 
 @Injectable()
@@ -589,20 +590,59 @@ export class RatingService {
       filter.rating = parseInt(query.rating);
     if (query.productId && query.productId !== 'all')
       filter.productId = query.productId;
-    // ?status=replied|unreplied|flagged — the dashboard's reply/flag tabs.
+    // ?status=replied|unreplied|flagged|reported — the dashboard's reply/report chips.
+    const reportedClause = { $or: [{ isFlagged: true }, { 'sellerReport.status': { $in: ['pending', 'rejected'] } }] };
+    // `scope` = store + product + keyword; chip counts are computed inside it so they always match the list.
+    const scope: any = { storeId, isDelete: false };
+    if (filter.productId) scope.productId = filter.productId;
+    const q = typeof query.q === 'string' ? query.q.trim().slice(0, 60) : '';
+    if (q) scope['comments.text'] = { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+    Object.assign(filter, scope);
     if (query.status === 'replied') filter.sellerReply = { $ne: null };
     else if (query.status === 'unreplied') filter.sellerReply = null;
     else if (query.status === 'flagged') filter.isFlagged = true;
+    else if (query.status === 'reported') Object.assign(filter, reportedClause);
 
-    const totalReviews = await ratingModel.countDocuments(filter);
+    const sortKey: Record<string, any> = {
+      oldest: { createdAt: 1, _id: 1 },
+      lowest: { rating: 1, createdAt: -1 },
+      highest: { rating: -1, createdAt: -1 },
+    };
+    const sort = sortKey[String(query.sort)] ?? { createdAt: -1, _id: -1 };
+
+    const [totalReviews, countAgg] = await Promise.all([
+      ratingModel.countDocuments(filter),
+      ratingModel.aggregate([
+        { $match: scope },
+        { $group: {
+          _id: null,
+          all: { $sum: 1 },
+          replied: { $sum: { $cond: [{ $ne: ['$sellerReply', null] }, 1, 0] } },
+          reported: { $sum: { $cond: [{ $or: [{ $eq: ['$isFlagged', true] }, { $in: ['$sellerReport.status', ['pending', 'rejected']] }] }, 1, 0] } },
+          r5: { $sum: { $cond: [{ $eq: ['$rating', 5] }, 1, 0] } },
+          r4: { $sum: { $cond: [{ $eq: ['$rating', 4] }, 1, 0] } },
+          r3: { $sum: { $cond: [{ $eq: ['$rating', 3] }, 1, 0] } },
+          r2: { $sum: { $cond: [{ $eq: ['$rating', 2] }, 1, 0] } },
+          r1: { $sum: { $cond: [{ $eq: ['$rating', 1] }, 1, 0] } },
+        } },
+      ]),
+    ]);
     const totalPages = Math.ceil(totalReviews / limit);
+    const C = countAgg[0] ?? { all: 0, replied: 0, reported: 0, r1: 0, r2: 0, r3: 0, r4: 0, r5: 0 };
+    const counts = {
+      all: C.all, replied: C.replied, needsReply: C.all - C.replied, reported: C.reported,
+      byRating: { '5': C.r5, '4': C.r4, '3': C.r3, '2': C.r2, '1': C.r1 },
+    };
 
     const reviews = await ratingModel
       .find(filter)
-      .sort({ createdAt: -1 })
+      .sort(sort)
       .skip(skip)
       .limit(limit)
       .lean();
+    const prodIds = [...new Set(reviews.map((x: any) => String(x.productId)))].filter(id => /^[a-f\d]{24}$/i.test(id));
+    const prodRows: any[] = prodIds.length ? await this.r.productModel.find({ _id: { $in: prodIds } }).select('name').lean() : [];
+    const prodName = new Map(prodRows.map(p => [String(p._id), p.name as string]));
 
     // stats
     const allReviews = await ratingModel
@@ -626,8 +666,14 @@ export class RatingService {
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     let reviewsThisMonth = 0;
+    let reviewsLastMonth = 0;
+    let reportedCount = 0;
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 
     for (const r of allReviews) {
+      if (r.isFlagged || ['pending', 'rejected'].includes((r as any).sellerReport?.status)) reportedCount++;
+      const created = new Date(r.createdAt);
+      if (created >= lastMonthStart && created < monthStart) reviewsLastMonth++;
       if (r.rating) {
         ratingBreakdown[String(r.rating)] =
           (ratingBreakdown[String(r.rating)] || 0) + 1;
@@ -671,6 +717,23 @@ export class RatingService {
           : '0%';
     }
 
+    const [completedOrders, productAgg] = await Promise.all([
+      this.r.orderModel.countDocuments({
+        isDelete: { $ne: true },
+        sellerOrders: { $elemMatch: { storeId, status: { $in: ['delivered', 'completed'] } } },
+      }),
+      ratingModel.aggregate([
+        { $match: { storeId, isDelete: false } },
+        { $group: { _id: '$productId', n: { $sum: 1 } } },
+        { $sort: { n: -1 } }, { $limit: 50 },
+      ]),
+    ]);
+    const filterIds = productAgg.map((p: any) => String(p._id)).filter((id: string) => /^[a-f\d]{24}$/i.test(id));
+    const filterRows: any[] = filterIds.length ? await this.r.productModel.find({ _id: { $in: filterIds } }).select('name').lean() : [];
+    const productFilter = filterRows
+      .map(p => ({ productId: String(p._id), title: p.name as string, count: productAgg.find((a: any) => String(a._id) === String(p._id))?.n ?? 0 }))
+      .sort((a, b) => b.count - a.count);
+
     const list = await Promise.all(
       reviews.map(async (r: any) => {
         const user = await userModel
@@ -678,6 +741,12 @@ export class RatingService {
           .select('name email')
           .lean();
         return {
+          productTitle: prodName.get(String(r.productId)) ?? null,
+          orderId: r.orderId ?? null,
+          sellerReport: r.sellerReport
+            ? { status: r.sellerReport.status, reasonCode: r.sellerReport.reasonCode, reportedAt: r.sellerReport.reportedAt, adminNote: r.sellerReport.adminNote ?? null }
+            : null,
+          canEditReply: !!r.sellerReply && (role === 'admin' || canEditReply(r.sellerReply.createdAt)),
           reviewId: r._id,
           customer: {
             name: r.isAnonymous
@@ -707,12 +776,17 @@ export class RatingService {
           totalReviews: allReviews.length,
           ratingBreakdown: breakdownPercent,
           reviewsThisMonth,
+          reviewsLastMonth,
+          reportedReviews: reportedCount,
+          completedOrders,
           flaggedReviews: flaggedCount,
           fiveStarRate: `${fiveStarRate}%`,
           responseRate: `${responseRate}%`,
           avgResponseTime: `${avgResponseHrs} hrs`,
         },
         pagination: { page, limit, totalPages, total: totalReviews },
+        counts,
+        productFilter,
         reviews: list,
       },
     };
@@ -771,6 +845,8 @@ export class RatingService {
 
     if (!review.sellerReply)
       throw new BadRequestException('No reply exists. Use reply first.');
+    if (role !== 'admin' && !canEditReply(review.sellerReply.createdAt))
+      throw new ForbiddenException('Replies can only be edited within 24 hours of posting');
 
     await ratingModel.findByIdAndUpdate(reviewId, {
       'sellerReply.text': dto.text,

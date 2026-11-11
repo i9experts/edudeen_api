@@ -65,6 +65,18 @@ export class Rating {
   @Prop({ type: String, default: null })
   flaggedByRole!: string | null;
 
+  /** Seller's report of this review (one per review). accepted = review removed by admin. */
+  @Prop({ type: Object, default: null })
+  sellerReport!: {
+    reportId: string;
+    reasonCode: string;
+    text: string | null;
+    status: 'pending' | 'accepted' | 'rejected';
+    reportedAt: Date;
+    decidedAt?: Date | null;
+    adminNote?: string | null;
+  } | null;
+
   @Prop({ default: false })
   isVerifiedPurchase!: boolean;
 

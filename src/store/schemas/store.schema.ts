@@ -338,6 +338,10 @@ export class Store {
 
   // Seller-stated return policy shown on the product page (advisory: the return/refund
   // request APIs do not enforce windowDays; each request is reviewed by the seller).
+  // Saved review-reply snippets (max 5), edited from the seller Reviews page.
+  @Prop({ type: [Object], default: [] })
+  reviewReplyTemplates: Array<{ id: string; title: string; text: string }>;
+
   @Prop({ type: Object, default: null })
   // note = physical items; digitalNote = digital downloads (text only, the real digital rule is "refundable only before download").
   returnPolicy: { returnsAccepted: boolean; windowDays: number; note?: string | null; digitalNote?: string | null } | null;

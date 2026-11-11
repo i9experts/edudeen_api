@@ -57,6 +57,8 @@ export const NOTIFICATION_TYPES = {
   REFUND_REJECTED: 'refund_rejected',
   REVIEW_RECEIVED: 'review_received',
   REVIEW_REPLIED: 'review_replied',
+  REVIEW_REQUESTED: 'review_requested',
+  REVIEW_REPORT_DECIDED: 'review_report_decided',
   OUT_OF_STOCK: 'out_of_stock',
   // Not in NOTIFICATION_CATEGORY on purpose: these are transactional, so muting "promotions" must not hide them.
   PRODUCT_SCHEDULED: 'product_scheduled',

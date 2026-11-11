@@ -16,7 +16,7 @@ export const AI_FEATURE_DEFS = {
   image_check:       { label: 'Photo check + alt text',    group: 'studio',   credits: 3 },
   // --- seller helpers (charged to the store wallet) ---
   translate_listing: { label: 'Urdu/English translation',  group: 'seller',   credits: 2 },
-  review_reply:      { label: 'Review reply drafts',       group: 'seller',   credits: 2 },
+  review_reply:      { label: 'Review reply drafts',       group: 'seller',   credits: 1 },
   weekly_insights:   { label: 'Weekly insights digest',    group: 'seller',   credits: 5 },
   help_bot:          { label: 'Help bot (chat widget + seller help)',           group: 'seller',   credits: 0 },
   product_cover:     { label: 'Product cover text',        group: 'seller',   credits: 2 },
