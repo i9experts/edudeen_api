@@ -123,8 +123,19 @@ export class RealtimeService {
     this.route(topics, [...rooms]);
   }
 
+  private listeners = new Set<(topics: string[]) => void>();
+
+  /** In-process hook for caches that must drop entries when data changes (same topics the sockets get). Returns an unsubscribe. */
+  onTopics(fn: (topics: string[]) => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
   /** Sends public topics to everyone and private ones to `rooms`. */
   route(topics: string[], rooms: string[]) {
+    this.listeners.forEach((fn) => {
+      try { fn(topics); } catch { /* a listener must never affect a request */ }
+    });
     const pub = topics.filter((t) => PUBLIC_TOPICS.has(t));
     const priv = topics.filter((t) => !PUBLIC_TOPICS.has(t));
     if (pub.length) this.queue('*', pub);

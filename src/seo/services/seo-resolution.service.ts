@@ -24,6 +24,8 @@ export interface ResolvedSeoMeta {
 
 const PLATFORM_ORIGIN = 'https://edudeen.com';
 const CACHE_TTL_SECONDS = 600; // 10 min — same order of magnitude as analytics-cache.util's convention
+const META_DESCRIPTION_MAX = 155;
+const DEFAULT_DESCRIPTION = 'Edudeen is an education marketplace: worksheets, books, digital downloads and courses for home and classroom from verified sellers.';
 
 /**
  * The meta-delivery engine (see architecture plan Refinement #1). Given
@@ -121,27 +123,29 @@ export class SeoResolutionService {
     const storeSeo = (store as any)?.seo ?? {};
     const storeName = (store as any)?.name ?? '';
 
-    const title = seo.metaTitle
-      ?? categorySeo.metaTitle
-      ?? storeSeo.metaTitle
-      ?? renderTemplate(template?.titleTemplate, { productName: product.name, storeName, categoryName: (category as any)?.name })
-      ?? `${product.name} | ${storeName || 'Edudeen'}`;
+    // Chain: seller meta -> category/store meta -> admin template -> product title / first 155 chars of the description -> Edudeen default.
+    // firstText so a blank field never blocks the fallbacks.
+    const title = firstText(
+      seo.metaTitle, categorySeo.metaTitle, storeSeo.metaTitle,
+      renderTemplate(template?.titleTemplate, { productName: product.name, storeName, categoryName: (category as any)?.name }),
+      product.name ? `${product.name} | ${storeName || 'Edudeen'}` : '',
+    ) || 'Edudeen - Educational resources, books & courses';
 
-    const description = seo.metaDescription
-      ?? categorySeo.metaDescription
-      ?? storeSeo.metaDescription
-      ?? renderTemplate(template?.descriptionTemplate, { productName: product.name, storeName })
-      ?? truncate(plainText(product.description), 160);
+    const description = firstText(
+      seo.metaDescription, categorySeo.metaDescription, storeSeo.metaDescription,
+      renderTemplate(template?.descriptionTemplate, { productName: product.name, storeName }),
+      truncate(plainText(product.description), META_DESCRIPTION_MAX),
+    ) || DEFAULT_DESCRIPTION;
 
-    const ogImage = seo.ogImage ?? product.images?.[0] ?? storeSeo.ogImage ?? null;
-    const canonicalUrl = seo.canonicalUrlOverride ?? `${PLATFORM_ORIGIN}/product/${product.slug}`;
+    const ogImage = firstImage(seo.ogImage, ...(product.images ?? []).slice(0, 1), storeSeo.ogImage, (store as any)?.logo);
+    const canonicalUrl = firstText(seo.canonicalUrlOverride) || `${PLATFORM_ORIGIN}/product/${product.slug}`;
 
     const jsonLd = [
       this.schemaGenerator.buildProductSchema({
         productId: product._id.toString(),
         name: product.name,
         description: plainText(product.description),
-        images: product.images ?? [],
+        images: (product.images ?? []).filter((i: unknown) => typeof i === 'string' && i.trim()),
         slug: product.slug,
         price: defaultVariant?.price ?? null,
         availability: defaultVariant?.stock > 0 || product.type === 'digital' ? 'InStock' : 'OutOfStock',
@@ -166,12 +170,22 @@ export class SeoResolutionService {
       description,
       canonicalUrl,
       noindex: !!seo.noindex,
-      ogTitle: seo.ogTitle ?? title,
-      ogDescription: seo.ogDescription ?? description,
+      ogTitle: firstText(seo.ogTitle) || title,
+      ogDescription: firstText(seo.ogDescription) || description,
       ogImage,
       twitterCard: seo.twitterCard ?? 'summary_large_image',
       jsonLd,
     };
+  }
+
+  /** Drops every cached meta entry (all products / stores / categories). Called when catalog or store data changes. */
+  async invalidateAll(): Promise<void> {
+    try {
+      const keys = await this.redis.scanKeys('seo:meta:*', 5000);
+      await Promise.all(keys.map((k) => this.redis.del(k)));
+    } catch {
+      // cache housekeeping must never break the write that triggered it
+    }
   }
 
   private async resolveCategory(idOrSlug: string): Promise<ResolvedSeoMeta> {
@@ -223,13 +237,18 @@ export class SeoResolutionService {
     const template = settings.metaTemplates?.find((t: any) => t.key === 'store');
     const seo = (store).seo ?? {};
 
-    const title = seo.metaTitle
-      ?? renderTemplate(template?.titleTemplate, { storeName: store.name })
-      ?? `${store.name} | Edudeen`;
-    const description = seo.metaDescription
-      ?? renderTemplate(template?.descriptionTemplate, { storeName: store.name })
-      ?? truncate(store.description ?? `Shop ${store.name} on Edudeen.`, 160);
-    const canonicalUrl = seo.canonicalUrlOverride ?? `${PLATFORM_ORIGIN}/shop/${store.slug}`;
+    const title = firstText(
+      seo.metaTitle,
+      renderTemplate(template?.titleTemplate, { storeName: store.name }),
+      store.name ? `${store.name} | Edudeen` : '',
+    ) || 'Edudeen - Educational resources, books & courses';
+    const description = firstText(
+      seo.metaDescription,
+      renderTemplate(template?.descriptionTemplate, { storeName: store.name }),
+      truncate(plainText(store.description), META_DESCRIPTION_MAX),
+      store.name ? `Shop ${store.name} on Edudeen.` : '',
+    ) || DEFAULT_DESCRIPTION;
+    const canonicalUrl = firstText(seo.canonicalUrlOverride) || `${PLATFORM_ORIGIN}/shop/${store.slug}`;
 
     return {
       entityType: 'store',
@@ -239,9 +258,9 @@ export class SeoResolutionService {
       description,
       canonicalUrl,
       noindex: !!seo.noindex,
-      ogTitle: seo.ogTitle ?? title,
-      ogDescription: seo.ogDescription ?? description,
-      ogImage: seo.ogImage ?? store.logo ?? null,
+      ogTitle: firstText(seo.ogTitle) || title,
+      ogDescription: firstText(seo.ogDescription) || description,
+      ogImage: firstImage(seo.ogImage, store.logo),
       twitterCard: seo.twitterCard ?? 'summary_large_image',
       jsonLd: [this.schemaGenerator.buildStoreSchema({
         storeId: store._id.toString(),
@@ -267,6 +286,25 @@ export class SeoResolutionService {
 function renderTemplate(template: string | undefined | null, tokens: Record<string, string | undefined>): string | null {
   if (!template) return null;
   return template.replace(/\{\{(\w+)\}\}/g, (_match, key) => tokens[key] ?? '');
+}
+
+/** First value that is real text. `??` keeps '' / '   ', so a blank seller meta field used to win over every fallback. */
+export function firstText(...values: Array<unknown>): string {
+  for (const v of values) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
+}
+
+/** First usable absolute image URL (http/https); a site-relative path becomes absolute. Blank / junk is skipped. */
+export function firstImage(...values: Array<unknown>): string | null {
+  for (const v of values) {
+    if (typeof v !== 'string') continue;
+    const s = v.trim();
+    if (/^https?:\/\//i.test(s)) return s;
+    if (s.startsWith('/') && !s.startsWith('//')) return `${PLATFORM_ORIGIN}${s}`;
+  }
+  return null;
 }
 
 /** Seller descriptions may hold HTML/entities: meta and JSON-LD need one line of plain text. */

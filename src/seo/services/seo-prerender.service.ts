@@ -18,6 +18,9 @@ export interface PrerenderPage {
   canonical: string;
   ogImage: string | null;
   ogType: string;
+  /** Optional separate Open Graph / Twitter text; falls back to title / description. */
+  ogTitle?: string;
+  ogDescription?: string;
   noindex: boolean;
   jsonLd: Record<string, any>[];
   /** HTML placed inside <main> (already escaped). */
@@ -273,7 +276,7 @@ ${card.ratings > 0 ? `<p>Rated ${esc(card.rating.toFixed(1))} out of 5 by ${esc(
 ${store ? `<p>Sold by <a href="${ORIGIN}/shop/${esc(store.slug)}">${esc(store.name)}</a></p>` : ''}
 <section><h2>About this resource</h2><p>${esc(plain(p.description))}</p></section>
 ${this.listHtml('More like this', related)}`;
-    return { title: meta.title, description: meta.description, canonical: meta.canonicalUrl, ogImage: meta.ogImage, ogType: 'product', noindex: meta.noindex, jsonLd: meta.jsonLd, body };
+    return { title: meta.title, description: meta.description, ogTitle: meta.ogTitle, ogDescription: meta.ogDescription, canonical: meta.canonicalUrl, ogImage: meta.ogImage ?? DEFAULT_OG_IMAGE, ogType: 'product', noindex: meta.noindex, jsonLd: meta.jsonLd, body };
   }
 
   async category(meta: ResolvedSeoMeta): Promise<PrerenderPage> {
@@ -367,7 +370,7 @@ ${this.listHtml(`${name} resources`, cards)}`;
 <h1>${esc(s.name)}</h1>${s.logo ? `<img src="${esc(s.logo)}" alt="${esc(s.name)} logo" width="120" height="120">` : ''}
 <p>${esc(plain(s.description) || meta.description)}</p>
 ${this.listHtml(`Products from ${s.name}`, cards)}`;
-    return { title: meta.title, description: meta.description, canonical: meta.canonicalUrl, ogImage: meta.ogImage ?? DEFAULT_OG_IMAGE, ogType: 'website', noindex: meta.noindex, jsonLd, body };
+    return { title: meta.title, description: meta.description, ogTitle: meta.ogTitle, ogDescription: meta.ogDescription, canonical: meta.canonicalUrl, ogImage: meta.ogImage ?? DEFAULT_OG_IMAGE, ogType: 'website', noindex: meta.noindex, jsonLd, body };
   }
 
   // ── layout ──────────────────────────────────────────────────────────────────
@@ -387,13 +390,13 @@ ${this.listHtml(`Products from ${s.name}`, cards)}`;
 <link rel="canonical" href="${esc(p.canonical)}">
 <meta property="og:site_name" content="Edudeen">
 <meta property="og:type" content="${esc(p.ogType)}">
-<meta property="og:title" content="${esc(p.title)}">
-<meta property="og:description" content="${esc(p.description)}">
+<meta property="og:title" content="${esc(p.ogTitle || p.title)}">
+<meta property="og:description" content="${esc(p.ogDescription || p.description)}">
 <meta property="og:url" content="${esc(p.canonical)}">
 ${p.ogImage ? `<meta property="og:image" content="${esc(p.ogImage)}">` : ''}
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="${esc(p.title)}">
-<meta name="twitter:description" content="${esc(p.description)}">
+<meta name="twitter:title" content="${esc(p.ogTitle || p.title)}">
+<meta name="twitter:description" content="${esc(p.ogDescription || p.description)}">
 ${p.ogImage ? `<meta name="twitter:image" content="${esc(p.ogImage)}">` : ''}
 ${ld}
 </head>

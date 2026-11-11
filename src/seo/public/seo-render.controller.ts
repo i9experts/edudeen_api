@@ -1,5 +1,7 @@
 /* eslint-disable prettier/prettier */
-import { Controller, Get, Param, Res, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Param, Res, NotFoundException, BadRequestException, Optional, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { RealtimeService } from 'src/realtime/realtime.service';
+import { isRootStoreSlugCandidate } from '../services/root-slug.util';
 import { SkipThrottle } from '@nestjs/throttler';
 import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
@@ -38,15 +40,45 @@ export class SeoMetaController {
 const HTML_TTL_MS = 120_000;
 const HTML_MAX = 400;
 
+/** Topics whose writes can change a product / store / category page (see RealtimeService aliases). */
+const CONTENT_TOPICS = new Set(['catalog', 'products', 'store', 'categories', 'config']);
+const NEGATIVE_TTL_MS = 60_000;
+
 @SkipThrottle()
 @Controller('seo-render')
-export class SeoRenderHtmlController {
+export class SeoRenderHtmlController implements OnModuleInit, OnModuleDestroy {
   private readonly cache = new Map<string, { at: number; html: string }>();
+  /** root slugs that are not a store (bots probing random paths must not hit the DB every time) */
+  private readonly misses = new Map<string, number>();
+  private unsubscribe: (() => void) | null = null;
 
   constructor(
     private readonly resolution: SeoResolutionService,
     private readonly prerender: SeoPrerenderService,
+    @Optional() private readonly realtime?: RealtimeService,
   ) {}
+
+  onModuleInit() {
+    // Same signal the live screens get after a successful write: drop the in-memory HTML + Redis meta so link previews
+    // update at once instead of after the 2 / 10 minute TTL. Single-instance by design (each instance clears its own
+    // map; Redis meta is shared). With several API instances the HTML can lag by at most HTML_TTL_MS.
+    this.unsubscribe = this.realtime?.onTopics((topics) => {
+      if (topics.some((t) => CONTENT_TOPICS.has(t))) this.invalidateContent();
+    }) ?? null;
+  }
+
+  onModuleDestroy() {
+    this.unsubscribe?.();
+  }
+
+  /** Clears every cached product / store / category / root page (static pages and home keep their TTL unless config changed). */
+  invalidateContent() {
+    for (const key of [...this.cache.keys()]) {
+      if (!key.startsWith('page:')) this.cache.delete(key);
+    }
+    this.misses.clear();
+    void this.resolution.invalidateAll();
+  }
 
   private async cached(key: string, build: () => Promise<PrerenderPage>): Promise<string> {
     const hit = this.cache.get(key);
@@ -86,6 +118,33 @@ export class SeoRenderHtmlController {
       this.send(res, await this.cached(`browse:${cls.toLowerCase()}:${(subject ?? '').toLowerCase()}`, () => this.prerender.browse(cls, subject)));
     } catch (e) {
       if (e instanceof NotFoundException) return this.send(res, this.prerender.notFoundHtml(), 404);
+      throw e;
+    }
+  }
+
+  /**
+   * A store linked at the site root (`edudeen.com/<store-slug>`). Only a real, ACTIVE store answers 200 (canonical = its
+   * /shop/<slug> page); app routes, unknown slugs and inactive stores answer 404 so the edge falls through to the normal page.
+   */
+  @Get('root/:slug')
+  async rootStore(@Param('slug') slug: string, @Res() res: Response) {
+    const key = String(slug ?? '').toLowerCase();
+    const missedAt = this.misses.get(key);
+    if (!isRootStoreSlugCandidate(key) || (missedAt && Date.now() - missedAt < NEGATIVE_TTL_MS)) {
+      return this.send(res, this.prerender.notFoundHtml(), 404);
+    }
+    try {
+      const html = await this.cached(`root:${key}`, async () => {
+        const meta = await this.resolution.resolve('store', key);
+        return this.prerender.store(meta);
+      });
+      this.send(res, html);
+    } catch (e) {
+      if (e instanceof NotFoundException) {
+        if (this.misses.size >= HTML_MAX) this.misses.delete(this.misses.keys().next().value as string);
+        this.misses.set(key, Date.now());
+        return this.send(res, this.prerender.notFoundHtml(), 404);
+      }
       throw e;
     }
   }
