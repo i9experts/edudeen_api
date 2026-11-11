@@ -39,6 +39,7 @@ export class Message {
     price: number;
     image: string;
     slug: string;
+    currency?: string | null;
   } | null;
 
   // Reply-to — snapshot of the parent message

@@ -23,6 +23,11 @@ export class Conversation {
   // Opened by the seller (students page) rather than the buyer; hidden from the buyer's inbox until a message exists.
   @Prop({ type: Boolean, default: false }) startedBySeller: boolean;
 
+  // "Latest context" of the single buyer+store thread: the product page / order the buyer last asked about (or
+  // the product last shared). Display only; null on every older document.
+  @Prop({ type: String, default: null }) contextProductId: string | null;
+  @Prop({ type: String, default: null }) contextOrderId: string | null;
+
   @Prop({ type: Number, default: 0 }) buyerUnread: number;
   @Prop({ type: Number, default: 0 }) sellerUnread: number;
 

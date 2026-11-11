@@ -67,6 +67,13 @@ export class MessagingController {
 
   // ── Parameterized routes ──────────────────────────────────────────────────
 
+  @UseGuards(RolesGuard)
+  @Roles('seller')
+  @Get('seller/conversations/:id/context')
+  sellerConversationContext(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
+    return this.messagingService.getSellerConversationContext(req.user.userId, id);
+  }
+
   @Get('conversations/:id')
   getConversation(@Req() req: any, @Param('id') id: string) {
     return this.messagingService.getConversationById(req.user.userId, req.user.role, id);

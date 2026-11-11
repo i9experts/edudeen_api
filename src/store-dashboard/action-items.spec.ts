@@ -26,7 +26,7 @@ describe('action items', () => {
       ordersToShip: 4, ordersOverdue: 1, returnsPending: 2, unreadMessages: 3,
       unansweredQuestions: 5, pendingReview: 6, rejected: 7, payoutMissing: 1,
     });
-    expect(m.conversationModel.countDocuments).toHaveBeenCalledWith({ storeId: 'store1', deletedBySeller: false, sellerUnread: { $gt: 0 } });
+    expect(m.conversationModel.countDocuments).toHaveBeenCalledWith({ storeId: 'store1', deletedBySeller: false, isArchived: { $ne: true }, sellerUnread: { $gt: 0 } });
     expect(m.questionModel.countDocuments).toHaveBeenCalledWith({ storeId: 'store1', answeredAt: null, hidden: false });
     expect(m.orderCalls[0]['sellerOrders.storeId']).toBe('store1');
     expect(m.orderModel.aggregate.mock.calls[0][0][0].$match['sellerOrders.storeId']).toBe('store1');

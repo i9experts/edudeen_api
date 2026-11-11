@@ -172,7 +172,7 @@ export async function computeActionItems(
       { $match: { 'sellerOrders.items.returnStatus': 'requested' } },
       { $count: 'n' },
     ]),
-    conversationModel.countDocuments({ storeId, deletedBySeller: false, sellerUnread: { $gt: 0 } }),
+    conversationModel.countDocuments({ storeId, deletedBySeller: false, isArchived: { $ne: true }, sellerUnread: { $gt: 0 } }),
     questionModel.countDocuments({ storeId, answeredAt: null, hidden: false }),
     productModel.countDocuments({ ...productFilter, status: 'pending_review' }),
     productModel.countDocuments({ ...productFilter, status: 'rejected' }),

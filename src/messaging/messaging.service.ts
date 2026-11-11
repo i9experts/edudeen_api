@@ -93,6 +93,18 @@ export class MessagingService {
     });
     if (block) throw new ForbiddenException('Cannot start conversation — block is in place');
 
+    // Optional "latest context". A product/order that does not belong to this store/buyer is silently ignored
+    // (the chat still opens), so a stale link can never break starting a conversation.
+    const context: Record<string, string> = {};
+    if (dto.productId) {
+      const p = await this.db.repositories.productModel.exists({ _id: dto.productId, storeId, isDelete: false });
+      if (p) context.contextProductId = dto.productId;
+    }
+    if (dto.orderId) {
+      const o = await this.db.repositories.orderModel.exists({ _id: dto.orderId, userId: buyerId, 'sellerOrders.storeId': storeId });
+      if (o) context.contextOrderId = dto.orderId;
+    }
+
     const conv = await this.convModel.findOneAndUpdate(
       { buyerId, storeId },
       {
@@ -103,6 +115,7 @@ export class MessagingService {
           buyerUnread: 0,
           sellerUnread: 0,
         },
+        ...(Object.keys(context).length ? { $set: context } : {}),
       },
       { upsert: true, returnDocument: 'after' },
     );
@@ -161,6 +174,51 @@ export class MessagingService {
       await conv.save();
     }
     return { conversationId: String(conv._id), _id: String(conv._id) };
+  }
+
+  /**
+   * Seller-only, read-only "Buyer details" for one thread. Only this store's data about this buyer; never the
+   * buyer's e-mail, phone or address. Free claims and cancelled packages never count towards the order total.
+   */
+  async getSellerConversationContext(sellerId: string, conversationId: string) {
+    const conv: any = await this.getConversationOrThrow(conversationId);
+    const store: any = await this.db.repositories.storeModel.findById(conv.storeId).select('sellerId baseCurrency').lean();
+    if (!store || String(store.sellerId) !== sellerId || String(conv.sellerId) !== sellerId) throw new ForbiddenException('Access denied');
+    const storeId = String(conv.storeId);
+    const buyerId = String(conv.buyerId);
+    const R = this.db.repositories;
+
+    const [orders, buyer, product]: any[] = await Promise.all([
+      R.orderModel.find({ userId: buyerId, isDelete: { $ne: true }, 'sellerOrders.storeId': storeId })
+        .select('orderNumber createdAt isFreeClaim sellerOrders.storeId sellerOrders.status')
+        .sort({ createdAt: -1 }).limit(500).lean(),
+      R.userModel.findById(buyerId).select('createdAt').lean(),
+      conv.contextProductId
+        ? R.productModel.findOne({ _id: conv.contextProductId, storeId, isDelete: false }).select('name slug images status').lean()
+        : null,
+    ]);
+
+    const view = (o: any) => {
+      const so = (o.sellerOrders ?? []).find((s: any) => String(s.storeId) === storeId);
+      return { id: String(o._id), number: o.orderNumber, status: so?.status ?? 'pending', date: o.createdAt, isFree: !!o.isFreeClaim };
+    };
+    const rows = (orders ?? []).map(view);
+    const totalOrders = rows.filter((r: any) => !r.isFree && r.status !== 'cancelled').length;
+
+    let productOut: any = null;
+    if (product) {
+      const [v]: any[] = await R.productVariantModel.find({ productId: String(product._id), isDelete: false }).sort({ price: 1 }).limit(1).select('price').lean();
+      productOut = { id: String(product._id), title: product.name, slug: product.slug, image: product.images?.[0] ?? null, price: v?.price ?? 0, currency: store.baseCurrency ?? null, isActive: product.status === 'active' };
+    }
+    const ctxOrder = conv.contextOrderId ? rows.find((r: any) => r.id === String(conv.contextOrderId)) : null;
+
+    return {
+      product: productOut,
+      order: ctxOrder ? { id: ctxOrder.id, number: ctxOrder.number, status: ctxOrder.status, date: ctxOrder.date } : null,
+      recentOrders: rows.slice(0, 5).map((r: any) => ({ id: r.id, number: r.number, status: r.status, date: r.date, isFree: r.isFree })),
+      stats: { totalOrders, memberSince: buyer?.createdAt ?? null },
+      buyerId,
+    };
   }
 
   async getConversations(userId: string, role: string, query: any) {
@@ -363,9 +421,12 @@ export class MessagingService {
         .limit(1)
         .lean();
 
+      // Store currency so the card can show a real price (old snapshots have none -> shown without a symbol).
+      const shareStore: any = await this.db.repositories.storeModel.findById(product.storeId).select('baseCurrency').lean();
       productShareSnapshot = {
         productId: product._id.toString(),
         title: product.name,
+        currency: shareStore?.baseCurrency ?? null,
         price: variants[0]?.price ?? 0,
         image: product.images?.[0] || null,
         slug: product.slug,
@@ -405,6 +466,8 @@ export class MessagingService {
 
     const updatedConv = await this.convModel.findByIdAndUpdate(conversationId, {
       lastMessage: lastMessageSnapshot,
+      // Sharing a product makes it the thread's latest context.
+      ...(productShareSnapshot ? { contextProductId: productShareSnapshot.productId } : {}),
       $inc: unreadIncrement,
       // Restore soft-delete if sender had deleted
       ...(iAmBuyer ? { deletedByBuyer: false } : { deletedBySeller: false }),
