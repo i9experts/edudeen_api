@@ -342,6 +342,10 @@ export class Store {
   @Prop({ type: [Object], default: [] })
   reviewReplyTemplates: Array<{ id: string; title: string; text: string }>;
 
+  // Chat quick replies live in the `quick_replies` collection; this flag stops the 3 defaults coming back after a delete.
+  @Prop({ type: Boolean, default: false })
+  quickRepliesSeeded: boolean;
+
   @Prop({ type: Object, default: null })
   // note = physical items; digitalNote = digital downloads (text only, the real digital rule is "refundable only before download").
   returnPolicy: { returnsAccepted: boolean; windowDays: number; note?: string | null; digitalNote?: string | null } | null;

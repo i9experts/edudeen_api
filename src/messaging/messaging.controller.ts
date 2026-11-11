@@ -20,13 +20,48 @@ import { BlockDto } from './dto/block.dto';
 import { ReportDto } from './dto/report.dto';
 import { AdminUpdateMessagingReportDto } from './dto/admin-update-report.dto';
 import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
+import { QuickRepliesService } from './quick-replies.service';
+import { CreateQuickReplyDto, UpdateQuickReplyDto } from './dto/quick-reply.dto';
 
 @ApiTags('Messaging')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('api/messaging')
 export class MessagingController {
-  constructor(private readonly messagingService: MessagingService) { }
+  constructor(
+    private readonly messagingService: MessagingService,
+    private readonly quickReplies: QuickRepliesService,
+  ) { }
+
+  // ── Seller quick replies (own store only; ownership checked in the service) ──
+  @UseGuards(RolesGuard)
+  @Roles('seller')
+  @Get('seller/quick-replies')
+  listQuickReplies(@Req() req: any, @Query('storeId', ParseObjectIdPipe) storeId: string) {
+    return this.quickReplies.list(req.user.userId, storeId);
+  }
+
+  @UseGuards(RolesGuard)
+  @Roles('seller')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Post('seller/quick-replies')
+  createQuickReply(@Req() req: any, @Body() dto: CreateQuickReplyDto) {
+    return this.quickReplies.create(req.user.userId, dto);
+  }
+
+  @UseGuards(RolesGuard)
+  @Roles('seller')
+  @Patch('seller/quick-replies/:id')
+  updateQuickReply(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: UpdateQuickReplyDto) {
+    return this.quickReplies.update(req.user.userId, id, dto);
+  }
+
+  @UseGuards(RolesGuard)
+  @Roles('seller')
+  @Delete('seller/quick-replies/:id')
+  deleteQuickReply(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Query('storeId', ParseObjectIdPipe) storeId: string) {
+    return this.quickReplies.remove(req.user.userId, id, storeId);
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // CONVERSATIONS

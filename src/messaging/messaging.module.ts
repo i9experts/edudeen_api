@@ -9,9 +9,13 @@ import { ResponseStatsService } from './response-stats.service';
 import { AuthModule } from 'src/auth/auth.module';
 import { RedisModule } from 'src/redis/redis.module';
 import { UploadModule } from 'src/upload/upload.module';
+import { MongooseModule } from '@nestjs/mongoose';
+import { QuickReply, QuickReplySchema } from './schemas/quick-reply.schema';
+import { QuickRepliesService } from './quick-replies.service';
 
 @Module({
   imports: [
+    MongooseModule.forFeature([{ name: QuickReply.name, schema: QuickReplySchema }]),
     AuthModule,
     RedisModule,
     UploadModule,
@@ -25,7 +29,7 @@ import { UploadModule } from 'src/upload/upload.module';
     }),
   ],
   controllers: [MessagingController],
-  providers: [MessagingService, MessagingGateway, WsAuthService, ResponseStatsService],
+  providers: [MessagingService, MessagingGateway, WsAuthService, ResponseStatsService, QuickRepliesService],
   exports: [MessagingService],
 })
 export class MessagingModule {}
