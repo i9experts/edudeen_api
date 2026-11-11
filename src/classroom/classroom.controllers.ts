@@ -259,6 +259,13 @@ export class CoursesController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
+  @Get('seller/:storeId/roster/student/:userId')
+  rosterStudent(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Param('userId', ParseObjectIdPipe) userId: string) {
+    return this.courses.rosterStudentDetail(storeId, req.user.userId, userId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('seller/:storeId/roster/export')
   async rosterExport(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Query() query: any, @Res() res: Response) {

@@ -12,8 +12,7 @@ import { verifyStoreOwnershipStrict } from '../common/store-ownership.util';
 import { CourseProgress, CourseProgressDocument } from './schemas/course.schema';
 import { accessDaysAt, accessExpiry, nextAccessDaysLog,certificateCode, cleanCertificateConfig, cleanCertificateDetails, cleanCourseInput, EMPTY_CERT_CONFIG, courseTotals, lessonIds, paidSeatFilter, scoreQuiz } from './course.util';
 
-import { parseRosterQuery, rosterCsvRows, ROSTER_CSV_HEADER, ROSTER_EXPORT_CAP, type RosterRow } from './students-roster.util';
-import { escapeRegex } from '../common/query-safety.util';
+import { buildRosterView, maskRosterEmail, parseRosterQuery, rosterCsvRows, ROSTER_CSV_HEADER, ROSTER_EXPORT_CAP, ROSTER_GROUP_CAP, type RosterRow } from './students-roster.util';
 import { toExportCsv } from '../common/csv-export.util';
 
 const LESSON_LINK_SECONDS = 3600;
@@ -445,39 +444,20 @@ export class CoursesService {
   /**
    * Store-level roster: every buyer of this store's digital products (courses = progress, files = download count),
    * paid seats and free claims alike. Reads existing order/progress data only; nothing is tracked or changed.
+   * ONE aggregation groups (buyer, product); progress/status/sort/paging are then applied in memory over at most
+   * ROSTER_GROUP_CAP groups (progress lives in another collection, so it cannot be sorted in the order pipeline).
+   * Emails are always masked; search matches the NAME only.
    */
-  async rosterForSeller(storeId: string, sellerId: string, rawQuery: Record<string, unknown> = {}, forExport = false) {
-    await verifyStoreOwnershipStrict(this.r.storeModel, storeId, sellerId);
-    const query = parseRosterQuery(rawQuery);
-    if (query.productId) {
-      const owned = await this.r.productModel.findOne({ _id: query.productId, storeId, isDelete: false, type: 'digital' }).select('_id').lean();
-      if (!owned) throw new NotFoundException('Product not found');
-    }
-
-    const base: any = {
-      isDelete: false,
-      'sellerOrders.storeId': storeId,
-      $or: [{ isPaid: true }, { isFreeClaim: true }],
-    };
-    let userFilter: any = null;
-    if (query.q) {
-      const buyerIds: any[] = await this.r.orderModel.distinct('userId', base);
-      const rx = new RegExp(escapeRegex(query.q), 'i');
-      const matched: any[] = await this.r.userModel
-        .find({ _id: { $in: buyerIds.map(String).filter(id => isValidObjectId(id)) }, $or: [{ name: rx }, { email: rx }] })
-        .select('_id').limit(2000).lean();
-      userFilter = { $in: matched.map(u => String(u._id)) };
-    }
-
+  private async rosterRows(storeId: string) {
+    const base: any = { isDelete: false, 'sellerOrders.storeId': storeId, $or: [{ isPaid: true }, { isFreeClaim: true }] };
     const itemMatch: any = {
       'sellerOrders.storeId': storeId,
       'sellerOrders.items.type': { $in: ['digital', 'educational'] },
       'sellerOrders.items.status': { $nin: ['cancelled', 'refunded'] },
-      ...(query.productId ? { 'sellerOrders.items.productId': query.productId } : {}),
     };
     const when = { $ifNull: ['$paidAt', '$createdAt'] };
-    const pipeline: any[] = [
-      { $match: { ...base, ...(userFilter ? { userId: userFilter } : {}) } },
+    const groups: any[] = await this.r.orderModel.aggregate([
+      { $match: base },
       { $unwind: '$sellerOrders' },
       { $unwind: '$sellerOrders.items' },
       { $match: itemMatch },
@@ -491,43 +471,42 @@ export class CoursesService {
         },
       },
       { $sort: { firstAt: -1, '_id.u': 1, '_id.p': 1 } },
-    ];
-    const skip = forExport ? 0 : (query.page - 1) * query.limit;
-    const take = forExport ? ROSTER_EXPORT_CAP + 1 : query.limit;
-    const [res]: any[] = await this.r.orderModel.aggregate([
-      ...pipeline,
-      { $facet: { total: [{ $count: 'n' }], page: [{ $skip: skip }, { $limit: take }] } },
+      { $limit: ROSTER_GROUP_CAP },
     ]);
-    const total: number = res?.total?.[0]?.n ?? 0;
-    const groups: any[] = res?.page ?? [];
 
     const userIds = [...new Set(groups.map(g => String(g._id.u)))];
     const productIds = [...new Set(groups.map(g => String(g._id.p)))];
-    const [users, products, progress, courses, storeProducts]: any[] = await Promise.all([
-      this.r.userModel.find({ _id: { $in: userIds.filter(id => isValidObjectId(id)) } }).select('name email').lean(),
-      this.r.productModel.find({ _id: { $in: productIds.filter(id => isValidObjectId(id)) } }).select('name deliveryFormat').lean(),
-      this.progressModel.find({ userId: { $in: userIds }, productId: { $in: productIds } }).lean(),
-      this.r.courseModel.find({ productId: { $in: productIds } }).select('productId sections accessDays accessDaysLog').lean(),
-      forExport ? Promise.resolve([]) : this.r.productModel.find({ storeId, type: 'digital', isDelete: false }).select('name').sort({ name: 1 }).limit(200).lean(),
+    const validProductIds = productIds.filter(id => isValidObjectId(id));
+    const [users, products]: any[] = await Promise.all([
+      this.r.userModel.find({ _id: { $in: userIds.filter(id => isValidObjectId(id)) } }).select('name').lean(),
+      this.r.productModel.find({ _id: { $in: validProductIds } }).select('name deliveryFormat isTest').lean(),
     ]);
-    const userById = new Map(users.map((u: any) => [String(u._id), u]));
-    const productById = new Map(products.map((p: any) => [String(p._id), p]));
-    const progByKey = new Map(progress.map((p: any) => [`${p.userId}:${p.productId}`, p]));
-    const courseById = new Map(courses.map((c: any) => [String(c.productId), c]));
+    const productById = new Map<string, any>(products.map((p: any) => [String(p._id), p]));
+    // Test products never show (rows, stats, chips, CSV all start from here).
+    const live = groups.filter(g => !productById.get(String(g._id.p))?.isTest);
+    const courseIds = [...new Set(live.map(g => String(g._id.p)).filter(id => productById.get(id)?.deliveryFormat === 'course'))];
+    const courseUsers = [...new Set(live.filter(g => courseIds.includes(String(g._id.p))).map(g => String(g._id.u)))];
+    const [progress, courses]: any[] = await Promise.all([
+      courseIds.length ? this.progressModel.find({ userId: { $in: courseUsers }, productId: { $in: courseIds } }).lean() : Promise.resolve([]),
+      courseIds.length ? this.r.courseModel.find({ productId: { $in: courseIds } }).select('productId sections accessDays accessDaysLog').lean() : Promise.resolve([]),
+    ]);
+    const userById = new Map<string, any>(users.map((u: any) => [String(u._id), u]));
+    const progByKey = new Map<string, any>(progress.map((p: any) => [`${p.userId}:${p.productId}`, p]));
+    const courseById = new Map<string, any>(courses.map((c: any) => [String(c.productId), c]));
 
-    const rows: RosterRow[] = groups.map(g => {
+    const rows: RosterRow[] = live.map(g => {
       const userId = String(g._id.u);
       const productId = String(g._id.p);
-      const u: any = userById.get(userId);
-      const p: any = productById.get(productId);
+      const u = userById.get(userId);
+      const p = productById.get(productId);
       const isCourse = p?.deliveryFormat === 'course';
-      const prog: any = progByKey.get(`${userId}:${productId}`);
-      const course: any = courseById.get(productId);
+      const prog = progByKey.get(`${userId}:${productId}`);
+      const course = courseById.get(productId);
       const totalLessons = isCourse ? lessonIds(course?.sections ?? []).length : null;
       const done = isCourse ? (prog?.completedLessonIds?.length ?? 0) : null;
       const until = isCourse ? accessExpiry(g.lastAt, accessDaysAt(course, g.lastAt)) : null;
       return {
-        userId, name: u?.name ?? 'Learner', email: u?.email ?? null,
+        userId, name: u?.name ?? 'Learner', email: null,
         productId, productName: p?.name ?? 'Product', kind: isCourse ? 'course' : 'file',
         enrolledAt: g.firstAt, isFree: g.free === 1,
         percent: isCourse ? (totalLessons ? Math.min(100, Math.round(((done ?? 0) / totalLessons) * 100)) : 0) : null,
@@ -535,19 +514,137 @@ export class CoursesService {
         downloads: isCourse ? null : (g.downloads ?? 0),
         lastActivityAt: isCourse ? (prog?.updatedAt ?? null) : null,
         accessEnded: !!until && until.getTime() < Date.now(),
+        completed: isCourse && !!(prog?.completedAt || prog?.certificateCode),
       } as RosterRow;
     });
+    return rows;
+  }
+
+  async rosterForSeller(storeId: string, sellerId: string, rawQuery: Record<string, unknown> = {}, forExport = false) {
+    await verifyStoreOwnershipStrict(this.r.storeModel, storeId, sellerId);
+    const query = parseRosterQuery(rawQuery);
+    if (query.productId) {
+      const owned = await this.r.productModel.findOne({ _id: query.productId, storeId, isDelete: false, isTest: { $ne: true }, type: 'digital' }).select('_id').lean();
+      if (!owned) throw new NotFoundException('Product not found');
+    }
+
+    const all = await this.rosterRows(storeId);
+    const byProduct = query.productId ? all.filter(r => r.productId === query.productId) : all;
+    const needle = (query.q ?? '').toLowerCase();
+    const searched = needle ? byProduct.filter(r => r.name.toLowerCase().includes(needle)) : byProduct;
+    const view = buildRosterView(searched, byProduct, query);
 
     if (forExport) {
-      const out = toExportCsv(ROSTER_CSV_HEADER, rosterCsvRows(rows), { cap: ROSTER_EXPORT_CAP, label: 'students' });
-      return out.csv;
+      const emails = await this.maskedEmails(view.sorted.slice(0, ROSTER_EXPORT_CAP + 1).map(r => r.userId));
+      const rows = view.sorted.map(r => ({ ...r, email: emails.get(r.userId) ?? null }));
+      return toExportCsv(ROSTER_CSV_HEADER, rosterCsvRows(rows), { cap: ROSTER_EXPORT_CAP, label: 'students' }).csv;
     }
+
+    // Product filter: never test products; active/scheduled ones, or any that still have enrolments (old buyers stay reachable).
+    const counts = new Map<string, number>();
+    for (const r of all) counts.set(r.productId, (counts.get(r.productId) ?? 0) + 1);
+    const storeProducts: any[] = await this.r.productModel
+      .find({ storeId, type: 'digital', isTest: { $ne: true } }).select('name status isDelete').sort({ name: 1 }).limit(500).lean();
+    const products = storeProducts
+      .map((p: any) => ({ id: String(p._id), name: p.name, count: counts.get(String(p._id)) ?? 0, live: !p.isDelete && ['active', 'scheduled'].includes(p.status) }))
+      .filter(p => p.live || p.count > 0)
+      .map(({ id, name, count }) => ({ id, name, count }));
+
+    const emails = await this.maskedEmails(view.pageRows.map(r => r.userId));
+    const rows = view.pageRows.map(r => ({ ...r, email: emails.get(r.userId) ?? null }));
     return {
       success: true,
       data: {
-        total, page: query.page, limit: query.limit, totalPages: Math.max(1, Math.ceil(total / query.limit)),
-        rows,
-        products: storeProducts.map((p: any) => ({ id: String(p._id), name: p.name })),
+        total: view.total, page: query.page, limit: query.limit, totalPages: Math.max(1, Math.ceil(view.total / query.limit)),
+        rows, products, stats: view.stats, statusCounts: view.statusCounts,
+      },
+    };
+  }
+
+  /** Masked e-mails for a set of buyers (the full address never leaves the API). */
+  private async maskedEmails(userIds: string[]) {
+    const ids = [...new Set(userIds)].filter(id => isValidObjectId(id));
+    const out = new Map<string, string | null>();
+    if (!ids.length) return out;
+    const users: any[] = await this.r.userModel.find({ _id: { $in: ids } }).select('email').lean();
+    for (const u of users) out.set(String(u._id), maskRosterEmail(u.email));
+    return out;
+  }
+
+  /** One student of this store: every digital product they hold here, lesson checklist or download count, and order numbers. */
+  async rosterStudentDetail(storeId: string, sellerId: string, userId: string) {
+    await verifyStoreOwnershipStrict(this.r.storeModel, storeId, sellerId);
+    const orders: any[] = await this.r.orderModel
+      .find({ userId, isDelete: false, 'sellerOrders.storeId': storeId, $or: [{ isPaid: true }, { isFreeClaim: true }] })
+      .select('orderNumber paidAt createdAt isFreeClaim sellerOrders').sort({ createdAt: -1 }).limit(200).lean();
+    const held = new Map<string, { enrolledAt: Date; lastAt: Date; downloads: number; free: boolean; orders: Map<string, boolean> }>();
+    for (const o of orders) {
+      const at = new Date(o.paidAt ?? o.createdAt);
+      for (const so of o.sellerOrders ?? []) {
+        if (String(so.storeId) !== storeId) continue;
+        for (const it of so.items ?? []) {
+          if (!['digital', 'educational'].includes(it.type) || ['cancelled', 'refunded'].includes(it.status)) continue;
+          const pid = String(it.productId);
+          const h = held.get(pid) ?? { enrolledAt: at, lastAt: at, downloads: 0, free: true, orders: new Map() };
+          if (at < h.enrolledAt) h.enrolledAt = at;
+          if (at > h.lastAt) h.lastAt = at;
+          h.downloads += it.downloadCount ?? 0;
+          if (o.isFreeClaim !== true) h.free = false;
+          h.orders.set(String(o.orderNumber), o.isFreeClaim === true);
+          held.set(pid, h);
+        }
+      }
+    }
+    const productIds = [...held.keys()].filter(id => isValidObjectId(id));
+    const [products, user]: any[] = await Promise.all([
+      productIds.length ? this.r.productModel.find({ _id: { $in: productIds } }).select('name deliveryFormat isTest').lean() : Promise.resolve([]),
+      isValidObjectId(userId) ? this.r.userModel.findById(userId).select('name email').lean() : Promise.resolve(null),
+    ]);
+    const liveProducts = products.filter((p: any) => !p.isTest && held.has(String(p._id)));
+    // Not a student of THIS store (or only of test products): same 404 for every case, no hint about the account.
+    if (!liveProducts.length) throw new NotFoundException('Student not found');
+    const courseIds = liveProducts.filter((p: any) => p.deliveryFormat === 'course').map((p: any) => String(p._id));
+    const [progress, courses]: any[] = await Promise.all([
+      courseIds.length ? this.progressModel.find({ userId, productId: { $in: courseIds } }).lean() : Promise.resolve([]),
+      courseIds.length ? this.r.courseModel.find({ productId: { $in: courseIds } }).select('productId sections accessDays accessDaysLog').lean() : Promise.resolve([]),
+    ]);
+    const progById = new Map<string, any>(progress.map((p: any) => [String(p.productId), p]));
+    const courseById = new Map<string, any>(courses.map((c: any) => [String(c.productId), c]));
+
+    const items = liveProducts.map((p: any) => {
+      const pid = String(p._id);
+      const h = held.get(pid)!;
+      const isCourse = p.deliveryFormat === 'course';
+      const base = {
+        productId: pid, productName: p.name, kind: (isCourse ? 'course' : 'file') as 'course' | 'file',
+        enrolledAt: h.enrolledAt, isFree: h.free,
+        orders: [...h.orders.entries()].map(([orderNumber, free]) => ({ orderNumber, free })),
+      };
+      if (!isCourse) return { ...base, downloads: h.downloads, percent: null, sections: [], lastActivityAt: null, accessEnded: false };
+      const course = courseById.get(pid);
+      const prog = progById.get(pid);
+      const doneIds = new Set<string>((prog?.completedLessonIds ?? []).map(String));
+      const sections = (course?.sections ?? []).map((s: any) => ({
+        title: s.title ?? '', lessons: (s.lessons ?? []).map((l: any) => ({ title: l.title ?? 'Lesson', done: doneIds.has(String(l._id)) })),
+      }));
+      const total = lessonIds(course?.sections ?? []).length;
+      const done = doneIds.size;
+      const until = accessExpiry(h.lastAt, accessDaysAt(course, h.lastAt));
+      return {
+        ...base, downloads: null, sections, completedLessons: done, totalLessons: total,
+        percent: total ? Math.min(100, Math.round((done / total) * 100)) : 0,
+        lastActivityAt: prog?.updatedAt ?? null, accessEnded: !!until && until.getTime() < Date.now(),
+      };
+    });
+    const acts = items.map(i => (i.lastActivityAt ? new Date(i.lastActivityAt).getTime() : 0));
+    const lastActivityAt = Math.max(0, ...acts);
+    return {
+      success: true,
+      data: {
+        userId, name: user?.name ?? 'Learner', email: maskRosterEmail(user?.email),
+        enrolledAt: new Date(Math.min(...items.map(i => new Date(i.enrolledAt).getTime()))),
+        lastActivityAt: lastActivityAt ? new Date(lastActivityAt) : null,
+        items,
       },
     };
   }

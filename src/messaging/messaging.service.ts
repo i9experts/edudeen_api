@@ -116,6 +116,53 @@ export class MessagingService {
     return conv;
   }
 
+  /**
+   * Seller -> one of their own students. Same unique key {buyerId, storeId} as the buyer flow, so it is always the
+   * same single thread. Creates no message and notifies nobody; the thread stays out of the buyer's inbox until
+   * someone writes in it (`startedBySeller` + empty `lastMessage`).
+   */
+  async sellerStartConversation(sellerId: string, dto: { storeId: string; buyerId: string }) {
+    const { storeId, buyerId } = dto;
+    const store: any = await this.db.repositories.storeModel.findById(storeId);
+    if (!store || store.isDelete) throw new NotFoundException('Store not found');
+    if (String(store.sellerId) !== sellerId) throw new ForbiddenException('Access denied');
+    if (buyerId === sellerId) throw new BadRequestException('You cannot message yourself');
+
+    // Roster rule: a paid or free-claimed, not cancelled/refunded digital item of THIS store.
+    const orders: any[] = await this.db.repositories.orderModel.find({
+      userId: buyerId, isDelete: false,
+      $or: [{ isPaid: true }, { isFreeClaim: true }],
+      sellerOrders: { $elemMatch: { storeId, items: { $elemMatch: { type: { $in: ['digital', 'educational'] }, status: { $nin: ['cancelled', 'refunded'] } } } } },
+    }).select('sellerOrders').limit(200).lean();
+    const productIds = new Set<string>();
+    for (const o of orders) for (const so of o.sellerOrders ?? []) {
+      if (String(so.storeId) !== storeId) continue;
+      for (const it of so.items ?? []) if (['digital', 'educational'].includes(it.type) && !['cancelled', 'refunded'].includes(it.status)) productIds.add(String(it.productId));
+    }
+    // Same roster rule as the students page: test products do not make anyone a student.
+    const live = productIds.size ? await this.db.repositories.productModel.exists({ _id: { $in: [...productIds] }, isTest: { $ne: true } }) : null;
+    if (!live) throw new NotFoundException('Student not found');
+
+    const block = await this.blkModel.findOne({
+      $or: [
+        { blockerId: sellerId, targetId: buyerId },
+        { blockerId: buyerId, targetId: sellerId },
+      ],
+    });
+    if (block) throw new ForbiddenException('Cannot start conversation — block is in place');
+
+    const conv: any = await this.convModel.findOneAndUpdate(
+      { buyerId, storeId },
+      { $setOnInsert: { buyerId, storeId, sellerId: String(store.sellerId), buyerUnread: 0, sellerUnread: 0, startedBySeller: true } },
+      { upsert: true, returnDocument: 'after' },
+    );
+    if (conv?.deletedBySeller) {
+      conv.deletedBySeller = false;
+      await conv.save();
+    }
+    return { conversationId: String(conv._id), _id: String(conv._id) };
+  }
+
   async getConversations(userId: string, role: string, query: any) {
     const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
     const limit = Math.min(50, clampInt(query.limit, 20, 1, 100));
@@ -138,7 +185,8 @@ export class MessagingService {
       if (query.isArchived !== undefined) filter.isArchived = query.isArchived === 'true';
       if (query.isPinned !== undefined) filter.isPinned = query.isPinned === 'true';
     } else {
-      filter = { buyerId: userId, deletedByBuyer: false };
+      // A seller-opened thread with no message yet must not show up as a blank thread for the buyer.
+      filter = { buyerId: userId, deletedByBuyer: false, $nor: [{ startedBySeller: true, lastMessage: null }] };
     }
 
     if (query.q) {

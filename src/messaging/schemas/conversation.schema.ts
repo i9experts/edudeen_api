@@ -20,6 +20,9 @@ export class Conversation {
     sentAt: Date;
   } | null;
 
+  // Opened by the seller (students page) rather than the buyer; hidden from the buyer's inbox until a message exists.
+  @Prop({ type: Boolean, default: false }) startedBySeller: boolean;
+
   @Prop({ type: Number, default: 0 }) buyerUnread: number;
   @Prop({ type: Number, default: 0 }) sellerUnread: number;
 

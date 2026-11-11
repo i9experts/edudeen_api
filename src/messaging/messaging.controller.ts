@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { StartConversationDto } from './dto/start-conversation.dto';
+import { SellerStartConversationDto } from './dto/seller-start-conversation.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { EditMessageDto } from './dto/edit-message.dto';
 import { BlockDto } from './dto/block.dto';
@@ -40,6 +41,15 @@ export class MessagingController {
   @Post('conversations')
   startConversation(@Req() req: any, @Body() dto: StartConversationDto) {
     return this.messagingService.startOrGetConversation(req.user.userId, dto);
+  }
+
+  // Seller opens (or finds) the single thread with one of their students. Sends no message.
+  @UseGuards(RolesGuard)
+  @Roles('seller')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('seller/start')
+  sellerStart(@Req() req: any, @Body() dto: SellerStartConversationDto) {
+    return this.messagingService.sellerStartConversation(req.user.userId, dto);
   }
 
   // Seller/buyer/admin lists their inbox
