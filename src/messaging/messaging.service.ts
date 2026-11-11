@@ -592,7 +592,7 @@ export class MessagingService {
     if (!Types.ObjectId.isValid(lastMessageId)) throw new BadRequestException('Invalid message ID');
 
     const targetMsg = await this.msgModel.findById(lastMessageId);
-    if (!targetMsg || targetMsg.conversationId !== conversationId) {
+    if (!targetMsg || String(targetMsg.conversationId) !== String(conversationId)) {
       throw new BadRequestException('Message does not belong to this conversation');
     }
 
