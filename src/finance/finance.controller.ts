@@ -10,6 +10,7 @@ import { FinanceService } from './finance.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { IdempotencyInterceptor } from '../common/idempotency.interceptor';
 import { RequestPayoutDto } from './dto/request-payout.dto';
 import { AddPayoutMethodDto } from './dto/add-payout-method.dto';
@@ -41,6 +42,40 @@ export class FinanceController {
     @Query('currency') currency?: string,
   ) {
     return this.financeService.getMonthlyStatement(req.user.userId, storeId, { month, currency });
+  }
+
+  // Earnings page (read-only): hero numbers, per-order statement lines, CSV/PDF download.
+  @Get(':storeId/earnings-summary')
+  getEarningsSummary(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Query('currency') currency?: string) {
+    return this.financeService.getEarningsSummary(req.user.userId, storeId, { currency });
+  }
+
+  @Get(':storeId/earnings-statement/download')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async downloadEarningsStatement(
+    @Req() req: any,
+    @Param('storeId', ParseObjectIdPipe) storeId: string,
+    @Query('month') month: string | undefined,
+    @Query('currency') currency: string | undefined,
+    @Query('format') format: string | undefined,
+    @Res() res: Response,
+  ) {
+    const out = await this.financeService.exportEarningsStatement(req.user.userId, storeId, { month, currency, format }, req.ip, req.headers?.['user-agent']);
+    res.setHeader('Content-Type', out.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${out.filename}"`);
+    res.send(out.body);
+  }
+
+  @Get(':storeId/earnings-statement')
+  getEarningsStatement(
+    @Req() req: any,
+    @Param('storeId', ParseObjectIdPipe) storeId: string,
+    @Query('month') month?: string,
+    @Query('currency') currency?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.financeService.getEarningsStatement(req.user.userId, storeId, { month, currency, page, limit });
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

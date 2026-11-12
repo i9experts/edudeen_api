@@ -17,6 +17,7 @@ import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 
 import { clampInt, csvCell, csvLine, parseDateParam } from 'src/common/query-safety.util';
 import { encryptSeoCredential, decryptSeoCredential } from 'src/common/seo-token-encryption.util';
+import { nextPayoutDate, resolveNextPayout, earliestRelease, buildStatementLines, statementCsv, lineStatusText, type LedgerTx } from './seller-earnings.util';
 
 /** Keys the account-number encryption may use, most preferred first. Always has JWT_SECRET to fall back on, so saving a payout method never fails just because a dedicated key was not configured; decryption tries every candidate so adding a dedicated key later does not strand existing data. */
 const accountKeyCandidates = () => [process.env.PAYOUT_ENCRYPTION_KEY, process.env.SEO_TOKEN_ENCRYPTION_KEY, process.env.JWT_SECRET].filter((k, i, a): k is string => !!k && a.indexOf(k) === i);
@@ -277,30 +278,32 @@ export class FinanceService {
 
   /** Compute next scheduled payout date from current schedule */
   private computeNextPayoutDate(schedule: any): Date | null {
-    const now = new Date();
-    const next = new Date(now);
+    // Frequencies other than the known ones (e.g. 'manual') have no next date.
+    if (!['weekly', 'biweekly', 'monthly', 'daily'].includes(schedule?.frequency)) return null;
+    return nextPayoutDate(schedule, new Date());
+  }
 
-    if (schedule.frequency === 'weekly') {
-      const target = schedule.dayOfWeek;
-      const diff = (target + 7 - now.getDay()) % 7 || 7;
-      next.setDate(now.getDate() + diff);
-    } else if (schedule.frequency === 'biweekly') {
-      next.setDate(now.getDate() + 14);
-    } else if (schedule.frequency === 'monthly') {
-      // Next occurrence of `dayOfMonth` (1–28, so it exists in every month)
-      // at 09:00 — this month's if still ahead, otherwise next month's. Built
-      // with the (year, month, day) constructor so a late-month "now" (e.g.
-      // Jan 31) can never overflow setMonth() into skipping a whole month.
-      const day = Math.min(Math.max(schedule.dayOfMonth ?? 1, 1), 28);
-      const thisMonth = new Date(now.getFullYear(), now.getMonth(), day, 9, 0, 0, 0);
-      return thisMonth > now ? thisMonth : new Date(now.getFullYear(), now.getMonth() + 1, day, 9, 0, 0, 0);
-    } else if (schedule.frequency === 'daily') {
-      next.setDate(now.getDate() + 1);
-    } else {
-      return null;
+  /**
+   * The ONE "next payout" answer used by the overview wallets AND every month of the statement.
+   * Computed fresh from the schedule (the stored `nextPayoutAt` can be stale), and null when nothing
+   * is payable (available + clearing <= 0). When nothing is available yet, the date is pushed to the
+   * first schedule date after the earliest clearing release.
+   */
+  private async resolveNextPayoutAt(storeId: string, currency: string, schedule: any, balance: any): Promise<Date | null> {
+    const available = Number(balance?.availableBalance ?? 0);
+    const payable = available + Number(balance?.pendingBalance ?? 0);
+    if (!(payable > 0)) return null;
+    let notBefore: Date | null = null;
+    if (!(available > 0)) {
+      try {
+        const pending: any[] = await this.txModel.find({ storeId, currency, type: 'sale', status: 'pending' }).select('createdAt metadata.clearingDays').limit(2000).lean();
+        notBefore = earliestRelease(pending, CLEARING_DAYS);
+      } catch { notBefore = null; }
     }
-    next.setHours(9, 0, 0, 0);
-    return next;
+    let sched = schedule;
+    if (!sched?.frequency) sched = { frequency: await this.adminConfigService.getPayoutFrequency().catch(() => 'monthly'), dayOfMonth: 1, dayOfWeek: 1 };
+    if (!['weekly', 'biweekly', 'monthly', 'daily'].includes(sched.frequency)) return null;
+    return resolveNextPayout(sched, payable, new Date(), notBefore);
   }
 
   /** Get quarterly date range for a given year and period */
@@ -386,6 +389,7 @@ export class FinanceService {
       const revenueGrowth = lastMonth.sale > 0
         ? this.round(((thisMonth.sale - lastMonth.sale) / lastMonth.sale) * 100)
         : 0;
+      const nextPayoutAt = await this.resolveNextPayoutAt(storeId, currency, schedule, balance);
 
       return {
         currency,
@@ -395,7 +399,7 @@ export class FinanceService {
         flaggedReason: balance.flaggedReason ?? null,
         nextPayout: {
           pendingAmount: pendingPayout?.amount ?? null,
-          scheduledAt: schedule.nextPayoutAt,
+          scheduledAt: nextPayoutAt,
           method: defaultMethod
             ? { type: defaultMethod.type, bankName: defaultMethod.bankName, last4: defaultMethod.accountLast4 }
             : null,
@@ -411,7 +415,7 @@ export class FinanceService {
           frequency: schedule.frequency,
           isEnabled: schedule.isEnabled,
           minimumAmount: schedule.minimumAmount,
-          nextPayoutAt: schedule.nextPayoutAt,
+          nextPayoutAt,
         },
       };
     }));
@@ -435,6 +439,8 @@ export class FinanceService {
     };
     return {
       wallets,
+      // Structured card fee (card payments are charged in USD): the web renders it per wallet currency.
+      cardProcessing: { percent: Number((PAYMENT_PROCESSING_RATE * 100).toFixed(2)), fixedUSD: PAYMENT_PROCESSING_FIXED },
       // Old name kept as an alias so existing clients keep working.
       feeBreakdown,
       platformFeeRate: commissionRate.rate,
@@ -1250,7 +1256,8 @@ export class FinanceService {
       orderCount: 0, grossSales: 0, commission: 0, processingFees: 0, refunds: 0, codCommissionOwed: 0, net: 0,
     };
     const payout: any = this.pickSettlementPayout(payouts as any[], month, to, nextTo);
-    const nextPayoutAt = (schedule as any)?.nextPayoutAt ?? null;
+    // Same function as the overview wallets: the date never depends on which month is being viewed.
+    const nextPayoutAt = await this.resolveNextPayoutAt(storeId, currency, schedule, balance);
 
     return {
       month,
@@ -1285,6 +1292,235 @@ export class FinanceService {
         status: t.status,
       })),
     };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SELLER EARNINGS PAGE — read-only views over the existing ledger/orders
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async resolveWalletCurrency(storeId: string, store: any, requested?: string) {
+    let currency = requested?.trim().toUpperCase() || store?.baseCurrency || null;
+    if (!currency) {
+      const anyBalance: any = await this.balanceModel.findOne({ storeId }).select('currency').lean();
+      currency = anyBalance?.currency || 'USD';
+    }
+    if (!/^[A-Z]{3}$/.test(currency)) throw new BadRequestException('currency is not valid');
+    return currency as string;
+  }
+
+  /**
+   * Hero numbers for the Earnings page: available, clearing (+ earliest release), an ESTIMATE of what open
+   * orders will add, commission owed, next payout date, default method, fee config. Computed values only.
+   */
+  async getEarningsSummary(sellerId: string, storeId: string, query: { currency?: string } = {}) {
+    const store: any = await this.verifyStoreOwnership(sellerId, storeId);
+    const currency = await this.resolveWalletCurrency(storeId, store, query.currency);
+
+    const [balance, schedule, defaultMethod, pendingSales, transactionCount, defaultFrequency, fees, feeRate] = await Promise.all([
+      this.balanceModel.findOne({ storeId, currency }).lean() as Promise<any>,
+      this.scheduleModel.findOne({ storeId, currency }).lean() as Promise<any>,
+      this.methodModel.findOne({ storeId, currency, isDefault: true, status: { $ne: 'inactive' } }).lean() as Promise<any>,
+      this.txModel.find({ storeId, currency, type: 'sale', status: 'pending' }).select('createdAt metadata.clearingDays').limit(2000).lean() as Promise<any[]>,
+      this.txModel.countDocuments({ storeId, currency }),
+      this.adminConfigService.getPayoutFrequency().catch(() => 'monthly'),
+      typeof this.adminConfigService?.getPlatformFees === 'function' ? this.adminConfigService.getPlatformFees().catch(() => null) : Promise.resolve(null),
+      this.displayFeeRate(storeId),
+    ]);
+
+    const available = this.round(Number(balance?.availableBalance ?? 0));
+    const clearing = this.round(Number(balance?.pendingBalance ?? 0));
+    const nextAt = await this.resolveNextPayoutAt(storeId, currency, schedule, balance);
+    const expected = await this.estimateOpenOrders(storeId, currency);
+
+    return {
+      currency,
+      available,
+      clearing,
+      clearingReleaseAt: clearing > 0 ? (earliestRelease(pendingSales, CLEARING_DAYS)?.toISOString() ?? null) : null,
+      expected,
+      // The current debt from seller-collected COD commission (it is netted off by later sales / the next payout).
+      commissionOwed: this.round(Math.max(0, -available)),
+      isFlaggedForReview: balance?.isFlaggedForReview ?? false,
+      nextPayoutDate: nextAt ? nextAt.toISOString() : null,
+      payoutFrequency: schedule?.frequency ?? defaultFrequency,
+      defaultMethod: defaultMethod
+        ? { id: String(defaultMethod._id), type: defaultMethod.type, bankName: defaultMethod.bankName ?? null, last4: defaultMethod.accountLast4 ?? null, status: defaultMethod.status ?? 'active' }
+        : null,
+      transactionCount,
+      platformFees: fees ? { digital: fees.digital ?? null, physical: fees.physical ?? null } : null,
+      fallbackFeeRate: feeRate.rate,
+      cardProcessing: { percent: Number((PAYMENT_PROCESSING_RATE * 100).toFixed(2)), fixedUSD: PAYMENT_PROCESSING_FIXED },
+      clearingDays: { card: CLEARING_DAYS_CARD, other: CLEARING_DAYS },
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * ESTIMATE of money still to come from open orders (nothing is credited yet): unpaid COD packages that
+   * Edudeen's courier collects, and paid packages whose sale credit has not been written. Seller-collected
+   * COD is NOT counted (the seller holds that cash; only the commission is debited later). The platform fee is
+   * the configured one, estimated. Packages in another currency are skipped and counted in `skipped`.
+   */
+  private async estimateOpenOrders(storeId: string, currency: string) {
+    const out = { amount: 0, feeEstimate: 0, orders: 0, toShip: 0, openOrders: 0, platformCollectedCod: 0, sellerCollectedCod: 0, skipped: 0, feeEstimateOk: true, capped: false };
+    let orders: any[] = [];
+    try {
+      orders = await this.db.repositories.orderModel
+        .find({ isFreeClaim: { $ne: true }, sellerOrders: { $elemMatch: { storeId, status: { $in: ['pending', 'processing', 'shipped', 'delivered'] } } } })
+        .select('currency paymentType isPaid sellerOrders')
+        .sort({ createdAt: -1 }).limit(500).lean() as any[];
+    } catch { return out; }
+
+    type Cand = { order: any; so: any; amount: number; cod: boolean };
+    const candidates: Cand[] = [];
+    for (const order of orders) {
+      for (const so of order.sellerOrders ?? []) {
+        if (so.storeId !== storeId || !['pending', 'processing', 'shipped', 'delivered'].includes(so.status)) continue;
+        const open = ['pending', 'processing', 'shipped'].includes(so.status);
+        if (open) { out.openOrders++; if (so.status !== 'shipped') out.toShip++; }
+        const cod = order.paymentType === 'cash_on_delivery';
+        const paid = so.isPaid === true || order.isPaid === true;
+        if (cod && paid) continue;
+        if (!cod && !(paid && open)) continue;
+        const amount = so.settlementCurrency === currency && so.settlementAmount != null ? Number(so.settlementAmount)
+          : order.currency === currency ? Number(so.subtotal ?? 0) : null;
+        if (amount === null) { out.skipped++; continue; }
+        if (cod && cashMode(so) === 'seller') { out.sellerCollectedCod++; continue; }
+        candidates.push({ order, so, amount, cod });
+      }
+    }
+
+    // A paid package that already has its sale credit is part of "Clearing", not of this estimate.
+    const paidIds = candidates.filter((c) => !c.cod).map((c) => String(c.order._id));
+    let credited = new Set<string>();
+    if (paidIds.length) {
+      const rows: any[] = await this.txModel.find({ storeId, type: 'sale', referenceType: 'order', referenceId: { $in: paidIds } }).select('referenceId').lean().catch(() => []);
+      credited = new Set(rows.map((r) => String(r.referenceId)));
+    }
+    const counted = candidates.filter((c) => c.cod || !credited.has(String(c.order._id)));
+    out.capped = counted.length > 200;
+    for (const c of counted.slice(0, 200)) {
+      let fee = 0;
+      try {
+        fee = (await this.platformCommission(storeId, c.amount, currency, feeItemsFor(c.so))).platformFee;
+      } catch { out.feeEstimateOk = false; }
+      out.amount += c.amount - fee;
+      out.feeEstimate += fee;
+      out.orders++;
+      if (c.cod) out.platformCollectedCod++;
+    }
+    out.amount = this.round(out.amount);
+    out.feeEstimate = this.round(out.feeEstimate);
+    return out;
+  }
+
+  /** Every ledger row of the month for one wallet, capped. `truncated` = the month has more rows than we read. */
+  private async loadMonthLedger(storeId: string, currency: string, from: Date, to: Date) {
+    const cap = 20000;
+    const rows: any[] = await this.txModel.find({ storeId, currency, createdAt: { $gte: from, $lt: to } })
+      .select('type amount status referenceId referenceType createdAt metadata').sort({ createdAt: -1 }).limit(cap + 1).lean();
+    return { rows: rows.slice(0, cap), truncated: rows.length > cap };
+  }
+
+  private async orderNumbersFor(ids: string[]): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    const valid = [...new Set(ids)].filter((id) => isValidObjectId(id)).slice(0, 5000);
+    if (!valid.length) return map;
+    const rows: any[] = await this.db.repositories.orderModel.find({ _id: { $in: valid } }).select('orderNumber').lean().catch(() => []);
+    for (const r of rows) map.set(String(r._id), r.orderNumber ?? String(r._id));
+    return map;
+  }
+
+  private async monthStatementData(sellerId: string, storeId: string, query: { month?: string; currency?: string }) {
+    const store: any = await this.verifyStoreOwnership(sellerId, storeId);
+    const currency = await this.resolveWalletCurrency(storeId, store, query.currency);
+    const { month, from, to } = this.resolveMonth(query.month);
+    const nextTo = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth() + 1, 1));
+    const [{ rows, truncated }, payouts] = await Promise.all([
+      this.loadMonthLedger(storeId, currency, from, to),
+      this.settlementPayoutQuery([storeId], currency, month, to, nextTo),
+    ]);
+    const payout: any = this.pickSettlementPayout(payouts as any[], month, to, nextTo);
+    const { lines, totals } = buildStatementLines(rows as LedgerTx[], { monthPayoutCompleted: payout?.status === 'completed' });
+    return { store, currency, month, lines, totals, truncated, payout };
+  }
+
+  /** One statement line per order for a month (25/page): the rows add up to `totals`. */
+  async getEarningsStatement(sellerId: string, storeId: string, query: { month?: string; currency?: string; page?: any; limit?: any }) {
+    const d = await this.monthStatementData(sellerId, storeId, query);
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = clampInt(query.limit, 25, 1, 100);
+    const slice = d.lines.slice((page - 1) * limit, page * limit);
+    const numbers = await this.orderNumbersFor(slice.map((l) => l.orderId ?? '').filter(Boolean));
+    return {
+      month: d.month, currency: d.currency, totals: d.totals, truncated: d.truncated,
+      total: d.lines.length, page, limit, pages: Math.max(1, Math.ceil(d.lines.length / limit)),
+      rows: slice.map((l) => ({ ...l, orderNumber: l.orderId ? (numbers.get(l.orderId) ?? null) : null, statusText: lineStatusText(l) })),
+      payout: d.payout ? { id: String(d.payout._id), status: d.payout.status, amount: d.payout.amount, createdAt: d.payout.createdAt, processedAt: d.payout.processedAt ?? null } : null,
+    };
+  }
+
+  /** CSV or PDF of the whole month. Owner-only; the audit entry is awaited (no log = no download). */
+  async exportEarningsStatement(sellerId: string, storeId: string, query: { month?: string; currency?: string; format?: string }, ip?: string, userAgent?: string): Promise<{ body: Buffer | string; contentType: string; filename: string }> {
+    const format = query.format === 'pdf' ? 'pdf' : query.format === 'csv' || !query.format ? 'csv' : null;
+    if (!format) throw new BadRequestException('format must be csv or pdf');
+    const d = await this.monthStatementData(sellerId, storeId, query);
+    const capped = d.lines.slice(0, EXPORT_ROW_CAP);
+    const truncated = d.truncated || d.lines.length > EXPORT_ROW_CAP;
+    const numbers = await this.orderNumbersFor(capped.map((l) => l.orderId ?? '').filter(Boolean));
+
+    const logged = await this.activityLogService.log({
+      storeId, category: 'finance', action: 'earnings_statement_downloaded',
+      description: `Downloaded the ${d.month} earnings statement (${format.toUpperCase()}, ${d.currency}).`,
+      actorId: sellerId, actorRole: 'seller', targetId: storeId, targetType: 'store',
+      metadata: { month: d.month, currency: d.currency, format, rows: capped.length }, ip, userAgent,
+    });
+    if (logged === false) throw new ServiceUnavailableException('Could not record this download - please try again.');
+
+    const filename = `earnings-${d.month}-${d.currency}.${format}`;
+    if (format === 'csv') {
+      return { body: statementCsv({ month: d.month, currency: d.currency, orderNumbers: numbers }, capped, d.totals, truncated), contentType: 'text/csv', filename };
+    }
+    return { body: await this.statementPdf(d.store?.name ?? 'Store', d.month, d.currency, capped, d.totals, numbers, truncated), contentType: 'application/pdf', filename };
+  }
+
+  private async statementPdf(storeName: string, month: string, currency: string, lines: any[], totals: any, numbers: Map<string, string>, truncated: boolean): Promise<Buffer> {
+    const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+    const ascii = (s: string) => String(s ?? '').replace(/[^\x20-\x7E]/g, '?');
+    const money = (n: number) => `${currency} ${currency === 'PKR' ? Math.round(n).toLocaleString('en-US') : n.toFixed(2)}`;
+    const W = 595, H = 842, M = 36;
+    const cols = [M, M + 62, M + 150, M + 218, M + 288, M + 350, M + 410, M + 475];
+    let page = doc.addPage([W, H]);
+    let y = H - M;
+    const text = (s: string, x: number, size = 8, f = font, right = false) => {
+      const t = ascii(s);
+      page.drawText(t, { x: right ? x - f.widthOfTextAtSize(t, size) : x, y, size, font: f, color: rgb(0.1, 0.1, 0.1) });
+    };
+    const header = () => {
+      ['Date', 'Order', 'Status'].forEach((h, i) => text(h, cols[[0, 1, 2][i]], 8, bold));
+      ['Gross', 'Fee', 'Processing', 'Refund', 'Net'].forEach((h, i) => text(h, cols[i + 3] + 56, 8, bold, true));
+      y -= 12;
+    };
+    text(`Earnings statement - ${ascii(storeName)}`, M, 14, bold); y -= 18;
+    text(`${month}  |  ${currency}  |  Generated ${new Date().toISOString().slice(0, 10)}`, M, 9); y -= 22;
+    header();
+    for (const l of lines) {
+      if (y < M + 40) { page = doc.addPage([W, H]); y = H - M; header(); }
+      text(l.date.slice(0, 10), cols[0]);
+      text(l.orderId ? (numbers.get(l.orderId) ?? l.orderId).slice(0, 18) : '-', cols[1]);
+      text(lineStatusText(l).slice(0, 24), cols[2]);
+      [l.gross, l.platformFee, l.processingFee, l.refund, l.net].forEach((v: number, i: number) => text(money(v), cols[i + 3] + 56, 8, font, true));
+      y -= 11;
+    }
+    if (y < M + 60) { page = doc.addPage([W, H]); y = H - M; }
+    y -= 8;
+    text('TOTAL', cols[0], 9, bold);
+    [totals.gross, totals.platformFee, totals.processingFee, totals.refunds, totals.net].forEach((v: number, i: number) => text(money(v), cols[i + 3] + 56, 9, bold, true));
+    if (truncated) { y -= 16; text('TRUNCATED: more rows exist than are listed here; totals cover the rows listed only.', M, 8); }
+    return Buffer.from(await doc.save());
   }
 
   /**

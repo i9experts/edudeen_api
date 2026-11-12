@@ -94,7 +94,7 @@ export const DEFAULT_SELLER_QUESTIONS: ChatQA[] = [
   {
     id: 'seller-payout',
     q: 'How and when do I get paid?',
-    a: 'Buyers pay Edudeen, not you. When an order is paid, your earnings (sale price minus the platform fee) are credited to your wallet - first as **pending** for a short clearing period, then **available**.\nRequest a payout from [Finance](/seller/finance); the Edudeen team approves it and sends it to your saved payout account. Add or update your payout method there first.',
+    a: 'Buyers pay Edudeen, not you. When an order is paid, your earnings (sale price minus the platform fee) are credited to your wallet - first as **pending** for a short clearing period, then **available**.\nPayouts are monthly: the Edudeen team approves them and sends the money to your saved payout account. See [Earnings](/seller/finance) for your balance and next payout date, and add or update your payout method there first.',
     qUr: 'مجھے ادائیگی کیسے اور کب ملے گی؟',
     aUr: 'خریدار ایڈودین کو ادائیگی کرتے ہیں، آپ کو نہیں۔ آرڈر کی ادائیگی ہونے پر آپ کی کمائی (فروخت کی قیمت منفی پلیٹ فارم فیس) آپ کے والیٹ میں جمع ہو جاتی ہے - پہلے مختصر کلیئرنگ مدت کے لیے **pending** اور پھر **available**۔\n[فنانس](/seller/finance) سے پے آؤٹ کی درخواست دیں؛ ایڈودین ٹیم منظور کر کے آپ کے محفوظ کردہ پے آؤٹ اکاؤنٹ میں رقم بھیجتی ہے۔ پہلے وہیں اپنا پے آؤٹ طریقہ شامل یا اپ ڈیٹ کریں۔',
   },
@@ -158,7 +158,7 @@ const ROMAN_URDU: Record<string, { q: string; a: string }> = {
   },
   'seller-payout': {
     q: 'Mujhe payment kaise aur kab milegi?',
-    a: 'Buyers Edudeen ko payment karte hain, aapko nahi. Order paid hone par aapki kamai (sale price minus platform fee) aapke wallet mein jama ho jati hai - pehle mukhtasar clearing muddat ke liye **pending** aur phir **available**.\n[Finance](/seller/finance) se payout request dein; Edudeen team approve kar ke aapke saved payout account mein raqam bhejti hai. Pehle wahin apna payout method add ya update karein.',
+    a: 'Buyers Edudeen ko payment karte hain, aapko nahi. Order paid hone par aapki kamai (sale price minus platform fee) aapke wallet mein jama ho jati hai - pehle mukhtasar clearing muddat ke liye **pending** aur phir **available**.\nPayout har mahine hota hai: Edudeen team approve kar ke aapke saved payout account mein raqam bhejti hai. Balance aur agli payout date [Earnings](/seller/finance) mein dekhein, aur pehle wahin apna payout method add ya update karein.',
   },
   'seller-fees': {
     q: 'Platform fees kitni hain?',
