@@ -182,6 +182,11 @@ export class StoreThemeDraft {
 
   @Prop({ type: StorefrontHighlightsSchema, default: () => ({}) })
   storefront: StorefrontHighlights;
+
+  // Customize-store draft: name/headline/about/logo/banner/teacher profile. Absent until the seller saves a draft
+  // (the page then starts from the live Store values). Publish copies it onto the Store document in one transaction.
+  @Prop({ type: Object, default: undefined })
+  storePage?: Record<string, any>;
 }
 export const StoreThemeDraftSchema = SchemaFactory.createForClass(StoreThemeDraft);
 

@@ -59,7 +59,25 @@ export function visitSecret(): string {
 }
 
 // ── Redis key layout ──────────────────────────────────────────────────────
-export const dedupeKey = (hash: string, kind: 'store' | 'product', id: string) => `av:d:${hash}:${kind}:${id}`;
+export const dedupeKey = (hash: string, kind: 'store' | 'product' | 'hl', id: string) => `av:d:${hash}:${kind}:${id}`;
+
+// ── Clicks on the store page's highlight rows (Featured / New arrivals / Best sellers) ──
+export const HIGHLIGHT_ROWS = ['featured', 'newArrivals', 'bestSellers'] as const;
+export type HighlightRow = (typeof HIGHLIGHT_ROWS)[number];
+export function sanitizeHighlightRow(v: unknown): HighlightRow | null {
+  return (HIGHLIGHT_ROWS as readonly string[]).includes(v as string) ? (v as HighlightRow) : null;
+}
+/** counter: av:h:<pktDate>:<storeId>:<row> */
+export const highlightKey = (pktDate: string, storeId: string, row: HighlightRow) => `av:h:${pktDate}:${storeId}:${row}`;
+export type ParsedHighlight = { pktDate: string; storeId: string; row: HighlightRow };
+export function parseHighlightKey(key: string): ParsedHighlight | null {
+  const p = key.split(':');
+  if (p.length !== 5 || p[0] !== 'av' || p[1] !== 'h') return null;
+  const [, , pktDate, storeId, row] = p;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(pktDate) || !isHex24(storeId)) return null;
+  const r = sanitizeHighlightRow(row);
+  return r ? { pktDate, storeId, row: r } : null;
+}
 /** counter: av:c:<pktDate>:<storeId>:<productId|->:<source> */
 export const counterKey = (pktDate: string, storeId: string, productId: string | null, source: VisitSource) => `av:c:${pktDate}:${storeId}:${productId ?? '-'}:${source}`;
 /** term counter: av:t:<pktDate>:<storeId>:<base64url(term)> */

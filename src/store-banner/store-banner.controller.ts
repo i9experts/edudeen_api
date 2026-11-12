@@ -42,6 +42,12 @@ export class StoreBannerController {
     return this.storeBannerService.create(storeId, req.user.userId, dto, files?.file?.[0], files?.mobileFile?.[0]);
   }
 
+  // Declared BEFORE ':storeId/:bannerId' so "reorder" is not read as a banner id.
+  @Patch(':storeId/reorder')
+  reorder(@Req() req: any, @Param('storeId') storeId: string, @Body() body: { ids?: unknown }) {
+    return this.storeBannerService.reorder(storeId, req.user.userId, body?.ids);
+  }
+
   @Patch(':storeId/:bannerId')
   update(@Req() req: any, @Param('storeId') storeId: string, @Param('bannerId') bannerId: string, @Body() dto: UpdateStoreBannerDto) {
     return this.storeBannerService.update(storeId, req.user.userId, bannerId, dto);

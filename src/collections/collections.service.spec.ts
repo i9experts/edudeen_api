@@ -6,15 +6,20 @@ jest.mock('../common/store-ownership.util', () => ({ verifyStoreOwnershipStrict:
 const ID_A = 'a'.repeat(24);
 const ID_B = 'b'.repeat(24);
 
-function build(existing: { _id: string; name: string }[], count = existing.length) {
+function build(existing: { _id: string; name: string }[], count = existing.length, ownedProducts: string[] = []) {
   const model: any = {
     find: jest.fn(() => ({ select: () => ({ lean: async () => existing }) })),
     countDocuments: jest.fn().mockResolvedValue(count),
     findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn(async (d: any) => ({ _id: 'new', ...d })),
     bulkWrite: jest.fn().mockResolvedValue({}),
+    findByIdAndUpdate: jest.fn().mockResolvedValue({}),
   };
-  const db: any = { repositories: { collectionModel: model, storeModel: {} } };
+  // Products of THIS store only: the query filters by _id in the request and storeId, so we answer with the owned subset.
+  const productModel: any = {
+    find: jest.fn((q: any) => ({ select: () => ({ lean: async () => (q._id.$in as string[]).filter((id) => ownedProducts.includes(id)).map((_id) => ({ _id })) }) })),
+  };
+  const db: any = { repositories: { collectionModel: model, storeModel: {}, productModel } };
   const log = { log: jest.fn().mockResolvedValue(true) };
   return { svc: new CollectionsService(db, log as any), model, log };
 }
@@ -34,6 +39,22 @@ describe('CollectionsService names, limit, reorder', () => {
   it('blocks the 21st collection', async () => {
     const { svc } = build([], 20);
     await expect(svc.create('s', 'u', { name: 'Extra', type: 'automatic' } as any)).rejects.toThrow(BadRequestException);
+  });
+  it('create refuses a manual collection holding another seller\'s product', async () => {
+    const { svc, model } = build([], 0, [ID_A]);
+    await expect(svc.create('s', 'u', { name: 'Mine', type: 'manual', productIds: [ID_A, ID_B] } as any)).rejects.toThrow(BadRequestException);
+    expect(model.create).not.toHaveBeenCalled();
+  });
+  it('create accepts a manual collection of the store\'s own products', async () => {
+    const { svc, model } = build([], 0, [ID_A, ID_B]);
+    await svc.create('s', 'u', { name: 'Mine', type: 'manual', productIds: [ID_A, ID_B] } as any);
+    expect(model.create).toHaveBeenCalledWith(expect.objectContaining({ productIds: [ID_A, ID_B], status: 'active' }));
+  });
+  it('updateProducts refuses a foreign product id and writes nothing', async () => {
+    const { svc, model } = build([], 0, [ID_A]);
+    model.findOne.mockResolvedValue({ _id: 'c1', type: 'manual', name: 'x' });
+    await expect(svc.updateProducts('s', 'u', 'c1', { productIds: [ID_A, ID_B] } as any)).rejects.toThrow(BadRequestException);
+    expect(model.findByIdAndUpdate).not.toHaveBeenCalled();
   });
   it('reorder refuses ids that are not this store\'s', async () => {
     const { svc, model } = build([{ _id: ID_A, name: 'x' }]);

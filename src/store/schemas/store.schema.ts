@@ -561,6 +561,8 @@ export class Store {
       subjects: { type: [String], default: [] },
       institutions: { type: [String], default: [] },
       teachingLevels: { type: [String], default: [] },
+      // Canonical YouTube / Vimeo watch URL only (validated in store-policies.util). Never raw HTML.
+      introVideoUrl: { type: String, default: null },
     },
     default: null,
     _id: false,
@@ -572,7 +574,16 @@ export class Store {
     subjects: string[];
     institutions: string[];
     teachingLevels: string[];
+    introVideoUrl?: string | null;
   } | null;
+
+  // Seller's own shipping text for the public store page (plain text, max 500). Cannot change real shipping rules.
+  @Prop({ type: String, default: null })
+  shippingNote: string | null;
+
+  // Seller FAQ shown on the public store page (max 8, ordered).
+  @Prop({ type: [Object], default: [] })
+  faqs: Array<{ q: string; a: string }>;
 
   @Prop({ default: false })
   isDelete: boolean;

@@ -1,6 +1,10 @@
 /* eslint-disable prettier/prettier */
 import { isStoreLive } from 'src/common/store-live.util';
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { InjectConnection } from '@nestjs/mongoose';
+import type { Connection } from 'mongoose';
+import { ActivityLogService } from '../activity-log/activity-log.service';
+import { cleanStorePageDraft, storePageFromStore } from '../store/store-page.util';
 import { DatabaseService } from '../database/databaseservice';
 import { verifyStoreOwnershipStrict } from '../common/store-ownership.util';
 import { validateBlockSettings } from '../common/store-content/section-settings.validator';
@@ -10,6 +14,7 @@ import { UpdateHeaderDto } from './dto/update-header.dto';
 import { UpdateFooterDto } from './dto/update-footer.dto';
 import { UpdateIdentityBannerDto } from './dto/update-identity-banner.dto';
 import { UpdateStorefrontDto } from './dto/update-storefront.dto';
+import { UpdateStorePageDto } from './dto/update-store-page.dto';
 import { assertFeaturedOwned, normalizeFeaturedIds, publishedHighlights } from './featured-products.util';
 import { RealtimeService } from '../realtime/realtime.service';
 
@@ -40,7 +45,11 @@ const IDENTITY_BANNER_KEYS = [
 
 @Injectable()
 export class StoreThemeService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    @InjectConnection() private readonly connection: Connection,
+    private readonly activityLogService: ActivityLogService,
+  ) {}
 
   private get storeThemeModel() {
     return this.databaseService.repositories.storeThemeModel;
@@ -100,6 +109,7 @@ export class StoreThemeService {
     const doc = await this.ensureDefaultTheme(storeId);
     const draft = doc!.draft as StoreThemeDraft;
     const { draft: storefront, published: publishedStorefront } = await this.highlightsState(storeId);
+    const page = await this.storePageState(storeId);
     return {
       success: true,
       data: {
@@ -110,6 +120,9 @@ export class StoreThemeService {
         baseThemeId: draft.baseThemeId,
         storefront,
         publishedStorefront,
+        storePage: page.draft,
+        publishedStorePage: page.published,
+        storePageSavedAt: page.savedAt,
         lastPublishedAt: doc!.lastPublishedAt,
       },
     };
@@ -128,6 +141,30 @@ export class StoreThemeService {
     return { draft, published };
   }
 
+  /**
+   * Customize-store draft (name / headline / about / logo / banner photo / teacher profile). Buyers read the Store
+   * document only, so nothing here is visible until publishTheme copies it. No saved draft = the live values.
+   */
+  private async storePageState(storeId: string) {
+    const raw: any = await this.storeThemeModel.findOne({ storeId }).select('draft.storePage').lean();
+    const store: any = await this.storeModel.findById(storeId)
+      .select('name tagline description logo coverImage aboutBio educatorProfile').lean();
+    const published = storePageFromStore(store);
+    const saved = raw?.draft?.storePage;
+    if (!saved) return { draft: published, published, savedAt: null as Date | null };
+    const { savedAt, ...rest } = saved;
+    return { draft: { ...published, ...rest }, published, savedAt: (savedAt as Date) ?? null };
+  }
+
+  async updateStorePage(storeId: string, sellerId: string, dto: UpdateStorePageDto) {
+    await verifyStoreOwnershipStrict(this.storeModel, storeId, sellerId);
+    await this.ensureDefaultTheme(storeId);
+    const state = await this.storePageState(storeId);
+    const cleaned = cleanStorePageDraft(dto as Record<string, any>, state.draft);
+    const savedAt = new Date();
+    await this.storeThemeModel.updateOne({ storeId }, { $set: { 'draft.storePage': { ...cleaned, savedAt } } });
+    return { success: true, message: 'Draft saved', data: { storePage: cleaned, publishedStorePage: state.published, storePageSavedAt: savedAt } };
+  }
   /** The seller's highlights draft: featured product ids (own, active, max 8, in order) + the two auto-row switches. */
   async updateStorefront(storeId: string, sellerId: string, dto: UpdateStorefrontDto) {
     await verifyStoreOwnershipStrict(this.storeModel, storeId, sellerId);
@@ -155,34 +192,64 @@ export class StoreThemeService {
     return { success: true, data: theme };
   }
 
-  /** Copies draft → the live root fields in one atomic $set, using the same document-referencing aggregation-pipeline update as the draft backfill above (so it can't drift into a two-step read-then-write race). */
+  /**
+   * Copies draft → the live root fields in one atomic $set (document-referencing aggregation-pipeline update, so it can't
+   * drift into a two-step read-then-write race). When the seller also has a Customize-store draft (`draft.storePage`),
+   * the SAME transaction applies it to the Store document and clears it, so theme + store fields go live together or not at all.
+   */
   async publishTheme(storeId: string, sellerId: string) {
     await verifyStoreOwnershipStrict(this.storeModel, storeId, sellerId);
     await this.ensureDefaultTheme(storeId);
-    const updated = await this.storeThemeModel.findOneAndUpdate(
-      { storeId },
-      [
-        {
-          $set: {
-            theme: '$draft.theme',
-            header: '$draft.header',
-            footer: '$draft.footer',
-            identityBanner: '$draft.identityBanner',
-            baseThemeId: '$draft.baseThemeId',
-            // Only when the seller has a highlights draft; an old store that never edited it keeps its legacy pinned row.
-            storefront: { $ifNull: ['$draft.storefront', '$storefront'] },
-            lastPublishedAt: '$$NOW',
+    let changedFields: string[] = [];
+    const updated = await this.connection.transaction(async (session) => {
+      const raw: any = await this.storeThemeModel.findOne({ storeId }).select('draft.storePage').session(session).lean();
+      const doc = await this.storeThemeModel.findOneAndUpdate(
+        { storeId },
+        [
+          {
+            $set: {
+              theme: '$draft.theme',
+              header: '$draft.header',
+              footer: '$draft.footer',
+              identityBanner: '$draft.identityBanner',
+              baseThemeId: '$draft.baseThemeId',
+              // Only when the seller has a highlights draft; an old store that never edited it keeps its legacy pinned row.
+              storefront: { $ifNull: ['$draft.storefront', '$storefront'] },
+              lastPublishedAt: '$$NOW',
+            },
           },
-        },
-      ],
-      { returnDocument: 'after', updatePipeline: true },
-    );
-    // Open storefronts re-read the highlight rows (no data in the message, only the topic).
+        ],
+        { returnDocument: 'after', updatePipeline: true, session },
+      );
+      const page = raw?.draft?.storePage;
+      if (page) {
+        const store: any = await this.storeModel.findById(storeId).session(session).lean();
+        const { savedAt, ...rest } = page;
+        const clean = cleanStorePageDraft(rest, storePageFromStore(store));
+        const live = storePageFromStore(store);
+        changedFields = (Object.keys(clean) as (keyof typeof clean)[]).filter(k => JSON.stringify(clean[k]) !== JSON.stringify(live[k]));
+        await this.storeModel.updateOne({ _id: storeId }, {
+          $set: {
+            name: clean.name, tagline: clean.tagline, description: clean.description, logo: clean.logo ?? '',
+            coverImage: clean.coverImage, aboutBio: clean.aboutBio, educatorProfile: clean.educatorProfile,
+          },
+        }, { session });
+        // Draft = live again; the next edit starts from the Store document (so a later direct Store edit is never overwritten).
+        await this.storeThemeModel.updateOne({ storeId }, { $unset: { 'draft.storePage': '' } }, { session });
+      }
+      return doc;
+    });
+    await this.activityLogService.log({
+      storeId, category: 'settings', action: 'store_page_published',
+      description: 'Store page published',
+      actorId: sellerId, actorRole: 'seller', targetId: storeId, targetType: 'store',
+      metadata: { storeFields: changedFields },
+    });
+    // Open storefronts re-read the store + highlight rows (no data in the message, only the topic).
     RealtimeService.instance?.emitTo({ stores: [storeId] }, ['store']);
     RealtimeService.instance?.emit('storefront');
     return { success: true, message: 'Theme published', data: updated };
   }
-
   /** Safety-net "discard unsaved changes" — copies the live root fields back over draft, the mirror image of publishTheme's copy direction. */
   async revertDraftToPublished(storeId: string, sellerId: string) {
     await verifyStoreOwnershipStrict(this.storeModel, storeId, sellerId);

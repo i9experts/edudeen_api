@@ -20,6 +20,19 @@ export const VisitDailySchema = SchemaFactory.createForClass(VisitDaily);
 VisitDailySchema.index({ storeId: 1, pktDate: 1 });
 VisitDailySchema.index({ storeId: 1, productId: 1, pktDate: 1, source: 1 }, { unique: true });
 
+/** Clicks on a store page's highlight rows, one row per (store, PKT day, row). No visitor data. */
+@Schema({ timestamps: false, collection: 'analytics_highlight_daily' })
+export class HighlightDaily {
+  @Prop({ required: true }) storeId: string;
+  @Prop({ required: true }) pktDate: string;
+  @Prop({ required: true }) row: string; // featured | newArrivals | bestSellers
+  @Prop({ type: Number, default: 0 }) clicks: number;
+}
+export type HighlightDailyDocument = HighlightDaily & Document;
+export const HighlightDailySchema = SchemaFactory.createForClass(HighlightDaily);
+HighlightDailySchema.index({ storeId: 1, pktDate: 1 });
+HighlightDailySchema.index({ storeId: 1, pktDate: 1, row: 1 }, { unique: true });
+
 /** Words buyers searched on Edudeen right before opening this store (only for visits that came from Edudeen search). */
 @Schema({ timestamps: false, collection: 'analytics_term_daily' })
 export class TermDaily {

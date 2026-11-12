@@ -69,6 +69,15 @@ export class CollectionsService {
     if (clash) throw new ConflictException('This collection already exists');
   }
 
+  /** Every product id must be a live product of THIS store; a foreign / unknown / deleted id rejects the whole request. */
+  private async assertProductsOwned(storeId: string, ids: string[] | undefined) {
+    const unique = Array.from(new Set((ids ?? []).map(String)));
+    if (!unique.length) return;
+    if (unique.some((id) => !isValidObjectId(id))) throw new BadRequestException('Some products were not found in your store');
+    const owned = await this.r.productModel.find({ _id: { $in: unique }, storeId, isDelete: { $ne: true } }).select('_id').lean();
+    if (owned.length !== unique.length) throw new BadRequestException('Some products were not found in your store');
+  }
+
   // ── Seller ─────────────────────────────────────────────────────────────
 
   async create(storeId: string, sellerId: string, dto: CreateCollectionDto) {
@@ -81,6 +90,7 @@ export class CollectionsService {
     if (dto.type === 'manual' && (!dto.productIds || dto.productIds.length === 0)) {
       throw new BadRequestException('A manual collection needs at least one product — add products after creating it, or switch to automatic.');
     }
+    if (dto.type === 'manual') await this.assertProductsOwned(storeId, dto.productIds);
     const slug = await this.generateStoreScopedSlug(storeId, dto.name);
     // Validate every smart rule / sort / schedule BEFORE writing (bad value = 400).
     const rules = dto.type === 'automatic' ? cleanCollectionRules(dto.rules) : undefined;
@@ -222,6 +232,7 @@ export class CollectionsService {
     if (collection.type !== 'manual') {
       throw new BadRequestException('Only a manual collection has a directly-editable product list — an automatic collection resolves its products from its rules.');
     }
+    await this.assertProductsOwned(storeId, dto.productIds);
     const updated = await this.r.collectionModel.findByIdAndUpdate(
       collectionId,
       { $set: { productIds: dto.productIds } },

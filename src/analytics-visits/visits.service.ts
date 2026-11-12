@@ -11,14 +11,15 @@ import { Store } from '../store/schemas/store.schema';
 import { verifyStoreOwnershipOrForbidden } from '../common/store-ownership.util';
 import { resolveDateRange } from '../analytics/utils/analytics-date.util';
 import { paidPeriodTotals } from '../analytics/utils/order-aggregation.util';
-import { TermDaily, VisitDaily } from './visit-daily.schema';
+import { StoreFollower } from '../store/schemas/store-follower.schema';
+import { HighlightDaily, TermDaily, VisitDaily } from './visit-daily.schema';
 import {
-  COUNTER_TTL_SECONDS, VISIT_DEDUPE_SECONDS, VISIT_SOURCES, VisitSource,
-  conversionRate, counterKey, dedupeKey, isBotUserAgent, isHex24, parseCounterKey, parseTermKey,
-  pktDateOf, pktDayStartOf, sanitizeSource, sanitizeTerm, sessionHash, termKey, visitSecret,
+  COUNTER_TTL_SECONDS, HIGHLIGHT_ROWS, VISIT_DEDUPE_SECONDS, VISIT_SOURCES, VisitSource,
+  conversionRate, counterKey, dedupeKey, highlightKey, isBotUserAgent, isHex24, parseCounterKey, parseHighlightKey, parseTermKey,
+  pktDateOf, pktDayStartOf, sanitizeHighlightRow, sanitizeSource, sanitizeTerm, sessionHash, termKey, visitSecret,
 } from './visit-tracking.util';
 
-export type RecordViewInput = { ip: string; ua: string; type: unknown; id: unknown; source?: unknown; term?: unknown; now?: Date };
+export type RecordViewInput = { ip: string; ua: string; type: unknown; id: unknown; source?: unknown; term?: unknown; row?: unknown; now?: Date };
 
 @Injectable()
 export class VisitsService {
@@ -34,6 +35,8 @@ export class VisitsService {
     @InjectModel(Product.name) private readonly productModel: Model<any>,
     @InjectModel(Store.name) private readonly storeModel: Model<any>,
     @Optional() private readonly entitlements?: EntitlementsService,
+    @Optional() @InjectModel(HighlightDaily.name) private readonly highlightModel?: Model<HighlightDaily>,
+    @Optional() @InjectModel(StoreFollower.name) private readonly followerModel?: Model<any>,
   ) {}
 
   // ── Recording (public beacon) ───────────────────────────────────────────
@@ -47,6 +50,7 @@ export class VisitsService {
   }
 
   private async recordInner(input: RecordViewInput): Promise<boolean> {
+    if (input.type === 'highlight_click') return this.recordHighlightClick(input);
     const kind = input.type === 'store' ? 'store' : input.type === 'product' ? 'product' : null;
     if (!kind || !isHex24(input.id)) return false;
     if (isBotUserAgent(input.ua)) return false;
@@ -73,6 +77,23 @@ export class VisitsService {
     // the same session also counts once as a visit to the store
     const storeFresh = await this.redis.setNx(dedupeKey(hash, 'store', storeId), VISIT_DEDUPE_SECONDS);
     if (storeFresh) await this.countStoreVisit(pktDate, storeId, source, term);
+    return true;
+  }
+
+  /** A buyer opened a product from one of the store page's highlight rows. `id` = the product; its store is resolved here
+   *  (a client can never credit a different store). Same anonymous session hash + 30 min dedupe as visits, per (row, product). */
+  private async recordHighlightClick(input: RecordViewInput): Promise<boolean> {
+    const row = sanitizeHighlightRow(input.row);
+    if (!row || !isHex24(input.id)) return false;
+    if (isBotUserAgent(input.ua)) return false;
+    if (!this.redis.isConnected) return false;
+    const pktDate = pktDateOf(input.now ?? new Date());
+    const hash = sessionHash(input.ip || '', input.ua, pktDate, visitSecret());
+    const storeId = await this.storeOfProduct(input.id);
+    if (!storeId) return false;
+    const fresh = await this.redis.setNx(dedupeKey(hash, 'hl', `${row}:${input.id}`), VISIT_DEDUPE_SECONDS);
+    if (!fresh) return false;
+    await this.redis.incrBy(highlightKey(pktDate, storeId, row), 1, COUNTER_TTL_SECONDS);
     return true;
   }
 
@@ -117,10 +138,17 @@ export class VisitsService {
       const n = Number(await this.redis.getDel(key));
       if (Number.isFinite(n) && n > 0) terms.push({ key, n, parsed });
     }
-    if (!counters.length && !terms.length) return { visitRows: 0, termRows: 0 };
+    const clicks: { key: string; n: number; parsed: NonNullable<ReturnType<typeof parseHighlightKey>> }[] = [];
+    for (const key of await this.redis.scanKeys('av:h:*')) {
+      const parsed = parseHighlightKey(key);
+      if (!parsed) continue;
+      const n = Number(await this.redis.getDel(key));
+      if (Number.isFinite(n) && n > 0) clicks.push({ key, n, parsed });
+    }
+    if (!counters.length && !terms.length && !clicks.length) return { visitRows: 0, termRows: 0 };
 
     try {
-      const ids = [...new Set([...counters.map((c) => c.parsed.storeId), ...terms.map((t) => t.parsed.storeId)])];
+      const ids = [...new Set([...counters.map((c) => c.parsed.storeId), ...terms.map((t) => t.parsed.storeId), ...clicks.map((c) => c.parsed.storeId)])];
       const found = new Set((await this.storeModel.find({ _id: { $in: ids } }).select('_id').lean()).map((s: any) => String(s._id)));
       const vOps = counters.filter((c) => found.has(c.parsed.storeId)).map((c) => ({
         updateOne: {
@@ -138,10 +166,19 @@ export class VisitsService {
       }));
       if (vOps.length) await this.visitModel.bulkWrite(vOps as any, { ordered: false });
       if (tOps.length) await this.termModel.bulkWrite(tOps as any, { ordered: false });
+      const hOps = clicks.filter((c) => found.has(c.parsed.storeId)).map((c) => ({
+        updateOne: {
+          filter: { storeId: c.parsed.storeId, pktDate: c.parsed.pktDate, row: c.parsed.row },
+          update: { $inc: { clicks: c.n } },
+          upsert: true,
+        },
+      }));
+      if (hOps.length && this.highlightModel) await this.highlightModel.bulkWrite(hOps as any, { ordered: false });
       return { visitRows: vOps.length, termRows: tOps.length };
     } catch (err) {
       for (const c of counters) await this.redis.incrBy(c.key, c.n, COUNTER_TTL_SECONDS).catch(() => undefined);
       for (const t of terms) await this.redis.incrBy(t.key, t.n, COUNTER_TTL_SECONDS).catch(() => undefined);
+      for (const h of clicks) await this.redis.incrBy(h.key, h.n, COUNTER_TTL_SECONDS).catch(() => undefined);
       throw err;
     }
   }
@@ -198,6 +235,45 @@ export class VisitsService {
         paidOrders,
         conversionRate: conversionRate(paidOrders, visits),
         pro,
+      },
+    };
+  }
+
+  /** Customize Store insights (free for every plan): store visits, new followers and highlight-row clicks, last 7 or 30 PKT days. */
+  async getPageInsights(sellerId: string, storeId: string | undefined, days: unknown) {
+    if (!isHex24(storeId)) throw new BadRequestException('storeId is required');
+    const d = days === undefined || days === '' ? 7 : Number(days);
+    if (d !== 7 && d !== 30) throw new BadRequestException('days must be 7 or 30');
+    await verifyStoreOwnershipOrForbidden(this.storeModel, storeId, sellerId);
+    const { from, to } = resolveDateRange({ range: d === 7 ? '7d' : '30d' }, { pkt: true });
+    const fromDate = pktDateOf(from);
+    const toDate = pktDateOf(to);
+
+    const first: any = await this.visitModel.findOne({ storeId }).sort({ pktDate: 1 }).select('pktDate').lean();
+    const [visitRows, clickRows, newFollowers] = await Promise.all([
+      this.visitModel.aggregate([
+        { $match: { storeId, productId: '', pktDate: { $gte: fromDate, $lte: toDate } } },
+        { $group: { _id: null, visits: { $sum: '$visits' } } },
+      ]),
+      this.highlightModel
+        ? this.highlightModel.aggregate([
+            { $match: { storeId, pktDate: { $gte: fromDate, $lte: toDate } } },
+            { $group: { _id: '$row', clicks: { $sum: '$clicks' } } },
+          ])
+        : Promise.resolve([] as any[]),
+      // follow records carry their creation time; someone who unfollowed again is no longer a record, so this is NET new followers
+      this.followerModel ? this.followerModel.countDocuments({ storeId, createdAt: { $gte: from, $lte: to } }) : Promise.resolve(0),
+    ]);
+    const byRow = Object.fromEntries(HIGHLIGHT_ROWS.map((r) => [r, (clickRows as any[]).find((x) => x._id === r)?.clicks ?? 0])) as Record<(typeof HIGHLIGHT_ROWS)[number], number>;
+    return {
+      success: true,
+      data: {
+        days: d,
+        range: { from: fromDate, to: toDate },
+        trackingSince: first?.pktDate ?? null,
+        visits: (visitRows as any[])[0]?.visits ?? 0,
+        newFollowers,
+        highlightClicks: { total: HIGHLIGHT_ROWS.reduce((s, r) => s + byRow[r], 0), byRow },
       },
     };
   }

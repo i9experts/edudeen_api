@@ -26,6 +26,7 @@ export class VisitsBeaconController {
       id: b.id,
       source: b.source,
       term: b.term,
+      row: b.row,
     });
   }
 }
@@ -42,6 +43,12 @@ export class VisitsStatsController {
   @Get('visits')
   getVisits(@Req() req: any, @Query() query: AnalyticsQueryDto) {
     return this.visits.getStats(req.user.userId, query.storeId, query);
+  }
+
+  /** Customize Store insights card: ?storeId=&days=7|30 */
+  @Get('page-insights')
+  getPageInsights(@Req() req: any, @Query('storeId') storeId?: string, @Query('days') days?: string) {
+    return this.visits.getPageInsights(req.user.userId, storeId, days);
   }
 }
 

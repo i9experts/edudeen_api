@@ -35,6 +35,8 @@ import { CollectionsService } from '../collections/collections.service';
 import { featuredStoreFilter, featuredScore, selectFeatured } from './featured-stores.util';
 import { publicTrust, TRUST_MIN_SAMPLES } from '../messaging/response-stats.util';
 import { parseCatalogParams, classFacetCounts } from './store-catalog-query.util';
+import { cleanFaqs, cleanShippingNote } from './store-policies.util';
+import { cleanEducatorProfile } from './store-page.util';
 
 // Store slugs render at the site root (`edudeen.com/:slug`) — these are the
 // frontend's top-level static route segments (router/index.tsx), reserved so
@@ -695,30 +697,13 @@ export class StoreService {
 
     // Teacher profile shown on the store page and product pages.
     if (body.educatorProfile !== undefined) {
-      const p = body.educatorProfile;
-      if (p === null) updateData.educatorProfile = null;
-      else {
-        if (typeof p !== 'object' || Array.isArray(p)) throw new BadRequestException('educatorProfile must be an object');
-        const list = (v: unknown, field: string, maxItems: number) => {
-          if (v === undefined || v === null) return [];
-          if (!Array.isArray(v) || v.length > maxItems) throw new BadRequestException(`${field} can have at most ${maxItems} items`);
-          return v.map((s) => { text(s, field, 120, { required: true }); return (s as string).trim(); });
-        };
-        if (p.headline !== undefined && p.headline !== null) text(p.headline, 'headline', 160);
-        const years = p.experienceYears;
-        if (years !== undefined && years !== null && (typeof years !== 'number' || !Number.isInteger(years) || years < 0 || years > 70)) {
-          throw new BadRequestException('experienceYears must be a whole number from 0 to 70');
-        }
-        updateData.educatorProfile = {
-          headline: p.headline?.trim() || null,
-          qualifications: list(p.qualifications, 'qualifications', 10),
-          experienceYears: years ?? null,
-          subjects: list(p.subjects, 'subjects', 15),
-          institutions: list(p.institutions, 'institutions', 10),
-          teachingLevels: list(p.teachingLevels, 'teachingLevels', 10),
-        };
-      }
+      // Shared with the Customize-store draft (store-page.util). Not sent introVideoUrl = keep the stored video.
+      updateData.educatorProfile = cleanEducatorProfile(body.educatorProfile, (store as any).educatorProfile?.introVideoUrl);
     }
+
+    // Seller shipping note + FAQ for the public store page (plain text; platform rules are unaffected).
+    if (body.shippingNote !== undefined) updateData.shippingNote = cleanShippingNote(body.shippingNote);
+    if (body.faqs !== undefined) updateData.faqs = cleanFaqs(body.faqs);
 
     // Seller-stated return policy (advisory; shown on product pages).
     if (body.returnPolicy !== undefined) {
@@ -983,6 +968,8 @@ export class StoreService {
         badges: store.badges ?? [],
         educatorProfile: store.educatorProfile ?? null,
         returnPolicy: store.returnPolicy ?? null,
+        shippingNote: store.shippingNote ?? null,
+        faqs: store.faqs ?? [],
         responseStats: store.responseStats?.medianReplyMinutes != null && store.responseStats.sampleSize >= TRUST_MIN_SAMPLES
           ? { medianReplyMinutes: store.responseStats.medianReplyMinutes, sampleSize: store.responseStats.sampleSize }
           : null,
