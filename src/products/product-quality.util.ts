@@ -180,6 +180,88 @@ export function listingQuality(i: QualityInput): QualityResult {
   return { score: possible > 0 ? Math.round((earned / possible) * 100) : 0, missing };
 }
 
+// ── Search visibility score (read-time only; reuses the title/description/image rules above) ───────────
+export const SEARCH_WEIGHTS = { title: 20, description: 20, images: 15, classRange: 15, subject: 10, language: 10, board: 10 } as const;
+export const SEARCH_TITLE_MIN = 30;
+export const SEARCH_TITLE_MAX = 60;
+export const SEARCH_DESC_MIN = 150;
+
+/** Where the "Fix" button sends the seller inside the product edit wizard. */
+export type SearchFixTarget = { step: number; fieldId: string };
+export type SearchCheckKey = keyof typeof SEARCH_WEIGHTS;
+export interface SearchMissing { key: SearchCheckKey; label: string; fix: SearchFixTarget }
+
+export interface SearchInput {
+  name?: string | null;
+  description?: string | null;
+  /** Custom search-result title/description (product.seo). Blank = the product title/description are used instead. */
+  seoTitle?: string | null;
+  seoDescription?: string | null;
+  isPhysical: boolean;
+  imageCount: number;
+  classFrom?: string | null;
+  classTo?: string | null;
+  hasSubject: boolean;
+  language?: string | null;
+  boardCount: number;
+}
+
+const plain = (s: unknown) => String(s ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+
+const FIX = {
+  title: { step: 0, fieldId: 'ap-name' },
+  seoTitle: { step: 0, fieldId: 'fld-seo' },
+  description: { step: 0, fieldId: 'ap-desc' },
+  seoDescription: { step: 0, fieldId: 'fld-seo' },
+  images: { step: 1, fieldId: 'fld-photos' },
+  learning: { step: 3, fieldId: 'fld-learning' },
+  subject: { step: 3, fieldId: 'fld-category' },
+} as const;
+
+/**
+ * 0-100 "how findable is this product" + what is missing. The text checked is the text Google would show:
+ * the custom SEO title/description when the seller wrote one, else the product's own title/description
+ * (so a product with blank SEO fields is NOT scored 0). Checks that do not apply (class range, board for physical goods)
+ * are dropped and the score re-scaled. Pure.
+ */
+export function searchVisibility(i: SearchInput): { score: number; missing: SearchMissing[] } {
+  const W = SEARCH_WEIGHTS;
+  let earned = 0;
+  let possible = 0;
+  const missing: SearchMissing[] = [];
+  const add = (key: SearchCheckKey, got: number, label: string | null, fix: SearchFixTarget) => {
+    possible += W[key];
+    earned += W[key] * Math.max(0, Math.min(1, got));
+    if (label && got < 1) missing.push({ key, label, fix });
+  };
+
+  const custom = plain(i.seoTitle);
+  const title = custom || plain(i.name);
+  const tFix = custom ? FIX.seoTitle : FIX.title;
+  const tl = title.length;
+  if (tl === 0) add('title', 0, 'Add a title', FIX.title);
+  else if (tl < SEARCH_TITLE_MIN) add('title', tl >= MIN_TITLE_LENGTH ? 0.5 : 0.2, `Make the title longer (${tl} characters, ${SEARCH_TITLE_MIN}-${SEARCH_TITLE_MAX} is best)`, tFix);
+  else if (tl > SEARCH_TITLE_MAX) add('title', 0.7, `Shorten the title (${tl} characters, Google cuts it after ${SEARCH_TITLE_MAX})`, tFix);
+  else add('title', !custom && vagueTitleWarning(title) ? 0.7 : 1, !custom && vagueTitleWarning(title) ? 'Say more in the title (what it is, who it is for)' : null, tFix);
+
+  const customDesc = plain(i.seoDescription);
+  const desc = customDesc || plain(i.description);
+  const dFix = customDesc ? FIX.seoDescription : FIX.description;
+  const dl = desc.length;
+  add('description', dl >= SEARCH_DESC_MIN ? 1 : dl >= 100 ? 0.7 : dl >= 20 ? 0.4 : 0,
+    dl === 0 ? 'Add a description' : `Write a longer description (${dl} characters, ${SEARCH_DESC_MIN}+ is best)`, dFix);
+
+  const img = Math.max(0, i.imageCount | 0);
+  add('images', img >= 3 ? 1 : img === 2 ? 0.66 : img === 1 ? 0.33 : 0, img === 0 ? 'Add photos' : `Add more photos (${img} now, 3+ is best)`, FIX.images);
+
+  if (!i.isPhysical) add('classRange', i.classFrom || i.classTo ? 1 : 0, 'Set the class range', FIX.learning);
+  add('subject', i.hasSubject ? 1 : 0, 'Pick the subject (sub-category)', FIX.subject);
+  add('language', i.language ? 1 : 0, 'Say which language it is in', FIX.learning);
+  if (!i.isPhysical) add('board', i.boardCount > 0 ? 1 : 0, 'Pick the exam board / syllabus', FIX.learning);
+
+  return { score: possible > 0 ? Math.round((earned / possible) * 100) : 0, missing };
+}
+
 /** All non-blocking warnings for a title + class range (returned to the seller in the create/update response). */
 export function productWarnings(title: string, classFrom?: string | null, classTo?: string | null): string[] {
   return [vagueTitleWarning(title), titleClassConflict(title, classFrom, classTo)].filter((w): w is string => !!w);

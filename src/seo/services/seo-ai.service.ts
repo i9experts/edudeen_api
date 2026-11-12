@@ -13,6 +13,8 @@ import { PlatformSeoService } from './platform-seo-settings.service';
 
 import { clampInt } from 'src/common/query-safety.util';
 export const AI_SEO_SUGGESTION_CREDIT_COST = 5;
+/** One-product draft in the product editor (not saved until the seller saves). */
+export const AI_SEARCH_DRAFT_CREDIT_COST = 1;
 
 /**
  * Orchestrates `ISeoAiProvider` (currently `AnthropicSeoAiProvider`, selected
@@ -100,6 +102,65 @@ export class SeoAiService {
     });
 
     return suggestion;
+  }
+
+  /**
+   * Draft a search title + description for ONE product and return it WITHOUT saving (the seller edits it, then saves).
+   * 1 AI credit, refunded when the model call fails. Same gates as `generate` (platform switch, plan entitlement, credits).
+   */
+  async draftProduct(
+    productId: string,
+    language: 'en' | 'ur',
+    storeId: string,
+    sellerId: string,
+    actor: { id: string; name?: string; role?: string },
+  ) {
+    const settings = await this.platformSeoService.getSettings();
+    if (!settings.aiSeoEnabled) throw new ForbiddenException('AI writing is currently switched off.');
+
+    const context = await this.seoContent.getEntityContext('product', productId);
+    if (context.storeId !== storeId || context.sellerId !== sellerId) throw new ForbiddenException('You do not own this product.');
+
+    await this.entitlements.assertFeatureAllowed(storeId, 'seoAiSuggestionsAllowed', 'AI-generated SEO suggestions');
+    await this.aiCredits.deduct(storeId, sellerId, AI_SEARCH_DRAFT_CREDIT_COST, `AI search text draft — product ${productId}`);
+
+    let suggestion;
+    try {
+      suggestion = await this.aiProvider.generateSuggestion({
+        entityType: 'product',
+        name: context.name,
+        description: context.description,
+        categoryName: context.categoryName,
+        storeName: context.storeName,
+        language,
+        facts: await this.productFacts(productId),
+      });
+    } catch (err) {
+      await this.aiCredits
+        .grant(storeId, sellerId, AI_SEARCH_DRAFT_CREDIT_COST, `AI search text draft refund — failed (product ${productId})`)
+        .catch(() => undefined);
+      throw err;
+    }
+
+    await this.activityLog.log({
+      storeId, category: 'seo', action: 'seo_ai_draft_generated',
+      description: `AI search text drafted for product "${context.name}"`,
+      actorId: actor.id, actorName: actor.name ?? null, actorRole: actor.role ?? null,
+      targetId: productId, targetType: 'product_seo',
+      metadata: { creditsCost: AI_SEARCH_DRAFT_CREDIT_COST, language },
+    });
+
+    return { metaTitle: suggestion.metaTitle, metaDescription: suggestion.metaDescription, creditsCost: AI_SEARCH_DRAFT_CREDIT_COST };
+  }
+
+  private async productFacts(productId: string): Promise<string | null> {
+    const p: any = await this.db.repositories.productModel.findById(productId).select('classFrom classTo language curricula').lean();
+    if (!p) return null;
+    const parts: string[] = [];
+    if (p.classFrom || p.classTo) parts.push(`class range ${p.classFrom ?? p.classTo} to ${p.classTo ?? p.classFrom}`);
+    if (p.language) parts.push(`language ${p.language}`);
+    if (Array.isArray(p.curricula) && p.curricula.length) parts.push(`board ${p.curricula.join(', ')}`);
+    return parts.length ? parts.join('; ') : null;
   }
 
   async getSuggestionHistory(storeId: string, query: { page?: number; limit?: number }) {

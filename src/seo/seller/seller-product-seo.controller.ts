@@ -40,6 +40,13 @@ export class SellerProductSeoController {
     res.send(csv);
   }
 
+  /** Search-visibility list (products that still need something). Declared before `:productId`. */
+  @Get('visibility')
+  async visibility(@Req() req: any, @Param('storeId') storeId: string, @Query() query: any) {
+    await verifyStoreOwnershipStrict(this.db.repositories.storeModel, storeId, req.user.userId);
+    return this.seoContent.listSearchVisibility(storeId, query);
+  }
+
   @Get()
   async list(@Req() req: any, @Param('storeId') storeId: string, @Query() query: any) {
     await verifyStoreOwnershipStrict(this.db.repositories.storeModel, storeId, req.user.userId);

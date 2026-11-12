@@ -74,9 +74,17 @@ function buildPrompt(input: SeoAiSuggestionInput): string {
     input.description ? `Description: ${input.description}` : null,
     input.categoryName ? `Category: ${input.categoryName}` : null,
     input.storeName ? `Store: ${input.storeName}` : null,
+    input.facts ? `Facts: ${input.facts}` : null,
   ].filter(Boolean).join('\n');
 
-  return `You are an SEO copywriter for an e-commerce marketplace. Given the following ${input.entityType} details, write:
+  const langLine = input.language === 'ur'
+    ? 'Write metaTitle and metaDescription in clear, natural Urdu (Urdu script). Keep keywords in Urdu and English.\n'
+    : 'Write in clear, simple English.\n';
+  const tone = input.entityType === 'product'
+    ? 'This is an education marketplace for parents, teachers and students: use a helpful, trustworthy education tone, mention the class/level and subject when known, and never invent facts, prices or claims.\n'
+    : '';
+
+  return `You are an SEO copywriter for an education marketplace. ${langLine}${tone}Given the following ${input.entityType} details, write:
 - metaTitle: a compelling, keyword-rich page title, 50-60 characters
 - metaDescription: an enticing meta description, 140-160 characters, that encourages clicks
 - keywords: 5-10 relevant search keywords/phrases

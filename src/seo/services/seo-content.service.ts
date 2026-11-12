@@ -6,6 +6,7 @@ import { SeoResolutionService } from './seo-resolution.service';
 import { UpdateSeoMetaDto } from '../dto/update-seo-meta.dto';
 import { assertSafeSeoDestination, pickSeoMeta } from './seo-url-safety.util';
 import { toCsv } from 'src/analytics/utils/csv.util';
+import { searchVisibility } from 'src/products/product-quality.util';
 
 import { clampInt } from 'src/common/query-safety.util';
 /**
@@ -136,6 +137,47 @@ export class SeoContentService {
       completeness: computeSeoCompleteness(p.seo),
     }));
     return { items: withCompleteness, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+  }
+
+  /**
+   * Search-visibility list: every product of the store that still has something missing, lowest score first.
+   * Scored at read time from the real content (`searchVisibility`); nothing is stored. No product cap (streamed).
+   */
+  async listSearchVisibility(storeId: string, query: { page?: number; limit?: number }) {
+    const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
+    const limit = Math.min(50, Math.max(1, clampInt(query.limit, 20, 1, 50)));
+    // Stream the WHOLE store (no cap): only products that still need something are kept in memory,
+    // so a store with thousands of listings is scored completely and the weakest ones are never dropped.
+    const cursor = this.db.repositories.productModel
+      .find({ storeId, isDelete: false, isTest: { $ne: true } })
+      .select('name slug type productType images description classFrom classTo subCategoryId language curricula seo')
+      .lean()
+      .cursor();
+
+    const needFix: Array<{ _id: string; name: string; slug: string; image: string | null; score: number; missing: any[] }> = [];
+    let totalProducts = 0;
+    let scoreSum = 0;
+    for await (const p of cursor as AsyncIterable<any>) {
+      const r = searchVisibility({
+        name: p.name, description: p.description, seoTitle: p.seo?.metaTitle, seoDescription: p.seo?.metaDescription,
+        isPhysical: p.type === 'physical' || p.productType === 'physical',
+        imageCount: Array.isArray(p.images) ? p.images.filter(Boolean).length : 0,
+        classFrom: p.classFrom, classTo: p.classTo, hasSubject: !!p.subCategoryId,
+        language: p.language, boardCount: Array.isArray(p.curricula) ? p.curricula.length : 0,
+      });
+      totalProducts += 1;
+      scoreSum += r.score;
+      if (r.missing.length > 0) {
+        needFix.push({ _id: String(p._id), name: p.name, slug: p.slug, image: p.images?.[0] ?? null, score: r.score, missing: r.missing });
+      }
+    }
+    needFix.sort((a, b) => a.score - b.score || a._id.localeCompare(b._id));
+    const avgScore = totalProducts ? Math.round(scoreSum / totalProducts) : null;
+    return {
+      items: needFix.slice((page - 1) * limit, page * limit),
+      pagination: { page, limit, total: needFix.length, pages: Math.ceil(needFix.length / limit) },
+      summary: { totalProducts, needFix: needFix.length, avgScore },
+    };
   }
 
   async getProductSeo(storeId: string, productId: string) {

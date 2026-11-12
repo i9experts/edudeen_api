@@ -4,6 +4,10 @@ export interface SeoAiSuggestionInput {
   description?: string | null;
   categoryName?: string | null;
   storeName?: string | null;
+  /** Output language for the title/description. Default English. */
+  language?: 'en' | 'ur';
+  /** Extra education facts (class range, language, board) so the text says who the product is for. */
+  facts?: string | null;
 }
 
 export interface SeoAiSuggestion {
