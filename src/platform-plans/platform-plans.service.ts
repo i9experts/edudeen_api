@@ -240,9 +240,10 @@ export class PlatformPlansService {
     if (role === 'seller') email = (await sellerModel.findById(userId).select('email').lean() as any)?.email;
     else if (role === 'user') email = (await userModel.findById(userId).select('email').lean() as any)?.email;
     const seller = email ? await sellerModel.findOne({ email }).select('freeTrialUsedAt').lean() : null;
+    const trialUsedAt = (seller as any)?.freeTrialUsedAt ?? null;
     // hasSellerAccount: this email already owns a seller account (so the UI offers 'Switch to your store' instead of 'Become a seller').
     const buyer = email ? await userModel.findOne({ email, isDelete: { $ne: true }, status: { $nin: ['deleted', 'suspended'] } }).select('_id').lean() : null;
-    return { success: true, data: { eligible: !(seller as any)?.freeTrialUsedAt, hasSellerAccount: !!seller, hasBuyerAccount: !!buyer } };
+    return { success: true, data: { eligible: !trialUsedAt, trialUsedAt, hasSellerAccount: !!seller, hasBuyerAccount: !!buyer } };
   }
 
   async browsePlans() {

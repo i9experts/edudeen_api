@@ -177,10 +177,12 @@ export class EntitlementsService {
     // render the pricing table keep working.
     const staffCount = 0;
     const posLocationCount = 0;
-    const [productCount, aiWallet, allActivePlans] = await Promise.all([
+    const [productCount, aiWallet, allActivePlans, promotionsInProgress] = await Promise.all([
       this.db.repositories.productModel.countDocuments({ storeId, isDelete: false }),
       this.db.repositories.aiCreditsWalletModel.findOne({ storeId }).lean(),
       this.planModel.find({ status: 'active', isDelete: false }).sort({ sortOrder: 1 }).lean(),
+      // Same statuses `assertCanCreatePromotion` counts, so the meter equals the real gate.
+      this.db.repositories.promotionRequestModel.countDocuments({ storeId, status: { $in: ['pending', 'approved', 'active'] } }),
     ]);
 
     const cheapestWith = (feature: keyof PlatformPlanLimits) =>
@@ -207,6 +209,10 @@ export class EntitlementsService {
       maxPosLocations: {
         limit: limits.maxPosLocations, used: posLocationCount,
         allowed: limits.maxPosLocations === -1 || posLocationCount < limits.maxPosLocations,
+      },
+      maxActivePromotions: {
+        limit: limits.maxActivePromotions, used: promotionsInProgress,
+        allowed: limits.maxActivePromotions === -1 || promotionsInProgress < limits.maxActivePromotions,
       },
       aiCredits: {
         monthlyAllowance: limits.aiCreditsPerMonth,

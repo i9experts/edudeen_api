@@ -577,6 +577,14 @@ export class Store {
     introVideoUrl?: string | null;
   } | null;
 
+  // Storefront chips from FIXED lists (store/store-page.util.ts). Set through the Customize-store draft; Publish copies them here.
+  @Prop({ type: [String], default: [] })
+  gradesServed: string[];
+  @Prop({ type: [String], default: [] })
+  subjects: string[];
+  @Prop({ type: [String], default: [] })
+  teachingLanguages: string[];
+
   // Seller's own shipping text for the public store page (plain text, max 500). Cannot change real shipping rules.
   @Prop({ type: String, default: null })
   shippingNote: string | null;
@@ -584,6 +592,11 @@ export class Store {
   // Seller FAQ shown on the public store page (max 8, ordered).
   @Prop({ type: [Object], default: [] })
   faqs: Array<{ q: string; a: string }>;
+
+  // Store on holiday (see store-holiday.util.ts). Physical orders pause; digital follows `digitalStillSells`.
+  // Absent on old stores = no holiday. Not the announcement-bar type 'holiday'.
+  @Prop({ type: Object, default: null })
+  holiday: { enabled: boolean; returnDate: Date | null; message: string | null; digitalStillSells: boolean } | null;
 
   @Prop({ default: false })
   isDelete: boolean;

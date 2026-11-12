@@ -9,6 +9,7 @@ import { isValidObjectId } from 'mongoose';
 import { hasStarted, couponScope, lineMatchesCoupon } from '../marketing/coupon-rules.util';
 import { getDescendantIds } from '../categories/category-tree.util';
 import { licenseFromVariant } from 'src/products/product-input.util';
+import { holidayBlocks, holidayRefusal } from 'src/store/store-holiday.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { MarketingService } from 'src/marketing/marketing.service';
 import { campaignsForProduct } from 'src/marketing/campaign-eligibility.util';
@@ -260,7 +261,7 @@ export class CheckoutService {
     const prefetchStoreIds = [...new Set([...pricedProducts.map((p: any) => String(p.storeId)), String(storeId)])];
     const sellerIds = [...new Set(pricedProducts.map((p: any) => p.sellerId).filter(Boolean))];
     const [storeDocs, sellers] = await Promise.all([
-      storeModel.find({ _id: { $in: prefetchStoreIds } }).select('status isDelete codEnabled directPayment name slug premiumDiscount').lean(),
+      storeModel.find({ _id: { $in: prefetchStoreIds } }).select('status isDelete codEnabled directPayment name slug premiumDiscount holiday').lean(),
       sellerIds.length
         ? this.databaseService.repositories.sellerModel.find({ _id: { $in: sellerIds } }).select('name isVerified').lean()
         : Promise.resolve([] as any[]),
@@ -301,6 +302,14 @@ export class CheckoutService {
         throw new BadRequestException(
           `"${product.name}" is no longer available for purchase because the seller's store is not active. Please remove it from your cart.`,
         );
+      }
+
+      // Store on holiday (read-only gate, no payment logic): physical lines - and digital ones when the seller paused
+      // them too - cannot be checked out. Covers the cart, unified checkout and Buy Now (all enter through here).
+      // Orders already placed are never touched. Thrown (not skipped) so the buyer is told which item to remove.
+      const holidayStore = storeDocById.get(String(product.storeId));
+      if (holidayBlocks(holidayStore?.holiday, product.type)) {
+        throw new BadRequestException(holidayRefusal(product.name, holidayStore.holiday));
       }
 
       const variant = variantById.get(String(cartItem.productVariantId));

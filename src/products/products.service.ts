@@ -54,7 +54,8 @@ import { assertPremiumGap } from 'src/premium/premium-gap';
 import { premiumPercentFor } from 'src/premium/premium.util';
 
 import { clampInt } from 'src/common/query-safety.util';
-import { resolveStoreNames } from './store-name.util';
+import { resolveStoreNames, resolveStoreHolidays } from './store-name.util';
+import { publicHoliday } from '../store/store-holiday.util';
 import { FuzzyIndex, buildAllWordsFilter, relevanceTier } from 'src/search/search-terms.util';
 
 /** Prices arrive on `body: any` endpoints, so they are checked here rather
@@ -841,7 +842,7 @@ export class ProductsService {
     const sellerIds = [
       ...new Set(products.map((p) => p.sellerId).filter(Boolean)),
     ];
-    const [variants, sellers, storeNameMap] = await Promise.all([
+    const [variants, sellers, storeNameMap, holidayMap] = await Promise.all([
       productVariantModel
         .find({
           productId: { $in: productIds },
@@ -857,6 +858,7 @@ export class ProductsService {
         this.databaseService.repositories.storeModel,
         storeIds as string[],
       ),
+      resolveStoreHolidays(this.databaseService.repositories.storeModel, storeIds as string[]),
     ]);
 
     const variantMap: Record<string, any[]> = {};
@@ -878,6 +880,7 @@ export class ProductsService {
           // Buyers see the STORE, never the seller's personal name (seller name only if a store name is missing).
           sellerName: storeNameMap.get(String(p.storeId)) ?? (seller ? seller.name : null),
           storeName: storeNameMap.get(String(p.storeId)) ?? null,
+          storeHoliday: holidayMap.get(String(p.storeId)) ?? null,
           sellerVerified: seller ? !!seller.isVerified : false,
           variants: variantMap[p._id.toString()] || [],
         });
@@ -957,6 +960,7 @@ export class ProductsService {
       this.databaseService.repositories.storeModel,
       storeIds as string[],
     );
+    const holidayMap = await resolveStoreHolidays(this.databaseService.repositories.storeModel, storeIds as string[]);
 
     return this.withPremium(await this.attachCampaignBadges(
       (await this.attachCourseSummary(products)).map((p) => {
@@ -966,6 +970,7 @@ export class ProductsService {
           // Buyers see the STORE, never the seller's personal name (seller name only if a store name is missing).
           sellerName: storeNameMap.get(String(p.storeId)) ?? (seller ? seller.name : null),
           storeName: storeNameMap.get(String(p.storeId)) ?? null,
+          storeHoliday: holidayMap.get(String(p.storeId)) ?? null,
           sellerVerified: seller ? !!seller.isVerified : false,
           variants: variantMap[p._id.toString()] || [],
         });
@@ -1431,7 +1436,7 @@ export class ProductsService {
         .lean(),
       storeModel
         .findOne({ _id: product.storeId, isDelete: false })
-        .select('slug name logo followersCount status')
+        .select('slug name logo followersCount status holiday')
         .lean(),
       productVariantModel
         .find({
@@ -1469,6 +1474,8 @@ export class ProductsService {
         storeName: store ? store.name : null,
         storeLogo: store ? store.logo : null,
         storeFollowersCount: store ? (store.followersCount ?? 0) : 0,
+        // Only the 4 public holiday fields, and only while a holiday is in force.
+        storeHoliday: publicHoliday(store),
       }),
     ], customerId);
     const { variants: campaignVariants, ...productWithSeller } = withCampaign as any;

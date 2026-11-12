@@ -21,6 +21,7 @@ import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { AdminFinanceService } from 'src/admin-finance/admin-finance.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { notifyProductPublished } from 'src/products/product-schedule-notify.util';
+import { endExpiredHolidays } from 'src/store/store-holiday.job';
 
 @Injectable()
 export class SchedulerService {
@@ -124,6 +125,20 @@ export class SchedulerService {
         notifyProductPublished(this.notificationsService, p);
       }
       if (published > 0) { this.logger.log(`Scheduled products published: ${published}`); this.realtime?.emit('products'); }
+    });
+  }
+
+  // Every minute — switches a store's holiday off once its return day has started (the cart/checkout gate does not wait for this).
+  @Cron('* * * * *')
+  async endStoreHolidays() {
+    await this.runLocked('end-store-holidays', 50_000, async () => {
+      const ended = await endExpiredHolidays({
+        storeModel: this.databaseService.repositories.storeModel,
+        activityLog: this.activityLogService,
+        notifier: this.notificationsService,
+        realtime: this.realtime,
+      });
+      if (ended > 0) this.logger.log(`Store holidays ended: ${ended}`);
     });
   }
 

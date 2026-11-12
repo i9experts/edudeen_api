@@ -173,13 +173,44 @@ describe('updateStore', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
     await expect(
       svc.updateStore('seller1', OID, { description: 'x'.repeat(5001) }),
-    ).rejects.toThrow(/at most 5000/);
+    ).rejects.toThrow(/at most 1000/);
     await expect(
       svc.updateStore('seller1', OID, { logo: 'javascript:alert(1)' }),
     ).rejects.toThrow(/https URL/);
     await expect(
       svc.updateStore('seller1', OID, { contactEmail: 'nope' }),
     ).rejects.toThrow(/valid email/);
+  });
+
+  it('new limits: name 60, tagline 100, description 1000 (a request that bypasses the form is refused)', async () => {
+    const { svc, repos } = make({ store: liveStore() });
+    await expect(svc.updateStore('seller1', OID, { name: 'n'.repeat(61) })).rejects.toThrow(/at most 60/);
+    await expect(svc.updateStore('seller1', OID, { tagline: 't'.repeat(101) })).rejects.toThrow(/at most 100/);
+    await expect(svc.updateStore('seller1', OID, { description: 'd'.repeat(1001) })).rejects.toThrow(/at most 1000/);
+    expect(repos.storeModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    await expect(svc.updateStore('seller1', OID, { name: 'n'.repeat(60), tagline: 't'.repeat(100), description: 'd'.repeat(1000) })).resolves.toBeDefined();
+  });
+
+  it('contactPhone: "abc" and other junk are refused by the API itself; a valid one is stored as +92...', async () => {
+    const { svc, repos } = make({ store: liveStore() });
+    for (const bad of ['abc', '12345', '+1 555 123 4567', { $ne: 1 }]) {
+      await expect(svc.updateStore('seller1', OID, { contactPhone: bad })).rejects.toBeInstanceOf(BadRequestException);
+    }
+    expect(repos.storeModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    await svc.updateStore('seller1', OID, { contactPhone: '0300 1234567' });
+    expect(JSON.stringify(repos.storeModel.findByIdAndUpdate.mock.calls[0])).toContain('"contactPhone":"+923001234567"');
+  });
+
+  it('a legacy store (3000-char description, free-text phone) can still save other fields when those are sent back unchanged', async () => {
+    const legacyDesc = 'word '.repeat(600).trim();
+    const { svc, repos } = make({ store: liveStore({ description: legacyDesc, contactPhone: 'call the office' }) });
+    await expect(
+      svc.updateStore('seller1', OID, { description: legacyDesc, contactPhone: 'call the office', tagline: 'New line' }),
+    ).resolves.toBeDefined();
+    expect(JSON.stringify(repos.storeModel.findByIdAndUpdate.mock.calls[0])).toContain('"tagline":"New line"');
+    // ...but making the long text even longer, or changing the phone to junk, is refused.
+    await expect(svc.updateStore('seller1', OID, { description: legacyDesc + ' more' })).rejects.toThrow(/at most 1000/);
+    await expect(svc.updateStore('seller1', OID, { contactPhone: 'call the office now' })).rejects.toThrow(/valid Pakistani phone/);
   });
 
   it('deliveryMethod accepts self/courier/auto/null and rejects anything else', async () => {

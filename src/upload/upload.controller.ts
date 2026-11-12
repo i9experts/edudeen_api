@@ -16,6 +16,7 @@ import { UploadedAssetsService } from './uploaded-assets.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { STORE_IMAGE_PURPOSES, assertStoreImage } from '../common/store-image.util';
 
 /** Public upload cap - this route is open to every signed-in account (buyers too), so it stays small. */
 export const PUBLIC_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
@@ -34,8 +35,15 @@ export class UploadController {
     storage: memoryStorage(),
     limits: { fileSize: PUBLIC_UPLOAD_MAX_BYTES }, // any logged-in user: small public files only (sold files use /private-file)
   }))
-  async uploadFile(@UploadedFile() file: Express.Multer.File) {
+  async uploadFile(@UploadedFile() file: Express.Multer.File, @Body('purpose') purpose?: string) {
     if (!file) throw new BadRequestException('No file uploaded');
+    // Optional purpose = extra rules for that kind of image (store logo / cover: type, size, dimensions).
+    // No purpose = the original behaviour, so every other upload is unaffected.
+    if (purpose !== undefined && purpose !== '') {
+      const kind = STORE_IMAGE_PURPOSES[String(purpose)];
+      if (!kind) throw new BadRequestException('Unknown upload purpose');
+      assertStoreImage(file, kind);
+    }
     const result = await this.uploadService.uploadFile(file);
     return { success: true, message: 'File uploaded successfully', data: result };
   }

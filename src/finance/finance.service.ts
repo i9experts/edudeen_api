@@ -1356,6 +1356,34 @@ export class FinanceService {
   }
 
   /**
+   * Plan & Billing "fee estimate" (read-only, writes nothing): what the platform would take from ONE sale of
+   * `price` (store currency, item price only - never shipping) of `type`. Calls the SAME `perTypePlatformFee`
+   * that `recordSale` uses. `fee: null` = Edudeen has not set a fee for that type (UI: "Set by Edudeen").
+   */
+  async estimatePlatformFee(sellerId: string, storeId: string, input: { price: number; type: string; currency?: string }) {
+    const store: any = await this.verifyStoreOwnership(sellerId, storeId);
+    const currency = await this.resolveWalletCurrency(storeId, store, input.currency);
+    const type = input.type === 'physical' ? 'physical' : input.type === 'digital' ? 'digital' : null;
+    if (!type) throw new BadRequestException('type must be digital or physical');
+    const price = Number(input.price);
+    if (!Number.isFinite(price) || price <= 0 || price > 100_000_000) throw new BadRequestException('price must be a positive number');
+    const base = { currency, type, price: this.round(price), generatedAt: new Date().toISOString() };
+    let result: Awaited<ReturnType<FinanceService['perTypePlatformFee']>> = null;
+    const fees: any = typeof this.adminConfigService?.getPlatformFees === 'function'
+      ? await this.adminConfigService.getPlatformFees().catch(() => null) : null;
+    if (!fees?.[type]) return { ...base, fee: null, net: null, reason: 'not_set' as const };
+    try {
+      result = await this.perTypePlatformFee(price, currency, [{ type, totalPrice: price, quantity: 1 }]);
+    } catch {
+      // A fixed fee needs a USD -> currency rate; none known yet, so no number rather than a wrong one.
+      return { ...base, fee: null, net: null, reason: 'rate_unavailable' as const };
+    }
+    if (!result) return { ...base, fee: null, net: null, reason: 'not_set' as const };
+    const fee = result.platformFee;
+    return { ...base, fee, net: this.round(price - fee), reason: null };
+  }
+
+  /**
    * ESTIMATE of money still to come from open orders (nothing is credited yet): unpaid COD packages that
    * Edudeen's courier collects, and paid packages whose sale credit has not been written. Seller-collected
    * COD is NOT counted (the seller holds that cash; only the commission is debited later). The platform fee is

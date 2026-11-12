@@ -11,6 +11,7 @@ import {
   NotFoundException,
   UnauthorizedException,
   ConflictException,
+  Optional,
 } from '@nestjs/common';
 import { promises as dns } from 'dns';
 import { DatabaseService } from 'src/database/databaseservice';
@@ -36,7 +37,9 @@ import { featuredStoreFilter, featuredScore, selectFeatured } from './featured-s
 import { publicTrust, TRUST_MIN_SAMPLES } from '../messaging/response-stats.util';
 import { parseCatalogParams, classFacetCounts } from './store-catalog-query.util';
 import { cleanFaqs, cleanShippingNote } from './store-policies.util';
-import { cleanEducatorProfile } from './store-page.util';
+import { cleanHolidayInput, holidayActive, holidayDateLabel, publicHoliday } from './store-holiday.util';
+import { RealtimeService } from 'src/realtime/realtime.service';
+import { cleanEducatorProfile, cleanStoreContactEmail, cleanStoreContactPhone, cleanStoreProfileText } from './store-page.util';
 
 // Store slugs render at the site root (`edudeen.com/:slug`) — these are the
 // frontend's top-level static route segments (router/index.tsx), reserved so
@@ -73,6 +76,7 @@ export class StoreService {
     private readonly storePagesService: StorePagesService,
     private readonly collectionsService: CollectionsService,
     private readonly uploadedAssets: UploadedAssetsService,
+    @Optional() private readonly realtime?: RealtimeService,
   ) {}
 
   private generateSlug(name: string): string {
@@ -436,6 +440,44 @@ export class StoreService {
     return { success: true, message: 'Announcement bar updated', data: store.announcementBar };
   }
 
+  /**
+   * Holiday mode (owner only). Physical orders pause; digital follows `digitalStillSells`. The cart and checkout
+   * read the stored holiday through `holidayBlocks` (store-holiday.util.ts); nothing here touches payments.
+   * The audit entry is awaited so a switch on/off is never silent.
+   */
+  async setHoliday(sellerId: string, storeId: string, body: any) {
+    const { storeModel } = this.databaseService.repositories;
+    const store: any = await storeModel.findOne({ _id: storeId, isDelete: false }).select('sellerId status holiday').lean();
+    if (!store) throw new NotFoundException('Store not found');
+    if (store.sellerId !== sellerId) throw new UnauthorizedException('You are not authorized to edit this store');
+    if (store.status === 'suspended') throw new BadRequestException('This store is suspended and cannot be edited');
+
+    const next = cleanHolidayInput(body);
+    // Switching off clears the return day; the message and the digital choice are kept so the seller does not retype them.
+    await storeModel.updateOne({ _id: storeId }, { $set: { holiday: next } });
+
+    const wasOn = holidayActive(store.holiday);
+    const isOn = holidayActive(next);
+    if (wasOn !== isOn || (isOn && (store.holiday?.message ?? null) !== next.message)) {
+      await this.activityLogService.log({
+        storeId, category: 'settings', action: isOn ? 'holiday_enabled' : 'holiday_disabled',
+        description: isOn
+          ? `Holiday mode switched on${next.returnDate ? ` until ${holidayDateLabel(next.returnDate)}` : ''}${next.digitalStillSells ? ' (digital products still sell)' : ' (digital products paused too)'}`
+          : 'Holiday mode switched off',
+        actorId: sellerId, actorRole: 'seller', targetId: storeId, targetType: 'store',
+        metadata: { returnDate: next.returnDate, digitalStillSells: next.digitalStillSells },
+      });
+    }
+    // 'storefront' is public so open buyer pages re-read; 'store' is for the seller's own pages.
+    this.realtime?.emit('store', 'storefront');
+
+    return {
+      success: true,
+      message: isOn ? 'Holiday mode is on' : 'Holiday mode is off',
+      data: { enabled: next.enabled, returnDate: next.returnDate ? next.returnDate.toISOString() : null, message: next.message, digitalStillSells: next.digitalStillSells },
+    };
+  }
+
   // seller ke saare stores
   async getMyStores(sellerId: string) {
     const { storeModel, sellerModel, productModel, orderModel } =
@@ -628,14 +670,15 @@ export class StoreService {
       text(v, field, 2048);
       if (!/^https:\/\/[^\s]+$/i.test(v as string)) throw new BadRequestException(`${field} must be an https URL`);
     };
-    if (name !== undefined) text(name, 'name', 120, { required: true });
-    if (description !== undefined && description !== null) text(description, 'description', 5000);
-    if (tagline !== undefined && tagline !== null) text(tagline, 'tagline', 200);
-    if (contactPhone !== undefined && contactPhone !== null) text(contactPhone, 'contactPhone', 32);
-    if (contactEmail !== undefined && contactEmail !== null) {
-      text(contactEmail, 'contactEmail', 254);
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) throw new BadRequestException('contactEmail must be a valid email address');
-    }
+    // Name / tagline / description / phone / e-mail: ONE shared validator (store-page.util), the same one the
+    // Customize Store draft uses. New limits only bite when the value CHANGED, so a legacy store (description up to
+    // 5000 chars, a free-text phone) can still save its other fields. Cleaned values are what get stored.
+    const cleaned: Record<string, string | null> = {};
+    if (name !== undefined) cleaned.name = cleanStoreProfileText('name', name, store.name);
+    if (description !== undefined) cleaned.description = cleanStoreProfileText('description', description, store.description);
+    if (tagline !== undefined) cleaned.tagline = cleanStoreProfileText('tagline', tagline, (store as any).tagline);
+    if (contactPhone !== undefined) cleaned.contactPhone = cleanStoreContactPhone(contactPhone, (store as any).contactPhone);
+    if (contactEmail !== undefined) cleaned.contactEmail = cleanStoreContactEmail(contactEmail, (store as any).contactEmail);
     if (logo !== undefined) httpsUrl(logo, 'logo');
     if (coverImage !== undefined) httpsUrl(coverImage, 'coverImage');
 
@@ -662,16 +705,16 @@ export class StoreService {
     // it's only ever assigned once, at store creation (see createStore
     // above). A silent regeneration here previously broke a seller's DNS
     // subdomain/custom domain the moment they edited their store name.
-    if (name && name !== store.name) {
-      updateData.name = name;
+    if (cleaned.name && cleaned.name !== store.name) {
+      updateData.name = cleaned.name;
     }
 
     if (logo !== undefined) updateData.logo = logo;
     if (coverImage !== undefined) updateData.coverImage = coverImage;
-    if (description !== undefined) updateData.description = description;
-    if (tagline !== undefined) updateData.tagline = tagline;
-    if (contactEmail !== undefined) updateData.contactEmail = contactEmail;
-    if (contactPhone !== undefined) updateData.contactPhone = contactPhone;
+    if (description !== undefined) updateData.description = cleaned.description;
+    if (tagline !== undefined) updateData.tagline = cleaned.tagline;
+    if (contactEmail !== undefined) updateData.contactEmail = cleaned.contactEmail;
+    if (contactPhone !== undefined) updateData.contactPhone = cleaned.contactPhone;
     if (sellerType !== undefined) updateData.sellerType = sellerType;
     if (codEnabled !== undefined) updateData.codEnabled = !!codEnabled;
     // Seller-funded Edudeen Premium member price { enabled, percent 1-50 }; null clears it.
@@ -967,9 +1010,14 @@ export class StoreService {
         sellerType: store.sellerType ?? null,
         badges: store.badges ?? [],
         educatorProfile: store.educatorProfile ?? null,
+        gradesServed: store.gradesServed ?? [],
+        subjects: store.subjects ?? [],
+        teachingLanguages: store.teachingLanguages ?? [],
         returnPolicy: store.returnPolicy ?? null,
         shippingNote: store.shippingNote ?? null,
         faqs: store.faqs ?? [],
+        // Only enabled / returnDate / message / digitalStillSells, and only while a holiday is in force.
+        holiday: publicHoliday(store),
         responseStats: store.responseStats?.medianReplyMinutes != null && store.responseStats.sampleSize >= TRUST_MIN_SAMPLES
           ? { medianReplyMinutes: store.responseStats.medianReplyMinutes, sampleSize: store.responseStats.sampleSize }
           : null,

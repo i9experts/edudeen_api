@@ -71,6 +71,13 @@ export class StoreController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
+  @Patch(':storeId/holiday')
+  async setHoliday(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Body() body: any) {
+    return this.storeService.setHoliday(req.user.userId, storeId, body);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
   @Patch(':storeId/announcement')
   async updateAnnouncementBar(@Req() req: any, @Param('storeId') storeId: string, @Body() body: any) {
     return this.storeService.updateAnnouncementBar(req.user.userId, storeId, body);

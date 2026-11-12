@@ -148,7 +148,7 @@ export class StoreThemeService {
   private async storePageState(storeId: string) {
     const raw: any = await this.storeThemeModel.findOne({ storeId }).select('draft.storePage').lean();
     const store: any = await this.storeModel.findById(storeId)
-      .select('name tagline description logo coverImage aboutBio educatorProfile').lean();
+      .select('name tagline description logo coverImage aboutBio educatorProfile gradesServed subjects teachingLanguages').lean();
     const published = storePageFromStore(store);
     const saved = raw?.draft?.storePage;
     if (!saved) return { draft: published, published, savedAt: null as Date | null };
@@ -232,6 +232,7 @@ export class StoreThemeService {
           $set: {
             name: clean.name, tagline: clean.tagline, description: clean.description, logo: clean.logo ?? '',
             coverImage: clean.coverImage, aboutBio: clean.aboutBio, educatorProfile: clean.educatorProfile,
+            gradesServed: clean.gradesServed, subjects: clean.subjects, teachingLanguages: clean.teachingLanguages,
           },
         }, { session });
         // Draft = live again; the next edit starts from the Store document (so a later direct Store edit is never overwritten).

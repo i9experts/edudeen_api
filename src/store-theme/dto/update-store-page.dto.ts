@@ -14,4 +14,7 @@ export class UpdateStorePageDto {
   @ApiProperty({ required: false, nullable: true }) @IsOptional() coverImage?: string | null;
   @ApiProperty({ required: false, nullable: true }) @IsOptional() aboutBio?: string | null;
   @ApiProperty({ required: false, nullable: true, type: Object }) @IsOptional() educatorProfile?: Record<string, unknown> | null;
+  @ApiProperty({ required: false, nullable: true, type: [String] }) @IsOptional() gradesServed?: string[] | null;
+  @ApiProperty({ required: false, nullable: true, type: [String] }) @IsOptional() subjects?: string[] | null;
+  @ApiProperty({ required: false, nullable: true, type: [String] }) @IsOptional() teachingLanguages?: string[] | null;
 }

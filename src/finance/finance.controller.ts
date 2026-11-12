@@ -50,6 +50,19 @@ export class FinanceController {
     return this.financeService.getEarningsSummary(req.user.userId, storeId, { currency });
   }
 
+  // Plan & Billing fee estimate (read-only): the platform fee on one sale, from the real fee helper.
+  @Get(':storeId/fee-estimate')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  getFeeEstimate(
+    @Req() req: any,
+    @Param('storeId', ParseObjectIdPipe) storeId: string,
+    @Query('price') price: string,
+    @Query('type') type: string,
+    @Query('currency') currency?: string,
+  ) {
+    return this.financeService.estimatePlatformFee(req.user.userId, storeId, { price: Number(price), type, currency });
+  }
+
   @Get(':storeId/earnings-statement/download')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async downloadEarningsStatement(

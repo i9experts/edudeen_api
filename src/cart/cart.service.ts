@@ -11,6 +11,7 @@ import { SUPPORTED_CURRENCIES } from 'src/exchange-rate/schemas/exchange-rate.sc
 import { AddToCartDto, MAX_CART_LINE_QUANTITY } from './dto/add-to-cart.dto';
 import { PremiumEntitlementsService } from 'src/premium/premium-entitlements.service';
 import { premiumLinePrice, premiumPercentFor, premiumTeaser } from 'src/premium/premium.util';
+import { holidayBlocks, holidayRefusal, holidayText, publicHoliday } from 'src/store/store-holiday.util';
 
 /** Per-user cap so a wishlist can't grow without bound. */
 const MAX_WISHLIST_ITEMS = 200;
@@ -48,8 +49,10 @@ export class CartService {
         throw new BadRequestException('This product is not sold by this store');
       }
       // Items of a pending/suspended store can't be added (checkout refuses them anyway, but they used to sit in carts).
-      const storeLive = await this.databaseService.repositories.storeModel.exists({ _id: storeId, status: 'active', isDelete: false });
+      const storeLive: any = await this.databaseService.repositories.storeModel.findOne({ _id: storeId, status: 'active', isDelete: false }).select('holiday').lean();
       if (!storeLive) throw new BadRequestException('Product not found');
+      // Store on holiday: physical items (and digital ones when the seller paused them too) cannot be added.
+      if (holidayBlocks(storeLive.holiday, (product as any).type)) throw new BadRequestException(holidayRefusal(product.name, storeLive.holiday));
 
       // Live classes are retired: an old listing that still carries that format can no longer be bought.
       if ((product as any).deliveryFormat === 'live_class') throw new BadRequestException('This product is no longer available');
@@ -431,6 +434,12 @@ export class CartService {
     }
   }
 
+  /** Marks a cart line the holiday of its store stops from being bought (`holidayBlocked`, `holidayText`). Display only: checkout re-checks. */
+  private withHolidayFlag<T extends { type?: string }>(item: T, store: any): T & { holidayBlocked: boolean; holidayText: string | null } {
+    const blocked = holidayBlocks(store?.holiday, item?.type);
+    return { ...item, holidayBlocked: blocked, holidayText: blocked ? holidayText(store.holiday) : null };
+  }
+
   /** Every non-empty cart the buyer has, one per store (the shared source for
    *  `getMyCarts` and `getUnifiedCart`). Carts of deleted stores are skipped. */
   private async collectStoreCarts(userId: string) {
@@ -445,7 +454,7 @@ export class CartService {
 
     const stores = await this.databaseService.repositories.storeModel
       .find({ _id: { $in: storeIds }, isDelete: false })
-      .select('name slug logo status baseCurrency')
+      .select('name slug logo status baseCurrency holiday')
       .lean();
     const storeById = new Map((stores as any[]).map((s) => [s._id.toString(), s]));
 
@@ -466,7 +475,8 @@ export class CartService {
     if (rows.length === 0) return { message: 'Cart is empty', data: [] };
     const data = rows.map(({ cart, store, storeId }) => ({
       ...cart,
-      store: { storeId, name: store.name, slug: store.slug, logo: store.logo ?? null, isActive: store.status === 'active' },
+      items: (cart.items ?? []).map((i: any) => this.withHolidayFlag(i, store)),
+      store: { storeId, name: store.name, slug: store.slug, logo: store.logo ?? null, isActive: store.status === 'active', holiday: publicHoliday(store) },
     }));
     return { message: 'Carts fetched successfully', data };
   }
@@ -483,9 +493,10 @@ export class CartService {
     const { productModel, productVariantModel, storeModel } = this.databaseService.repositories;
     const product: any = await productModel.findOne({ _id: productId, status: 'active', isDelete: false }).lean();
     const store: any = product
-      ? await storeModel.findOne({ _id: product.storeId, status: 'active', isDelete: false }).select('name slug logo status baseCurrency').lean()
+      ? await storeModel.findOne({ _id: product.storeId, status: 'active', isDelete: false }).select('name slug logo status baseCurrency holiday').lean()
       : null;
     if (!product || !store) throw new NotFoundException('This product is not available');
+    if (holidayBlocks(store.holiday, product.type)) throw new BadRequestException(holidayRefusal(product.name, store.holiday));
     const variant: any = await productVariantModel.findOne({ _id: variantId, productId, status: 'active', isDelete: false }).lean();
     if (!variant) throw new NotFoundException('This product option is not available');
 
@@ -563,7 +574,7 @@ export class CartService {
     let grandTotal: number | null = 0;
 
     for (const { cart, store, storeId } of rows) {
-      const storeInfo = { storeId, name: store.name, slug: store.slug, logo: store.logo ?? null, isActive: store.status === 'active' };
+      const storeInfo = { storeId, name: store.name, slug: store.slug, logo: store.logo ?? null, isActive: store.status === 'active', holiday: publicHoliday(store) };
       let storeSubtotal: number | null = 0;
       let storeItemCount = 0;
       for (const item of cart.items) {
@@ -572,7 +583,7 @@ export class CartService {
         const displayUnitPrice = convert(item.unitPrice, currency);
         storeSubtotal = storeSubtotal === null || displayItemTotal === null ? null : storeSubtotal + displayItemTotal;
         storeItemCount += item.quantity;
-        items.push({ ...item, currency, storeId, store: storeInfo, displayUnitPrice, displayItemTotal });
+        items.push({ ...this.withHolidayFlag(item, store), currency, storeId, store: storeInfo, displayUnitPrice, displayItemTotal });
       }
       storeSubtotal = storeSubtotal === null ? null : Math.round(storeSubtotal * 100) / 100;
       grandTotal = grandTotal === null || storeSubtotal === null ? null : grandTotal + storeSubtotal;
