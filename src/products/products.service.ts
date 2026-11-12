@@ -35,6 +35,7 @@ import { splitEditForReview, overlayPendingEdit } from './product-edit-review.ut
 import { NotificationsService } from '../notifications/notifications.service';
 import { notifyPublishRequest, pktLabel } from './product-schedule-notify.util';
 import { NOTIFICATION_TYPES } from '../notifications/notification.types';
+import { cleanProductVideo } from './product-video.util';
 import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, sellerSkipsListingReview, cleanLearningMeta, cleanParcelMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
 import { allocateSkus, cleanSku } from './sku.util';
 import { generateProductSlug, nextPreviousSlugs } from 'src/common/slug.util';
@@ -1727,6 +1728,7 @@ export class ProductsService {
       subCategoryId: await this.resolveSubCategoryId(categoryId, subCategoryId),
       images: cleanImages,
       descriptionImages: body.descriptionImages === undefined ? [] : assertStringArray(body.descriptionImages, 'descriptionImages', { maxItems: 6, maxLength: 2048 }),
+      video: cleanProductVideo(body.video) ?? null,
       tags: cleanTags,
       digital: null,
       isListedOnEdudeen: isListedOnEdudeen ?? false,
@@ -1892,6 +1894,7 @@ export class ProductsService {
       subCategoryId: validSubCategoryId,
       images: cleanImages,
       descriptionImages: body.descriptionImages === undefined ? [] : assertStringArray(body.descriptionImages, 'descriptionImages', { maxItems: 6, maxLength: 2048 }),
+      video: cleanProductVideo(body.video) ?? null,
       tags: cleanTags,
       digital: digitalConfig,
       isListedOnEdudeen: isListedOnEdudeen ?? false,
@@ -2137,6 +2140,7 @@ export class ProductsService {
     if (subCategoryId !== undefined)
       productUpdate.subCategoryId = await this.resolveSubCategoryId(effectiveCategoryId, subCategoryId);
     if (images !== undefined) productUpdate.images = assertStringArray(images, 'images', { maxItems: 20, maxLength: 2048 });
+    if (body.video !== undefined) productUpdate.video = cleanProductVideo(body.video);
     if (body.descriptionImages !== undefined) productUpdate.descriptionImages = assertStringArray(body.descriptionImages, 'descriptionImages', { maxItems: 6, maxLength: 2048 });
     if (tags !== undefined) productUpdate.tags = assertStringArray(tags, 'tags', { maxItems: 30, maxLength: 60 });
     if (isListedOnEdudeen !== undefined)

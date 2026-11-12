@@ -236,6 +236,10 @@ export class Product {
   @Prop({ type: [String], default: [] })
   images: string[];
 
+  // Optional product video: { url, posterUrl, frontFirst }. Cards always show a picture; the product page gallery plays it.
+  @Prop({ type: Object, default: null })
+  video: { url: string; posterUrl: string | null; frontFirst: boolean } | null;
+
   // Pictures the seller adds INSIDE the description (shown in the product page Description tab). Max 6.
   @Prop({ type: [String], default: [] })
   descriptionImages: string[];

@@ -17,6 +17,10 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { STORE_IMAGE_PURPOSES, assertStoreImage } from '../common/store-image.util';
+import { posterFromVideoUrl, sniffVideo } from '../products/product-video.util';
+
+/** Product video cap (Cloudinary free plan allows up to 100 MB per video). */
+export const PRODUCT_VIDEO_MAX_BYTES = 60 * 1024 * 1024;
 
 /** Public upload cap - this route is open to every signed-in account (buyers too), so it stays small. */
 export const PUBLIC_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
@@ -46,6 +50,24 @@ export class UploadController {
     }
     const result = await this.uploadService.uploadFile(file);
     return { success: true, message: 'File uploaded successfully', data: result };
+  }
+
+  // ── Product video (public, played on the product page) — sirf seller, mp4/mov/webm, max 60 MB ──
+  @Post('product-video')
+  @UseGuards(RolesGuard)
+  @Roles('seller')
+  @UseInterceptors(FileInterceptor('file', {
+    storage: memoryStorage(),
+    limits: { fileSize: PRODUCT_VIDEO_MAX_BYTES },
+  }))
+  async uploadProductVideo(@UploadedFile() file: Express.Multer.File) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    const ext = (file.originalname?.split('.').pop() ?? '').toLowerCase();
+    if (!['mp4', 'mov', 'webm'].includes(ext)) throw new BadRequestException('Video must be an .mp4, .mov or .webm file');
+    if (!sniffVideo(file.buffer)) throw new BadRequestException('The file is not a real video');
+    const result = await this.uploadService.uploadFile(file, { folder: 'uploads/product-videos' });
+    const poster = posterFromVideoUrl(result.url);
+    return { success: true, message: 'Video uploaded successfully', data: { ...result, posterUrl: poster } };
   }
 
   // ── PRIVATE file (digital products for sale) — sirf seller ──
