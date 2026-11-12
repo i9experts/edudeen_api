@@ -236,6 +236,10 @@ export class Product {
   @Prop({ type: [String], default: [] })
   images: string[];
 
+  // Pictures the seller adds INSIDE the description (shown in the product page Description tab). Max 6.
+  @Prop({ type: [String], default: [] })
+  descriptionImages: string[];
+
   @Prop({ type: [String], default: [] })
   tags: string[];
 

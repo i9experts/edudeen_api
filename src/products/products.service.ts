@@ -1726,6 +1726,7 @@ export class ProductsService {
       categoryId,
       subCategoryId: await this.resolveSubCategoryId(categoryId, subCategoryId),
       images: cleanImages,
+      descriptionImages: body.descriptionImages === undefined ? [] : assertStringArray(body.descriptionImages, 'descriptionImages', { maxItems: 6, maxLength: 2048 }),
       tags: cleanTags,
       digital: null,
       isListedOnEdudeen: isListedOnEdudeen ?? false,
@@ -1890,6 +1891,7 @@ export class ProductsService {
       categoryId,
       subCategoryId: validSubCategoryId,
       images: cleanImages,
+      descriptionImages: body.descriptionImages === undefined ? [] : assertStringArray(body.descriptionImages, 'descriptionImages', { maxItems: 6, maxLength: 2048 }),
       tags: cleanTags,
       digital: digitalConfig,
       isListedOnEdudeen: isListedOnEdudeen ?? false,
@@ -2135,6 +2137,7 @@ export class ProductsService {
     if (subCategoryId !== undefined)
       productUpdate.subCategoryId = await this.resolveSubCategoryId(effectiveCategoryId, subCategoryId);
     if (images !== undefined) productUpdate.images = assertStringArray(images, 'images', { maxItems: 20, maxLength: 2048 });
+    if (body.descriptionImages !== undefined) productUpdate.descriptionImages = assertStringArray(body.descriptionImages, 'descriptionImages', { maxItems: 6, maxLength: 2048 });
     if (tags !== undefined) productUpdate.tags = assertStringArray(tags, 'tags', { maxItems: 30, maxLength: 60 });
     if (isListedOnEdudeen !== undefined)
       productUpdate.isListedOnEdudeen = isListedOnEdudeen;
