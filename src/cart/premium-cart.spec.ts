@@ -15,8 +15,9 @@ function cartSvc(opts: { member: boolean; platformOn: boolean; price: number; co
   const cart = { userId: 'u1', storeId: STORE, isDelete: false, items: [{ productId: P1, productVariantId: V1, name: 'Item', quantity: 2, price: opts.price, currency: 'USD', images: [], options: [] }] };
   const repos: any = {
     cartModel: { findOne: jest.fn().mockResolvedValue(cart) },
-    productModel: { aggregate: jest.fn().mockResolvedValue([]), find: jest.fn(() => chain([{ _id: P1, images: [], status: 'active', isDelete: false, storeId: STORE, premiumDiscountPercent: opts.productPct ?? null, campaignIds: opts.campaignPct && !opts.unticked ? ['c1'] : [], premiumOptOut: !!opts.optOut }])) },
-    sellerModel: { find: jest.fn(() => chain([])) },
+    productModel: { aggregate: jest.fn().mockResolvedValue([]), find: jest.fn(() => chain([{ _id: P1, sellerId: 'seller-1', images: [], status: 'active', isDelete: false, storeId: STORE, premiumDiscountPercent: opts.productPct ?? null, campaignIds: opts.campaignPct && !opts.unticked ? ['c1'] : [], premiumOptOut: !!opts.optOut }])) },
+    sellerModel: { find: jest.fn(() => chain([{ _id: 'seller-1', name: 'Personal Seller Name', isVerified: true }])) },
+    storeModel: { find: jest.fn(() => chain([{ _id: STORE, name: 'Noor Learning Hub' }])) },
     productVariantModel: { find: jest.fn(() => chain([{ _id: V1, price: opts.price, compareAtPrice: opts.compareAt ?? null, currency: 'USD' }])) },
     campaignModel: { find: jest.fn(() => chain(opts.campaignPct ? [{ _id: 'c1', name: 'Flash', endDate: new Date(Date.now() + 1e7), discountType: 'percentage', discountValue: opts.campaignPct, currency: null, sponsorType: 'platform' }] : [])) },
   };
@@ -27,6 +28,14 @@ function cartSvc(opts: { member: boolean; platformOn: boolean; price: number; co
   };
   return new CartService({ repositories: repos } as any, undefined as any, premium);
 }
+
+describe('cart shows the STORE name, never the seller personal name', () => {
+  it('sellerName = store name and the personal name is nowhere in the response', async () => {
+    const { data } = await cartSvc({ member: false, platformOn: false, price: 90 }).getCart('u1', STORE) as any;
+    expect(data.items[0].sellerName).toBe('Noor Learning Hub');
+    expect(JSON.stringify(data)).not.toContain('Personal Seller Name');
+  });
+});
 
 describe('cart premium display = checkout price (R2/R6)', () => {
   it('member: LIST x (1 - seller% - platform%) with the original list price; normal sale ignored', async () => {

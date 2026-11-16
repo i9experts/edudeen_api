@@ -400,7 +400,8 @@ export class CheckoutService {
         productId: product._id.toString(),
         variantId: variant._id.toString(),
         sellerId: product.sellerId,
-        sellerName: seller ? seller.name : null,
+        // Buyers see the STORE name, never the seller's personal account name.
+        sellerName: storeDocById.get(String(product.storeId))?.name ?? null,
         sellerVerified: seller ? !!seller.isVerified : false,
         storeId: product.storeId,
         type: product.type,

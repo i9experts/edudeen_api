@@ -67,13 +67,15 @@ function build(orders: any[], opts: { storeIds?: string[] } = {}) {
     ),
     findOne: jest.fn(() => chain(orders[0] ?? null)),
   };
-  const sellerModel: any = { find: jest.fn(() => chain([])) };
+  const sellerModel: any = {
+    find: jest.fn(() => chain(['A', 'B', 'C'].map((k) => ({ _id: `seller-${k}`, name: `Personal ${k}`, isVerified: false })))),
+  };
   const userModel: any = {
     findOne: jest.fn(() => chain({ name: 'Buyer', email: 'b@x.test' })),
   };
   const storeModel: any = {
     find: jest.fn(() =>
-      chain((opts.storeIds ?? ['A']).map((_id) => ({ _id }))),
+      chain((opts.storeIds ?? ['A']).map((_id) => ({ _id, name: `Store ${_id}` }))),
     ),
     findOne: jest.fn(async () => ({ _id: 'A' })),
   };
@@ -144,6 +146,18 @@ describe('buyer order views — fulfillment mode and per-store shipping (additiv
     ]);
     expect(data.sellerOrders[0].tracking).toBeNull();
     expect(data.orderNumber).toBe('ORD-1');
+  });
+});
+
+describe('buyer order views show the STORE name, never the seller personal name', () => {
+  it('my-orders and GET /orders/:id', async () => {
+    const { svc } = build([order('1', { sellerOrders: [so('A'), so('B')] })], { storeIds: ['A', 'B'] });
+    const mine = await svc.getOrdersByUserId('buyer1', {});
+    expect(mine.data.orders[0].stores.map((s: any) => s.sellerName)).toEqual(['Store A', 'Store B']);
+    expect(JSON.stringify(mine.data)).not.toContain('Personal');
+    const one = await svc.getOrderById('buyer1', '64b000000000000000000c01');
+    expect(one.data.sellerOrders.map((s: any) => s.sellerName)).toEqual(['Store A', 'Store B']);
+    expect(JSON.stringify(one.data)).not.toContain('Personal');
   });
 });
 

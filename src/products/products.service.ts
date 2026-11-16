@@ -1579,17 +1579,14 @@ export class ProductsService {
       };
     }
 
-    // 3️⃣ Get seller name
-    const seller = await sellerModel
-      .findOne({
-        _id: product.sellerId,
-      })
-      .select('name')
-      .lean();
+    // 3️⃣ Store display name (buyers never see the seller's personal name)
+    const storeDoc: any = product.storeId
+      ? await this.databaseService.repositories.storeModel.findOne({ _id: product.storeId }).select('name').lean()
+      : null;
 
     const productWithSeller = this.sanitizeDigitalForPublicView({
       ...product,
-      sellerName: seller ? seller.name : null,
+      sellerName: storeDoc?.name ?? null,
     });
 
     return {

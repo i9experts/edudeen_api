@@ -258,6 +258,12 @@ export class CartService {
       const sellerMap = new Map(
         sellers.map((s: any) => [s._id.toString(), s]),
       );
+      // Store display names: buyers see the store, never the seller's personal account name.
+      const cartStoreIds = [...new Set((products as any[]).map((p) => p.storeId).filter(Boolean).map(String))];
+      const cartStores = cartStoreIds.length
+        ? await this.databaseService.repositories.storeModel.find({ _id: { $in: cartStoreIds } }).select('name').lean()
+        : [];
+      const cartStoreName = new Map((cartStores as any[]).map((s) => [String(s._id), s.name as string]));
 
       // A listing an admin removed (or that is no longer active) must not stay in the cart, priced and counted.
       const liveItems = cart.items.filter((item: any) => {
@@ -309,7 +315,7 @@ export class CartService {
           productVariantId: item.productVariantId,
 
           name: item.name,
-          sellerName: seller ? seller.name : null,
+          sellerName: product?.storeId ? cartStoreName.get(String(product.storeId)) ?? null : null,
           sellerVerified: seller ? !!seller.isVerified : false,
 
           image: images,

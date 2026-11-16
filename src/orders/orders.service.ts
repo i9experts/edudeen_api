@@ -109,6 +109,12 @@ export class OrdersService {
           .lean()
       : [];
     const sellerMap = new Map(sellers.map((s: any) => [s._id.toString(), s]));
+    // Store display names (buyers must never see the seller's personal name).
+    const listStoreIds = [...new Set(orders.flatMap((order: any) => (order.sellerOrders ?? []).map((so: any) => String(so.storeId))))].filter(Boolean);
+    const listStores = listStoreIds.length
+      ? await this.databaseService.repositories.storeModel.find({ _id: { $in: listStoreIds } }).select('name').lean()
+      : [];
+    const listStoreName = new Map((listStores as any[]).map((s) => [String(s._id), s.name as string]));
 
     const list = orders.map((order: any) => ({
       orderId: order._id,
@@ -132,7 +138,8 @@ export class OrdersService {
           storeId: so.storeId,
           sellerOrderId: so._id,
           sellerId: so.sellerId,
-          sellerName: seller ? seller.name : null,
+          sellerName: listStoreName.get(String(so.storeId)) ?? null,
+          storeName: listStoreName.get(String(so.storeId)) ?? null,
           sellerVerified: seller ? !!seller.isVerified : false,
           fulfillmentType: so.fulfillmentType,
           // Who ships this sub-order (snapshotted at order creation); orders placed before the
@@ -349,7 +356,8 @@ export class OrdersService {
           codAmount: so.codAmount ?? 0,
           codCollector: so.codCollector ?? null,
           shippingFee: so.shippingFee ?? 0,
-          sellerName: seller ? seller.name : null,
+          // Buyers see the STORE name, never the seller's personal account name.
+          sellerName: store?.name ?? null,
           sellerVerified: seller ? !!seller.isVerified : false,
           storeName: store?.name ?? null,
           storeSlug: store?.slug ?? null,
