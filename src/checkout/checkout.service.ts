@@ -26,6 +26,7 @@ import { evaluateCod } from 'src/payment/cod-rules.util';
 import { DEFAULT_PK_ZONES, missingDefaultZones } from './default-pk-zones';
 import { sanitizeGiftOptions } from './gift-options.util';
 import { quoteRate, routeClass } from './shipping-rate.util';
+import { routeDaysFor } from '../store/delivery-days.util';
 import { parcelTotals } from './parcel-totals.util';
 import { ShippingRatesService } from './shipping-rates.service';
 import { ShippingQuoteService } from './shipping-quote.service';
@@ -1055,7 +1056,7 @@ export class CheckoutService {
     const variant: any = variantId
       ? await productVariantModel.findOne({ _id: variantId, productId, isDelete: false }).select('price currency').lean()
       : await productVariantModel.findOne({ productId, isDelete: false, isDefault: true }).select('price currency').lean();
-    const store: any = await storeModel.findById(product.storeId).select('codEnabled baseCurrency deliverySettings giftWrap shipFrom deliveryMethod dispatchDays').lean();
+    const store: any = await storeModel.findById(product.storeId).select('codEnabled baseCurrency deliverySettings giftWrap shipFrom deliveryMethod dispatchDays deliveryDays').lean();
     if (!store || !variant) throw new NotFoundException('Product not found');
     // Seller's stated dispatch time in working days (the product's own override wins, as when the order is placed).
     // Only a real stored number is returned; the page never invents a date.
@@ -1069,9 +1070,12 @@ export class CheckoutService {
     let fee: number | null = null;
     let etaText: string | null = null;
     let shippingLines: any[] = [];
+    // Seller-stated transit days for THIS route (own city / province / rest). Display only; null when not set or no zone.
+    let routeDays: { min: number; max: number } | null = null;
     if (q.zoneId) {
       const zone: any = await shippingZoneModel.findOne({ _id: q.zoneId, isDelete: false, status: { $ne: 'inactive' } }).lean();
       if (zone) {
+        routeDays = routeDaysFor(store.deliveryDays, routeClass(store.shipFrom ?? {}, { city: zone.city, province: zone.province }));
         const baseFee = this.exchangeRateService.convertWithSnapshots(zone.shippingPrice || 0, SHIPPING_ZONE_CURRENCY, currency, fxSnapshots as any);
         const r = await this.computeShippingLines(checkout, zone, baseFee);
         fee = r.shippingFee;
@@ -1092,7 +1096,7 @@ export class CheckoutService {
       );
       codAvailable = ev.available;
     }
-    return { success: true, data: { kind: 'physical', currency, fee, estimate: etaText, freeShipping: fee === 0, cod: codAvailable, dispatchDays } };
+    return { success: true, data: { kind: 'physical', currency, fee, estimate: etaText, freeShipping: fee === 0, cod: codAvailable, dispatchDays, routeDays } };
   }
 
   async getShippingZones() {

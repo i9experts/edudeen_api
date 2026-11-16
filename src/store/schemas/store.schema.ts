@@ -365,6 +365,10 @@ export class Store {
   @Prop({ type: Object, default: null })
   shipFrom: { city: string; province: string | null } | null;
 
+  // Optional transit days per route {sameCity, sameProvince, national} -> {min,max} whole days. Display only (no fee logic).
+  @Prop({ type: Object, default: null })
+  deliveryDays: Record<string, { min: number; max: number }> | null;
+
   // Working days (Sundays not counted) the seller has to mark a physical package shipped. 2 = the old 48 h rule.
   // Snapshotted onto each physical sellerOrder at creation; changing it never rewrites existing orders.
   @Prop({ type: Number, default: 2, min: 1, max: 7 })

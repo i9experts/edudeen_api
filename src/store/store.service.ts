@@ -2,6 +2,7 @@
 import { isValidObjectId } from 'mongoose';
 import { courierDeliveryEnabled } from 'src/checkout/courier-settings.util';
 import { DISPATCH_DAYS_DEFAULT, parseDispatchDays } from 'src/common/dispatch.util';
+import { cleanDeliveryDays } from './delivery-days.util';
 import { getDescendantIds } from '../categories/category-tree.util';
 import { sanitizeDigitalForPublicView, clampInt, queryString } from 'src/products/product-public-view.util';
 import { assertSafePublicJson, escapeRegex, searchTerm } from 'src/common/query-safety.util';
@@ -819,6 +820,8 @@ export class StoreService {
         updateData.shipFrom = { city, province };
       }
     }
+    // Optional transit days per route (display only on the product page; no fee logic).
+    if (body.deliveryDays !== undefined) updateData.deliveryDays = cleanDeliveryDays(body.deliveryDays);
     // Dispatch time (working days, Sundays not counted). Only NEW orders use it: each order snapshots its own value.
     let newDispatchDays: number | null = null;
     if (body.dispatchDays !== undefined) {
