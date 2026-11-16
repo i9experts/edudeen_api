@@ -15,6 +15,8 @@
     "report:collection-duplicates": "node --env-file=.env --experimental-strip-types src/scripts/report-collection-duplicates.ts",
     "report:needs-review": "node --env-file=.env --experimental-strip-types src/scripts/report-needs-review.ts",
     "report:courses-category": "node --env-file=.env --experimental-strip-types src/scripts/report-courses-category.ts",
+    "rename:courses-category": "node --env-file=.env --experimental-strip-types src/scripts/rename-courses-category.ts",
+    "rename:courses-category:apply": "node --env-file=.env --experimental-strip-types src/scripts/rename-courses-category.ts --apply",
     "seed:categories":"node --env-file=.env --experimental-strip-types src/scripts/seed-education-categories.ts",
     "fix:slugs": "node --env-file=.env --experimental-strip-types src/scripts/fix-product-slugs.ts",
     "fix:slugs:apply": "node --env-file=.env --experimental-strip-types src/scripts/fix-product-slugs.ts --apply",
