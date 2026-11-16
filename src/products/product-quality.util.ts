@@ -263,6 +263,54 @@ export function searchVisibility(i: SearchInput): { score: number; missing: Sear
 }
 
 /** All non-blocking warnings for a title + class range (returned to the seller in the create/update response). */
-export function productWarnings(title: string, classFrom?: string | null, classTo?: string | null): string[] {
-  return [vagueTitleWarning(title), titleClassConflict(title, classFrom, classTo)].filter((w): w is string => !!w);
+export function productWarnings(title: string, classFrom?: string | null, classTo?: string | null, extra?: { type?: string | null; imageCount?: number | null }): string[] {
+  return [
+    vagueTitleWarning(title),
+    titleClassConflict(title, classFrom, classTo),
+    extra ? titleTypeConflict(title, extra.type) : null,
+    extra ? singleImageWarning(extra.imageCount) : null,
+  ].filter((w): w is string => !!w);
+}
+
+/** Non-blocking: the title says "course" but the product is a Physical item (a "course" is an online / download product). */
+export function titleTypeConflict(title: string, type?: string | null): string | null {
+  if (type !== 'physical') return null;
+  return /\bcourses?\b/i.test(title ?? '')
+    ? 'The title says "course" but this is a Physical product. If it is an online course choose Digital, otherwise say what it is (e.g. "book", "workbook").'
+    : null;
+}
+
+/** Non-blocking: exactly one picture. (No picture at all is already blocked when publishing.) */
+export function singleImageWarning(imageCount?: number | null): string | null {
+  return imageCount === 1 ? 'Only 1 image. Listings with 3 or more photos get more clicks - add another view or a sample page.' : null;
+}
+
+// ── "needs_review" quality flag (Product.flags) ──────────────────────────────────────────────────
+/** Set on seller save when the listing breaks one of the quality rules above. Never changes the status; an admin clears it. */
+export const NEEDS_REVIEW_FLAG = 'needs_review';
+
+export interface ReviewRuleInput { title: string; type?: string | null; imageCount?: number | null; classFrom?: string | null; classTo?: string | null }
+
+/** The reasons (plain text) a listing needs a second look - same rules as the seller wizard warnings. [] = fine. */
+export function listingReviewReasons(i: ReviewRuleInput): string[] {
+  return productWarnings(i.title, i.classFrom, i.classTo, { type: i.type, imageCount: i.imageCount });
+}
+
+/** Stable short signature of a reason list, so an admin's "Approve" is remembered until the reasons change. */
+export function reasonsSignature(reasons: string[]): string {
+  const s = [...reasons].sort().join('|');
+  let h = 5381;
+  for (let n = 0; n < s.length; n++) h = ((h << 5) + h + s.charCodeAt(n)) | 0;
+  return `${reasons.length}:${(h >>> 0).toString(36)}`;
+}
+
+/**
+ * The flag state for a save: `flag` true when there are reasons and the admin has not already approved exactly these
+ * reasons (`approvedSig`). `flags` = the existing flags with `needs_review` added/removed; other flags are kept.
+ */
+export function applyNeedsReview(existingFlags: unknown, reasons: string[], approvedSig?: string | null): { flags: string[]; reasons: string[]; sig: string | null; flagged: boolean } {
+  const base = (Array.isArray(existingFlags) ? existingFlags : []).filter((f): f is string => typeof f === 'string' && f !== NEEDS_REVIEW_FLAG);
+  const sig = reasons.length ? reasonsSignature(reasons) : null;
+  const flagged = reasons.length > 0 && sig !== (approvedSig ?? null);
+  return { flags: flagged ? [...base, NEEDS_REVIEW_FLAG] : base, reasons: flagged ? reasons : [], sig, flagged };
 }

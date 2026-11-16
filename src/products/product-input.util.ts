@@ -38,8 +38,32 @@ export function cleanParcelMeta(body: Record<string, unknown>, forCreate: boolea
  *  present in the request are returned, so an edit leaves the rest alone. */
 export const PRODUCT_LANGUAGES = ['ur', 'en', 'ar', 'mixed'] as const;
 
-export function cleanLearningMeta(body: Record<string, unknown>): { curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null; coverStyle?: 'book' | 'flat' | null; language?: 'ur' | 'en' | 'ar' | 'mixed' | null } {
-  const out: { curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null; coverStyle?: 'book' | 'flat' | null; language?: 'ur' | 'en' | 'ar' | 'mixed' | null } = {};
+/** Optional book details shown in Details / the facts row. Max lengths of the saved text. */
+export const BOOK_DETAIL_LIMITS = { author: 120, publisher: 120, edition: 60 } as const;
+
+/** One optional short text: undefined = not sent (leave alone), ''/null = clear, else trimmed plain text within `max`. */
+export function cleanShortText(v: unknown, field: string, max: number): string | null | undefined {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  if (typeof v !== 'string') throw new BadRequestException(`${field} must be text`);
+  // Plain text only: tags and control characters are dropped, runs of spaces collapse.
+  const clean = v.replace(/<[^>]*>/g, '').replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (clean.length > max) throw new BadRequestException(`${field} can be at most ${max} characters`);
+  return clean === '' ? null : clean;
+}
+
+export interface LearningMeta {
+  curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null;
+  coverStyle?: 'book' | 'flat' | null; language?: 'ur' | 'en' | 'ar' | 'mixed' | null;
+  author?: string | null; publisher?: string | null; edition?: string | null;
+}
+
+export function cleanLearningMeta(body: Record<string, unknown>): LearningMeta {
+  const out: LearningMeta = {};
+  for (const k of ['author', 'publisher', 'edition'] as const) {
+    const v = cleanShortText(body[k], k, BOOK_DETAIL_LIMITS[k]);
+    if (v !== undefined) out[k] = v;
+  }
   if (body.language !== undefined) {
     if (body.language === null || body.language === '') out.language = null;
     else if ((PRODUCT_LANGUAGES as readonly unknown[]).includes(body.language)) out.language = body.language as 'ur' | 'en' | 'ar' | 'mixed';

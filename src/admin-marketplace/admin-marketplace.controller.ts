@@ -17,7 +17,7 @@ import { SetFeaturedRankDto } from './dto/set-featured-rank.dto';
 import { LeadsQueryDto } from './dto/leads-query.dto';
 import { RejectLeadDto } from './dto/reject-lead.dto';
 import { DeleteStoreDto } from './dto/delete-store.dto';
-import { ApproveListingDto, RejectListingDto } from './dto/review-listing.dto';
+import { ApproveListingDto, AskFixDto, RejectListingDto } from './dto/review-listing.dto';
 
 @ApiTags('Admin Marketplace')
 @ApiBearerAuth()
@@ -82,6 +82,17 @@ export class AdminMarketplaceController {
   @Patch('listings/:id/reject')
   rejectListing(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: RejectListingDto) {
     return this.adminMarketplaceService.rejectListing(id, dto.reason, this.meta(req));
+  }
+
+  // ── 'needs_review' quality flag (set by the seller-save rules; the listing's status is never changed by these) ──
+  @Patch('listings/:id/quality/approve')
+  approveQuality(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
+    return this.adminMarketplaceService.approveQuality(id, this.meta(req));
+  }
+
+  @Patch('listings/:id/quality/ask-fix')
+  askSellerToFix(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: AskFixDto) {
+    return this.adminMarketplaceService.askSellerToFix(id, dto.note, this.meta(req));
   }
 
   @Patch('stores/:id/badge')

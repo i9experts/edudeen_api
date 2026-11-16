@@ -284,14 +284,17 @@ export class CartService {
       // Cart items map karo
       const items = liveItems.map((item) => {
         const unitPrice = livePriceByVariant.get(item.productVariantId) ?? item.price;
+        const product = productById.get(item.productId);
+        // Read-time normalizer (no migration): a digital item / course is bought once, so an old cart line stored
+        // with quantity 2+ is shown and priced as 1.
+        const qty: number = product?.type === 'digital' ? 1 : item.quantity;
         // Ek item ka total
-        const itemTotal = unitPrice * item.quantity;
+        const itemTotal = unitPrice * qty;
 
         // Overall totals me add karo
-        totalItems += item.quantity;
+        totalItems += qty;
         totalPrice += itemTotal;
 
-        const product = productById.get(item.productId);
         const seller = product
           ? sellerMap.get(product.sellerId?.toString())
           : undefined;
@@ -318,7 +321,7 @@ export class CartService {
           type: product?.type === 'physical' || product?.type === 'digital' ? product.type : undefined,
           deliveryFormat: (product as any)?.deliveryFormat ?? 'download',
           unitPrice, // single product price (live)
-          quantity: item.quantity, // quantity
+          quantity: qty, // quantity
           itemTotal: itemTotal, // quantity × price
         };
       });
@@ -503,7 +506,8 @@ export class CartService {
     const storeId = String(product.storeId);
     const { data: cart } = await this.getCart(userId, storeId, {
       items: [{
-        productId, productVariantId: variantId, name: product.name, quantity, price: variant.price,
+        // A digital item / course is bought once.
+        productId, productVariantId: variantId, name: product.name, quantity: product.type === 'digital' ? 1 : quantity, price: variant.price,
         currency: variant.currency ?? null,
         images: variant.images?.length ? variant.images : product.images ?? [],
         options: variant.options ?? [],

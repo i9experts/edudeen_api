@@ -39,7 +39,7 @@ import { cleanProductVideo } from './product-video.util';
 import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, sellerSkipsListingReview, cleanLearningMeta, cleanParcelMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
 import { allocateSkus, cleanSku } from './sku.util';
 import { generateProductSlug, nextPreviousSlugs } from 'src/common/slug.util';
-import { assertClassRangeRule, assertTitleRule, normalizeTitle, productWarnings } from './product-quality.util';
+import { assertClassRangeRule, assertTitleRule, normalizeTitle, productWarnings, listingReviewReasons, applyNeedsReview, NEEDS_REVIEW_FLAG } from './product-quality.util';
 import { CONTACT_FLAG, scanImagesForContactInfo, scanListingText } from './contact-info.util';
 import { RedisService } from 'src/redis/redis.service';
 import { aggregateProductSales } from 'src/analytics/utils/order-aggregation.util';
@@ -1708,7 +1708,7 @@ export class ProductsService {
     assertOfferExclusive(store as any, { ...premiumFieldsFromBody(body), campaignIds });
     const slug = await generateProductSlug(productModel, title);
     const learnMeta = cleanLearningMeta(body);
-    const quality = this.checkListing({ title, type: 'physical', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, requestedStatus: status });
+    const quality = this.checkListing({ title, type: 'physical', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, requestedStatus: status, imageCount: cleanImages.length });
     const requestedStatus = status ? resolveSellerPublishStatus(status, null, await this.paidPlanSkipsReview(String(store._id))) : 'draft';
     // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
     const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
@@ -1718,7 +1718,7 @@ export class ProductsService {
       storeId: store._id.toString(),
       name: title,
       slug,
-      ...this.qualityFields(quality.scan),
+      ...this.qualityFields(quality.scan, quality.review),
       campaignIds,
       ...premiumFieldsFromBody(body),
       description: description ?? null,
@@ -1874,7 +1874,7 @@ export class ProductsService {
     assertOfferExclusive(store as any, { ...premiumFieldsFromBody(body), campaignIds });
     const slug = await generateProductSlug(productModel, title);
     const learnMeta = cleanLearningMeta(body);
-    const quality = this.checkListing({ title, type: 'digital', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, deliveryFormat: delivery.deliveryFormat ?? 'download', requestedStatus: status });
+    const quality = this.checkListing({ title, type: 'digital', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, deliveryFormat: delivery.deliveryFormat ?? 'download', requestedStatus: status, imageCount: cleanImages.length });
     const requestedStatus = status ? resolveSellerPublishStatus(status, null, paidPlan) : 'draft';
     // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
     const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
@@ -1884,7 +1884,7 @@ export class ProductsService {
       storeId: store._id.toString(),
       name: title,
       slug,
-      ...this.qualityFields(quality.scan),
+      ...this.qualityFields(quality.scan, quality.review),
       campaignIds,
       ...premiumFieldsFromBody(body),
       description: description ?? null,
@@ -1943,7 +1943,7 @@ export class ProductsService {
    * Quality checks shared by every create/edit: class range (needed to go live for digital), the non-blocking
    * title warnings, and the off-platform contact scan of the seller-written text.
    */
-  private checkListing(opts: { title: string; type: 'physical' | 'digital'; description?: unknown; classFrom?: string | null; classTo?: string | null; requestedStatus?: string | null; fields?: Record<string, unknown>; coverStyle?: string | null; deliveryFormat?: string | null; currentStatus?: string | null }) {
+  private checkListing(opts: { title: string; type: 'physical' | 'digital'; description?: unknown; classFrom?: string | null; classTo?: string | null; requestedStatus?: string | null; fields?: Record<string, unknown>; coverStyle?: string | null; deliveryFormat?: string | null; currentStatus?: string | null; imageCount?: number | null }) {
     // Re-saving an already-live product with the same status is not a new publish, so legacy products are not blocked by newer required fields.
     const republish = !!opts.currentStatus && opts.requestedStatus === opts.currentStatus;
     const goingLive = (opts.requestedStatus === 'active' || opts.requestedStatus === 'scheduled') && !republish;
@@ -1954,16 +1954,22 @@ export class ProductsService {
       throw new BadRequestException('Choose how your product card looks: Book or Flat photo.');
     }
     return {
-      warnings: productWarnings(opts.title, opts.classFrom, opts.classTo),
+      warnings: productWarnings(opts.title, opts.classFrom, opts.classTo, { type: opts.type, imageCount: opts.imageCount }),
+      // 'needs_review' quality flag: same rules as the warnings; only a flag, never a status change.
+      review: applyNeedsReview([], listingReviewReasons({ title: opts.title, type: opts.type, imageCount: opts.imageCount, classFrom: opts.classFrom, classTo: opts.classTo })),
       scan: scanListingText(opts.fields ?? { name: opts.title, description: opts.description }),
     };
   }
 
   /** Mongo fields for the contact_info review flag (set when flagged, cleared when the text is clean). */
-  private qualityFields(scan: { flagged: boolean; matches: string[]; reason: string | null }) {
-    return scan.flagged
-      ? { flags: [CONTACT_FLAG], contactMatches: scan.matches, flagReason: scan.reason }
-      : { flags: [] as string[], contactMatches: [] as string[], flagReason: null };
+  private qualityFields(scan: { flagged: boolean; matches: string[]; reason: string | null }, review?: { flagged: boolean; reasons: string[] }) {
+    const flags = [...(scan.flagged ? [CONTACT_FLAG] : []), ...(review?.flagged ? [NEEDS_REVIEW_FLAG] : [])];
+    return {
+      flags,
+      contactMatches: scan.flagged ? scan.matches : ([] as string[]),
+      flagReason: scan.flagged ? scan.reason : null,
+      qualityReasons: review?.flagged ? review.reasons : ([] as string[]),
+    };
   }
 
   private contactNote(scan: { flagged: boolean }): string {
@@ -2199,10 +2205,12 @@ export class ProductsService {
       const effFrom = productUpdate.classFrom !== undefined ? productUpdate.classFrom : product.classFrom;
       const effTo = productUpdate.classTo !== undefined ? productUpdate.classTo : product.classTo;
       const effDescription = description !== undefined ? description : product.description;
-      const quality = this.checkListing({ title: effTitle, type: product.type === 'physical' ? 'physical' : 'digital', classFrom: effFrom, classTo: effTo, coverStyle: productUpdate.coverStyle !== undefined ? productUpdate.coverStyle : product.coverStyle, deliveryFormat: productUpdate.deliveryFormat ?? (product as any).deliveryFormat ?? 'download', currentStatus: product.status, requestedStatus: status, fields: { name: effTitle, description: effDescription } });
+      const effImages: unknown[] = productUpdate.images ?? (product as any).images ?? [];
+      const quality = this.checkListing({ title: effTitle, type: product.type === 'physical' ? 'physical' : 'digital', imageCount: effImages.length, classFrom: effFrom, classTo: effTo, coverStyle: productUpdate.coverStyle !== undefined ? productUpdate.coverStyle : product.coverStyle, deliveryFormat: productUpdate.deliveryFormat ?? (product as any).deliveryFormat ?? 'download', currentStatus: product.status, requestedStatus: status, fields: { name: effTitle, description: effDescription } });
       editWarnings = quality.warnings;
       if (name !== undefined || description !== undefined) {
         editScan = quality.scan;
+        // contact_info only here; needs_review is recomputed below for every save.
         Object.assign(productUpdate, this.qualityFields(quality.scan));
         // Held for review instead of staying/going live while it shows contact details.
         if (quality.scan.flagged && ['active', 'scheduled'].includes(productUpdate.status ?? product.status)) {
@@ -2210,6 +2218,12 @@ export class ProductsService {
           productUpdate.status = 'pending_review';
         }
       }
+      // 'needs_review' quality flag, recomputed on every seller save from the effective values. Only the flag changes:
+      // a live product stays live, and the status is never touched here. An admin's approval of exactly these reasons is kept.
+      const nr = applyNeedsReview(productUpdate.flags ?? (product as any).flags, listingReviewReasons({ title: effTitle, type: product.type === 'physical' ? 'physical' : 'digital', imageCount: effImages.length, classFrom: effFrom, classTo: effTo }), (product as any).qualityApprovedSig);
+      productUpdate.flags = nr.flags;
+      productUpdate.qualityReasons = nr.reasons;
+      if (!nr.flagged) productUpdate.qualityFixRequest = null; // the seller fixed it (or it was approved)
     }
 
     // Price rules (digital default variant): compare-at above price, no negatives, PKR whole rupees. Checked before anything is written.

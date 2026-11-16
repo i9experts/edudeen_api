@@ -10,7 +10,7 @@ import { allocateSkus } from './sku.util';
 /** Content fields a copy inherits. Everything else (sales counters, ratings, offers, flags, review/plan markers, slugs) starts fresh. */
 export const DUPLICATE_COPY_FIELDS = [
   'description', 'productType', 'type', 'categoryId', 'subCategoryId', 'educationLevel', 'customLevel', 'normalizedCustomLevel',
-  'curricula', 'ageMin', 'ageMax', 'classFrom', 'classTo', 'language', 'coverStyle', 'parcelType', 'dispatchDaysOverride',
+  'curricula', 'ageMin', 'ageMax', 'classFrom', 'classTo', 'language', 'author', 'publisher', 'edition', 'coverStyle', 'parcelType', 'dispatchDaysOverride',
   'packageCm', 'deliveryFormat', 'images', 'tags', 'digital', 'isListedOnEdudeen', 'nameUr', 'descriptionUr',
 ] as const;
 export const VARIANT_COPY_FIELDS = ['price', 'compareAtPrice', 'currency', 'options', 'stock', 'unlimitedStock', 'shippingWeight', 'images', 'isDefault', 'status'] as const;
@@ -30,7 +30,8 @@ export function planVisibilityChange(p: any, active: boolean, now: Date = new Da
   }
   if (p.status !== 'inactive') return { ok: false, code: 409, message: 'Only a deactivated product can be activated.' };
   if (p.removedByAdmin) return { ok: false, code: 403, message: 'This listing was removed by Edudeen and cannot be activated.' };
-  const flagged = Array.isArray(p.flags) && p.flags.length > 0;
+  // Only a hard flag (contact details) sends it back to review; the soft 'needs_review' quality flag never changes a status.
+  const flagged = Array.isArray(p.flags) && p.flags.some((f: string) => f !== 'needs_review');
   if (!p.approvedAt || flagged) return { ok: true, from: 'inactive', to: 'pending_review' };
   const future = p.scheduledAt && new Date(p.scheduledAt).getTime() > now.getTime();
   return { ok: true, from: 'inactive', to: future ? 'scheduled' : 'active' };

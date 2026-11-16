@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { courseTotals } from '../classroom/course.util';
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { isValidObjectId } from 'mongoose';
 import { escapeRegex } from '../common/query-safety.util';
 import { isStoreLive } from '../common/store-live.util';
@@ -16,6 +16,7 @@ import { MarketplaceListingQueryDto } from './dto/marketplace-listing-query.dto'
 import { LeadsQueryDto } from './dto/leads-query.dto';
 import { mergeTrustBadges } from '../products/trust-badges.util';
 import { buildEditDiff } from '../products/product-edit-review.util';
+import { NEEDS_REVIEW_FLAG, reasonsSignature } from '../products/product-quality.util';
 
 interface AuditMeta {
   adminId: string;
@@ -93,6 +94,9 @@ export class AdminMarketplaceService {
       const reports = await this.r.reportModel.find({ targetType: 'listing', status: { $ne: 'resolved' } }, { targetId: 1 });
       flaggedProductIds = reports.map((r) => r.targetId).filter((id) => isValidObjectId(id));
       filter._id = { $in: flaggedProductIds };
+    } else if (query.status === 'needs_review') {
+      // Listings the quality rules flagged on a seller save (live ones stay live; only this flag is set).
+      filter.flags = NEEDS_REVIEW_FLAG;
     } else if (query.status === 'pending_review') {
       // New listings AND seller edits to live listings both wait in the review queue.
       filter.$or = [{ status: 'pending_review' }, { 'pendingEdit.submittedAt': { $type: 'date' } }];
@@ -153,6 +157,9 @@ export class AdminMarketplaceService {
       contactMatches: (p as any).contactMatches ?? [],
       reviewNote: (p as any).reviewNote ?? null,
       hasPendingEdit: !!(p as any).pendingEdit?.submittedAt,
+      // 'needs_review': why it was flagged, and whether the admin already asked the seller to fix it.
+      qualityReasons: (p as any).qualityReasons ?? [],
+      qualityFixRequestedAt: (p as any).qualityFixRequest?.at ?? null,
       createdAt: (p as any).createdAt,
     }));
 
@@ -291,6 +298,8 @@ export class AdminMarketplaceService {
         flags: product.flags ?? [],
         contactMatches: product.contactMatches ?? [],
         flagReason: product.flagReason ?? null,
+        qualityReasons: product.qualityReasons ?? [],
+        qualityFixRequest: product.qualityFixRequest ?? null,
         ageMin: product.ageMin ?? null,
         ageMax: product.ageMax ?? null,
         trust: product.trust ?? null,
@@ -309,6 +318,68 @@ export class AdminMarketplaceService {
         } : null,
       },
     };
+  }
+
+  /**
+   * Awaited audit entry for the quality-flag actions. No audit entry = the change is put back and the action fails
+   * (same rule as the finance actions), so nothing happens without a record.
+   */
+  private async auditOrUndo(action: string, description: string, meta: AuditMeta, id: string, undo: () => Promise<unknown>, metadata?: Record<string, unknown>) {
+    const ok = await this.activityLogService.log({
+      storeId: 'platform', category: 'products', action, description, actorId: meta.adminId, actorRole: 'admin',
+      targetId: id, targetType: 'product', ip: meta.ip, userAgent: meta.userAgent, metadata,
+    });
+    if (!ok) {
+      await undo().catch(() => undefined);
+      throw new ServiceUnavailableException('The action could not be recorded in the activity log, so it was not applied. Please try again.');
+    }
+  }
+
+  /** 'Approve' on a needs_review listing: clears the flag. The same reasons are not flagged again on later seller saves. Status untouched. */
+  async approveQuality(id: string, meta: AuditMeta) {
+    const current: any = await this.findProductOrThrow(id);
+    if (!Array.isArray(current.flags) || !current.flags.includes(NEEDS_REVIEW_FLAG)) throw new ConflictException('This listing is not flagged for review');
+    const reasons: string[] = current.qualityReasons ?? [];
+    const updated: any = await this.r.productModel.findOneAndUpdate(
+      { _id: id, isDelete: false, flags: NEEDS_REVIEW_FLAG },
+      { $pull: { flags: NEEDS_REVIEW_FLAG }, $set: { qualityReasons: [], qualityApprovedSig: reasons.length ? reasonsSignature(reasons) : null, qualityFixRequest: null } },
+      { returnDocument: 'after' },
+    );
+    if (!updated) throw new ConflictException('Someone else just reviewed this listing - refresh the list');
+    await this.auditOrUndo('listing_quality_approved', `Listing "${updated.name}" approved as it is (needs_review flag cleared)`, meta, id,
+      () => this.r.productModel.updateOne({ _id: id }, { $addToSet: { flags: NEEDS_REVIEW_FLAG }, $set: { qualityReasons: reasons, qualityApprovedSig: current.qualityApprovedSig ?? null, qualityFixRequest: current.qualityFixRequest ?? null } }),
+      { reasons });
+    return { success: true, message: 'Approved - the flag is cleared', data: { status: updated.status } };
+  }
+
+  /** 'Ask seller to fix' on a needs_review listing: note required, seller notified. The flag stays until the seller fixes it (or an admin approves). Status untouched. */
+  async askSellerToFix(id: string, note: string, meta: AuditMeta) {
+    const text = typeof note === 'string' ? note.trim() : '';
+    if (text.length < 10) throw new BadRequestException('Write a note (at least 10 characters) telling the seller what to fix');
+    const current: any = await this.findProductOrThrow(id);
+    if (!Array.isArray(current.flags) || !current.flags.includes(NEEDS_REVIEW_FLAG)) throw new ConflictException('This listing is not flagged for review');
+    const previous = current.qualityFixRequest ?? null;
+    const at = new Date();
+    const updated: any = await this.r.productModel.findOneAndUpdate(
+      { _id: id, isDelete: false, flags: NEEDS_REVIEW_FLAG },
+      { $set: { qualityFixRequest: { note: text, at, by: meta.adminId } } },
+      { returnDocument: 'after' },
+    );
+    if (!updated) throw new ConflictException('Someone else just reviewed this listing - refresh the list');
+    await this.auditOrUndo('listing_quality_fix_requested', `Seller asked to fix listing "${updated.name}": ${text}`, meta, id,
+      () => this.r.productModel.updateOne({ _id: id }, { $set: { qualityFixRequest: previous } }),
+      { note: text, reasons: current.qualityReasons ?? [] });
+    if (updated.sellerId) {
+      void this.notificationsService.notify({
+        recipientId: String(updated.sellerId),
+        recipientRole: 'seller',
+        type: NOTIFICATION_TYPES.LISTING_FIX_REQUESTED,
+        title: `Please fix "${updated.name}"`,
+        body: `Edudeen asks you to fix this listing: ${text}  It stays live while you do.`,
+        data: { productId: String(updated._id), storeId: updated.storeId, link: updated.storeId ? `/store/${updated.storeId}/products/edit/${updated._id}` : undefined },
+      });
+    }
+    return { success: true, message: 'The seller was asked to fix this listing' };
   }
 
   private notifySeller(product: any, type: string, title: string, body: string) {
@@ -336,7 +407,7 @@ export class AdminMarketplaceService {
       const { __price, __compareAtPrice, __variants, ...contentChanges } = pending.changes as Record<string, unknown>;
       const edited = await this.r.productModel.findOneAndUpdate(
         { _id: id, isDelete: false, 'pendingEdit.submittedAt': pending.submittedAt },
-        { $set: { ...contentChanges, pendingEdit: null, lastEditRejection: null, reviewedAt: now, reviewNote: note?.trim() || null, flags: [], contactMatches: [], flagReason: null } },
+        { $set: { ...contentChanges, pendingEdit: null, lastEditRejection: null, reviewedAt: now, reviewNote: note?.trim() || null, flags: [], contactMatches: [], flagReason: null, qualityReasons: [], qualityFixRequest: null, qualityApprovedSig: ((current as any).qualityReasons ?? []).length ? reasonsSignature((current as any).qualityReasons) : ((current as any).qualityApprovedSig ?? null) } },
         { returnDocument: 'after' },
       );
       if (!edited) throw new ConflictException('Someone else just reviewed this listing — refresh the queue');
@@ -364,7 +435,7 @@ export class AdminMarketplaceService {
     // Claimed atomically, so two reviewers can't both act on it.
     const product = await this.r.productModel.findOneAndUpdate(
       { _id: id, isDelete: false, status: current.status },
-      { $set: { status: nextStatus, approvedAt: now, reviewedAt: now, reviewNote: note?.trim() || null, flags: [], contactMatches: [], flagReason: null } },
+      { $set: { status: nextStatus, approvedAt: now, reviewedAt: now, reviewNote: note?.trim() || null, flags: [], contactMatches: [], flagReason: null, qualityReasons: [], qualityFixRequest: null, qualityApprovedSig: ((current as any).qualityReasons ?? []).length ? reasonsSignature((current as any).qualityReasons) : ((current as any).qualityApprovedSig ?? null) } },
       { returnDocument: 'after' },
     );
     if (!product) throw new ConflictException('Someone else just reviewed this listing — refresh the queue');

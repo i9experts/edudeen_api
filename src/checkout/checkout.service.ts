@@ -4,6 +4,8 @@ import {
   BadRequestException,
   NotFoundException,
   Optional,
+  HttpException,
+  Logger,
 } from '@nestjs/common';
 import { isValidObjectId } from 'mongoose';
 import { hasStarted, couponScope, lineMatchesCoupon } from '../marketing/coupon-rules.util';
@@ -152,7 +154,27 @@ export class CheckoutService {
     return { productId, variantId, quantity };
   }
 
+  private readonly checkoutLogger = new Logger('CreateCheckout');
+
+  /**
+   * Public entry. Logs the REAL error of anything unexpected (it used to surface only as "Internal server error")
+   * and turns data problems in a cart (bad ids, a value that fails validation) into a 400 with a message.
+   * Genuine server faults (database down, ...) are logged and still 500.
+   */
   async createCheckout(userId: string, body: any = {}) {
+    try {
+      return await this.createCheckoutInner(userId, body);
+    } catch (err: any) {
+      if (err instanceof HttpException) throw err;
+      this.checkoutLogger.error(`create-checkout failed for user ${userId}: ${err?.name}: ${err?.message}`, err?.stack);
+      if (err?.name === 'CastError' || err?.name === 'ValidationError') {
+        throw new BadRequestException('Something in your cart is no longer valid. Please refresh your cart and try again.');
+      }
+      throw err;
+    }
+  }
+
+  private async createCheckoutInner(userId: string, body: any = {}) {
     const {
       cartModel,
       productModel,
@@ -258,7 +280,9 @@ export class CheckoutService {
 
     // Everything else the pricing passes need, fetched in parallel (one query each,
     // not one per store / per line).
-    const prefetchStoreIds = [...new Set([...pricedProducts.map((p: any) => String(p.storeId)), String(storeId)])];
+    // ROOT CAUSE of the 500 on the unified (all-stores) checkout: `storeId` is undefined there and `String(undefined)`
+    // = "undefined" was put into an ObjectId `_id: {$in}` query -> Mongoose CastError (not an HttpException) -> 500.
+    const prefetchStoreIds = [...new Set([...pricedProducts.map((p: any) => String(p.storeId)), ...(storeId ? [String(storeId)] : [])])];
     const sellerIds = [...new Set(pricedProducts.map((p: any) => p.sellerId).filter(Boolean))];
     const [storeDocs, sellers] = await Promise.all([
       storeModel.find({ _id: { $in: prefetchStoreIds } }).select('status isDelete codEnabled directPayment name slug premiumDiscount holiday').lean(),
@@ -269,19 +293,22 @@ export class CheckoutService {
     for (const s of storeDocs as any[]) storeDocById.set(String(s._id), s);
 
     for (const cartItem of selectedItems) {
-      // Defense in depth: carts saved before quantity validation existed may
-      // hold 0/negative/fractional lines, which would subtract from totals.
-      if (!Number.isInteger(cartItem.quantity) || cartItem.quantity < 1) {
-        throw new BadRequestException(
-          'Your cart contains an item with an invalid quantity. Please update it and try again.',
-        );
-      }
-
       const product = productById.get(String(cartItem.productId));
       if (!product)
         throw new BadRequestException(
           `Product not found: ${cartItem.productId}`,
         );
+
+      // A digital item / course is bought once: its quantity is always 1, whatever an old cart, Buy Now link or
+      // request body says. Everything below (stock, totals, order lines) uses `lineQty`.
+      const lineQty: number = product.type === 'digital' ? 1 : cartItem.quantity;
+      // Defense in depth: carts saved before quantity validation existed may
+      // hold 0/negative/fractional lines, which would subtract from totals.
+      if (!Number.isInteger(lineQty) || lineQty < 1) {
+        throw new BadRequestException(
+          'Your cart contains an item with an invalid quantity. Please update it and try again.',
+        );
+      }
 
       // A seller/store can be suspended after an item was already sitting
       // in the buyer's cart — checkout must re-check store status at the
@@ -324,19 +351,19 @@ export class CheckoutService {
 
       if (product.type === 'physical') {
         hasPhysical = true;
-        if (!variant.unlimitedStock && variant.stock < cartItem.quantity) {
+        if (!variant.unlimitedStock && variant.stock < lineQty) {
           throw new BadRequestException(
             `Insufficient stock for: ${product.name}`,
           );
         }
       }
 
-      rawItems.push({ product, variant, cartItem });
+      rawItems.push({ product, variant, cartItem: { productId: cartItem.productId, productVariantId: cartItem.productVariantId, quantity: lineQty } });
       storeSubtotals.set(
         product.storeId,
         this.round(
           (storeSubtotals.get(product.storeId) ?? 0) +
-            variant.price * cartItem.quantity,
+            variant.price * lineQty,
         ),
       );
     }
@@ -1020,15 +1047,19 @@ export class CheckoutService {
     const currency = q.currency === 'PKR' ? 'PKR' : 'USD';
     const quantity = Math.min(Math.max(Math.floor(Number(q.quantity) || 1), 1), 100);
     const { productModel, productVariantModel, storeModel, shippingZoneModel } = this.databaseService.repositories;
-    const product: any = await productModel.findOne({ _id: productId, isDelete: false }).select('productType storeId deliveryFormat').lean();
+    const product: any = await productModel.findOne({ _id: productId, isDelete: false }).select('productType storeId deliveryFormat dispatchDaysOverride').lean();
     if (!product) throw new NotFoundException('Product not found');
     if (product.productType !== 'physical') return { success: true, data: { kind: 'digital' } };
 
     const variant: any = variantId
       ? await productVariantModel.findOne({ _id: variantId, productId, isDelete: false }).select('price currency').lean()
       : await productVariantModel.findOne({ productId, isDelete: false, isDefault: true }).select('price currency').lean();
-    const store: any = await storeModel.findById(product.storeId).select('codEnabled baseCurrency deliverySettings giftWrap shipFrom deliveryMethod').lean();
+    const store: any = await storeModel.findById(product.storeId).select('codEnabled baseCurrency deliverySettings giftWrap shipFrom deliveryMethod dispatchDays').lean();
     if (!store || !variant) throw new NotFoundException('Product not found');
+    // Seller's stated dispatch time in working days (the product's own override wins, as when the order is placed).
+    // Only a real stored number is returned; the page never invents a date.
+    const dd = Number(product.dispatchDaysOverride ?? store.dispatchDays);
+    const dispatchDays = Number.isInteger(dd) && dd >= 1 && dd <= 7 ? dd : null;
     const itemCcy = variant.currency ?? store.baseCurrency ?? currency;
     const item = { type: 'physical', storeId: String(product.storeId), productId: String(product._id), variantId: String(variant._id), quantity, totalPrice: (variant.price || 0) * quantity, currency: itemCcy };
     const fxSnapshots = await this.exchangeRateService.buildSnapshots([...new Set([currency, itemCcy, SHIPPING_ZONE_CURRENCY])]);
@@ -1060,7 +1091,7 @@ export class CheckoutService {
       );
       codAvailable = ev.available;
     }
-    return { success: true, data: { kind: 'physical', currency, fee, estimate: etaText, freeShipping: fee === 0, cod: codAvailable } };
+    return { success: true, data: { kind: 'physical', currency, fee, estimate: etaText, freeShipping: fee === 0, cod: codAvailable, dispatchDays } };
   }
 
   async getShippingZones() {

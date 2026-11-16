@@ -64,6 +64,7 @@ export const NOTIFICATION_TYPES = {
   PRODUCT_SCHEDULED: 'product_scheduled',
   PRODUCT_PUBLISHED: 'product_published',
   LISTING_IN_REVIEW: 'listing_in_review',
+  LISTING_FIX_REQUESTED: 'listing_fix_requested',
   STORE_DELETED: 'store_deleted',
   STORE_HOLIDAY_ENDED: 'store_holiday_ended',
   CATEGORY_REQUEST_APPROVED: 'category_request_approved',

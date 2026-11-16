@@ -15,9 +15,9 @@ export class MarketplaceListingQueryDto {
   @IsMongoId()
   categoryId?: string;
 
-  @ApiProperty({ required: false, enum: ['active', 'inactive', 'draft', 'scheduled', 'pending_review', 'rejected', 'flagged'] })
+  @ApiProperty({ required: false, enum: ['active', 'inactive', 'draft', 'scheduled', 'pending_review', 'rejected', 'flagged', 'needs_review'] })
   @IsOptional()
-  @IsIn(['active', 'inactive', 'draft', 'scheduled', 'pending_review', 'rejected', 'flagged'])
+  @IsIn(['active', 'inactive', 'draft', 'scheduled', 'pending_review', 'rejected', 'flagged', 'needs_review'])
   status?: string;
 
   @ApiProperty({ required: false, default: 1 })

@@ -53,8 +53,10 @@ function hideAiReview<T>(product: T): T {
     aiReview, pendingEdit, lastEditRejection,
     flags, flagReason, contactMatches, reviewNote, reviewedAt, removedByAdmin,
     isDelete, isTest, ratingSum, normalizedCustomLevel, aiReviewSummary,
+    qualityReasons, qualityApprovedSig, qualityFixRequest,
     ...rest
   } = product as Record<string, unknown>;
+  void qualityReasons; void qualityApprovedSig; void qualityFixRequest; // "needs_review" bookkeeping: admin/seller only
   // Internal moderation/bookkeeping fields are never part of a public product (`previousSlugs` is kept: the product
   // page uses it to redirect an old URL, `trust` is the public badge below).
   void flags; void flagReason; void contactMatches; void reviewNote; void reviewedAt; void removedByAdmin;

@@ -209,6 +209,16 @@ export class Product {
   @Prop({ type: String, enum: ['ur', 'en', 'ar', 'mixed'], default: null })
   language: 'ur' | 'en' | 'ar' | 'mixed' | null;
 
+  // Optional book details (Details tab / facts row). null = not stated; never required.
+  @Prop({ type: String, maxlength: 120, default: null })
+  author: string | null;
+
+  @Prop({ type: String, maxlength: 120, default: null })
+  publisher: string | null;
+
+  @Prop({ type: String, maxlength: 60, default: null })
+  edition: string | null;
+
   // How the product card is drawn: 'book' (book-cover shape) or 'flat' (plain photo, e.g. toys, stationery).
   // null = legacy listing, shown as a book like before. Required to publish new listings.
   @Prop({ type: String, enum: ['book', 'flat'], default: null })
@@ -349,6 +359,17 @@ export class Product {
 
   @Prop({ type: String, default: null })
   flagReason: string | null;
+
+  // "needs_review" quality flag (see product-quality.util.ts): the plain-text reasons, the signature of the reasons an
+  // admin last approved (the same reasons are then not flagged again), and the admin's "please fix" note.
+  @Prop({ type: [String], default: [] })
+  qualityReasons: string[];
+
+  @Prop({ type: String, default: null })
+  qualityApprovedSig: string | null;
+
+  @Prop({ type: Object, default: null })
+  qualityFixRequest: { note: string; at: Date; by: string } | null;
 
   // Seller edits to a LIVE (admin-approved) listing wait here until an admin approves them; the live fields stay as
   // they were. `changes` is a $set-ready object. Reject drops it; approve applies it (see AdminMarketplaceService).
