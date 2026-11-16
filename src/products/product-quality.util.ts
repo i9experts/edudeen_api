@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { CLASS_LEVELS, classIndex } from './class-levels';
+import { duplicateWarning } from './listing-duplicate.util';
 
 /**
  * Title quality + class/age rules for seller products. Mirrors edudeen_web/.../products/productQuality.ts (the seller
@@ -263,12 +264,13 @@ export function searchVisibility(i: SearchInput): { score: number; missing: Sear
 }
 
 /** All non-blocking warnings for a title + class range (returned to the seller in the create/update response). */
-export function productWarnings(title: string, classFrom?: string | null, classTo?: string | null, extra?: { type?: string | null; imageCount?: number | null }): string[] {
+export function productWarnings(title: string, classFrom?: string | null, classTo?: string | null, extra?: { type?: string | null; imageCount?: number | null; duplicateOf?: string | null }): string[] {
   return [
     vagueTitleWarning(title),
     titleClassConflict(title, classFrom, classTo),
     extra ? titleTypeConflict(title, extra.type) : null,
     extra ? singleImageWarning(extra.imageCount) : null,
+    extra ? duplicateWarning(extra.duplicateOf) : null,
   ].filter((w): w is string => !!w);
 }
 
@@ -289,11 +291,11 @@ export function singleImageWarning(imageCount?: number | null): string | null {
 /** Set on seller save when the listing breaks one of the quality rules above. Never changes the status; an admin clears it. */
 export const NEEDS_REVIEW_FLAG = 'needs_review';
 
-export interface ReviewRuleInput { title: string; type?: string | null; imageCount?: number | null; classFrom?: string | null; classTo?: string | null }
+export interface ReviewRuleInput { title: string; type?: string | null; imageCount?: number | null; classFrom?: string | null; classTo?: string | null; /** name of the store's other product this one duplicates (same title-ish + same price) */ duplicateOf?: string | null }
 
 /** The reasons (plain text) a listing needs a second look - same rules as the seller wizard warnings. [] = fine. */
 export function listingReviewReasons(i: ReviewRuleInput): string[] {
-  return productWarnings(i.title, i.classFrom, i.classTo, { type: i.type, imageCount: i.imageCount });
+  return productWarnings(i.title, i.classFrom, i.classTo, { type: i.type, imageCount: i.imageCount, duplicateOf: i.duplicateOf });
 }
 
 /** Stable short signature of a reason list, so an admin's "Approve" is remembered until the reasons change. */

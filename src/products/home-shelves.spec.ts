@@ -35,6 +35,16 @@ describe('home shelves: bestsellers + free resources', () => {
     expect(res.data.products.map((p: any) => p._id)).toEqual([A, B]);
   });
 
+  it('a needs_review listing is kept out of Bestsellers, Free resources and Premium deals queries; shaped items flagged needsReview are dropped too', async () => {
+    const { svc, productModel } = make({ sold: [{ _id: A }, { _id: B }], free: [{ _id: A }] });
+    svc.getShapedProductsByIds = jest.fn(async (ids: string[]) => ids.map((id) => ({ _id: id, needsReview: id === A ? true : undefined, variants: [{ isDefault: true, price: 10 }] })));
+    const res = await svc.getBestsellers(10, null);
+    expect(productModel.find.mock.calls[0][0].flags).toEqual({ $ne: 'needs_review' });
+    expect(res.data.products.map((p: any) => p._id)).toEqual([B]);
+    await svc.getFreeResources(10, null);
+    for (const call of productModel.find.mock.calls.slice(1)) expect(call[0].flags).toEqual({ $ne: 'needs_review' });
+  });
+
   it('bestsellers drop an item priced Rs 0 with a strike price (-100%)', async () => {
     const { svc } = make({ sold: [{ _id: A }, { _id: B }] });
     svc.getShapedProductsByIds = jest.fn(async (ids: string[]) => ids.map((id) => ({ _id: id, variants: [id === A ? { isDefault: true, price: 0, compareAtPrice: 500 } : { isDefault: true, price: 20 }] })));

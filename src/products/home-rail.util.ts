@@ -21,3 +21,18 @@ export function isValidRailProduct(p: any): boolean {
 export function filterValidRailProducts<T>(products: T[]): T[] {
   return products.filter((p) => isValidRailProduct(p));
 }
+
+// ── "needs_review" listings stay on the store page and in search, but never in discovery rails ───────────
+// ONE shared rule. Mongo side: spread RAIL_QUERY_EXCLUDE into a rail's candidate query (a cheap residual filter on the
+// already-selective status/isDelete/isTest match; `flags` is not indexed and does not need to be). Shaped-product side:
+// the public view exposes only the boolean `needsReview` (never the flags/reasons themselves).
+export const RAIL_QUERY_EXCLUDE = { flags: { $ne: 'needs_review' } } as const;
+
+/** Valid price AND not flagged for review. For Bestsellers, Premium deals, curated/featured shelves, flash/campaign rails. */
+export function isRailEligible(p: any): boolean {
+  return isValidRailProduct(p) && p?.needsReview !== true;
+}
+
+export function filterRailEligible<T>(products: T[]): T[] {
+  return products.filter((p) => isRailEligible(p));
+}

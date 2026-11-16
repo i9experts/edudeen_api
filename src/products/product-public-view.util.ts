@@ -61,6 +61,8 @@ function hideAiReview<T>(product: T): T {
   // page uses it to redirect an old URL, `trust` is the public badge below).
   void flags; void flagReason; void contactMatches; void reviewNote; void reviewedAt; void removedByAdmin;
   void isDelete; void isTest; void ratingSum; void normalizedCustomLevel; void aiReviewSummary;
+  // Only the boolean is public: discovery rails (home) skip a listing that is waiting for a quality review.
+  if (Array.isArray(flags) && flags.includes('needs_review')) rest.needsReview = true;
   // The trust badge is public; who set it (an admin id) is not.
   const trust = rest.trust as Record<string, unknown> | null | undefined;
   if (trust && typeof trust === 'object' && 'reviewedBy' in trust) {

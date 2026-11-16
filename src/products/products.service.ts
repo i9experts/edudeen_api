@@ -26,7 +26,7 @@ import { UploadService } from 'src/upload/upload.service';
 import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
 import { fetchPdfPageCount, isPdfName } from './pdf-page-count.util';
 import { sanitizeDigitalForPublicView } from './product-public-view.util';
-import { filterValidRailProducts } from './home-rail.util';
+import { filterValidRailProducts, filterRailEligible, RAIL_QUERY_EXCLUDE } from './home-rail.util';
 import { publishedHighlights } from 'src/store-theme/featured-products.util';
 import { verifyStoreOwnershipStrict } from 'src/common/store-ownership.util';
 import { classFilter, classIndex } from './class-levels';
@@ -40,6 +40,7 @@ import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cl
 import { allocateSkus, cleanSku } from './sku.util';
 import { generateProductSlug, nextPreviousSlugs } from 'src/common/slug.util';
 import { assertClassRangeRule, assertTitleRule, normalizeTitle, productWarnings, listingReviewReasons, applyNeedsReview, NEEDS_REVIEW_FLAG } from './product-quality.util';
+import { titleKey, titlesSimilar, samePrice } from './listing-duplicate.util';
 import { CONTACT_FLAG, scanImagesForContactInfo, scanListingText } from './contact-info.util';
 import { RedisService } from 'src/redis/redis.service';
 import { aggregateProductSales } from 'src/analytics/utils/order-aggregation.util';
@@ -609,8 +610,9 @@ export class ProductsService {
     // page can page and filter on the server (the plain search endpoint can't).
     // Exam board, and "suitable for age N" (an open end counts as a match).
     if (learning?.curriculum) query.curricula = learning.curriculum;
-    // Listings an admin has featured (Admin → Listings).
-    if (learning?.featured) query.isFeatured = true;
+    // Listings an admin has featured (Admin → Listings). This is the home "Featured by Edudeen" rail: a listing waiting
+    // for a quality review stays out of it (it stays in normal browse and search).
+    if (learning?.featured) { query.isFeatured = true; Object.assign(query, RAIL_QUERY_EXCLUDE); }
     if (learning?.age !== undefined) {
       query.$and = [
         { $or: [{ ageMin: null }, { ageMin: { $lte: learning.age } }] },
@@ -667,7 +669,8 @@ export class ProductsService {
       }
       // Strict per-product opt-in (marketing/campaign-eligibility.util.ts): only products the seller ticked for this
       // sale are listed, so every result card carries the sale badge/price - the count matches what is shown.
-      if (campaign) query.campaignIds = String((campaign as any)._id);
+      // A listing waiting for a quality review is not shown in the sale rail / sale landing list.
+      if (campaign) { query.campaignIds = String((campaign as any)._id); Object.assign(query, RAIL_QUERY_EXCLUDE); }
     }
 
     // 1️⃣ Agar category ID di gayi hai to filter lagao
@@ -1153,7 +1156,7 @@ export class ProductsService {
       const storeById = new Map(stores.map((s) => [String(s._id), s]));
       const enabledStoreIds = stores.filter((s) => s.premiumDiscount?.enabled).map((s) => String(s._id));
       const docs: any[] = await productModel.find({
-        status: 'active', isDelete: false, isTest: { $ne: true }, premiumOptOut: { $ne: true },
+        status: 'active', isDelete: false, isTest: { $ne: true }, premiumOptOut: { $ne: true }, ...RAIL_QUERY_EXCLUDE,
         storeId: { $in: [...storeById.keys()] },
         $or: [{ premiumDiscountPercent: { $gt: 0 } }, { storeId: { $in: enabledStoreIds } }],
       }).sort({ purchaseCount: -1, _id: -1 }).limit(300).lean();
@@ -1197,12 +1200,12 @@ export class ProductsService {
     const lim = Math.min(24, Math.max(1, Math.floor(limit) || 10));
     const ids = await this.cachedShelfIds('home:bestsellers:v1', async () => {
       const rows: any[] = await this.databaseService.repositories.productModel
-        .find({ status: 'active', isDelete: false, isTest: { $ne: true }, purchaseCount: { $gte: 1 } })
+        .find({ status: 'active', isDelete: false, isTest: { $ne: true }, purchaseCount: { $gte: 1 }, ...RAIL_QUERY_EXCLUDE })
         .sort({ purchaseCount: -1, averageRating: -1, _id: -1 }).limit(60).select('_id').lean();
       return rows.map((r) => String(r._id));
     });
     // Over-ask: some candidates may belong to a store that has since gone offline.
-    const products = filterValidRailProducts(await this.getShapedProductsByIds(ids.slice(0, lim * 3), customerId ?? null)).slice(0, lim);
+    const products = filterRailEligible(await this.getShapedProductsByIds(ids.slice(0, lim * 3), customerId ?? null)).slice(0, lim);
     return { success: true, data: { products } };
   }
 
@@ -1211,7 +1214,7 @@ export class ProductsService {
     const lim = Math.min(24, Math.max(1, Math.floor(limit) || 10));
     const { productModel, productVariantModel } = this.databaseService.repositories as any;
     const loaded = await this.cachedShelfIds('home:free-resources:v1', async () => {
-      const base = { status: 'active', isDelete: false, isTest: { $ne: true }, productType: 'digital' };
+      const base = { status: 'active', isDelete: false, isTest: { $ne: true }, productType: 'digital', ...RAIL_QUERY_EXCLUDE };
       const zero: any[] = await productVariantModel.find({ isDelete: false, price: 0 }).select('productId').limit(400).lean();
       const freeIds = [...new Set(zero.map((v) => String(v.productId)))].filter((id) => isValidObjectId(id));
       const free: any[] = freeIds.length ? await productModel.find({ ...base, _id: { $in: freeIds } }).sort({ purchaseCount: -1, _id: -1 }).limit(60).select('_id').lean() : [];
@@ -1705,7 +1708,9 @@ export class ProductsService {
     assertOfferExclusive(store as any, { ...premiumFieldsFromBody(body), campaignIds });
     const slug = await generateProductSlug(productModel, title);
     const learnMeta = cleanLearningMeta(body);
-    const quality = this.checkListing({ title, type: 'physical', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, requestedStatus: status, imageCount: cleanImages.length });
+    const dupPrice = (variants.find((v: any) => v.isDefault) ?? variants[0])?.price;
+    const duplicateOf = await this.findDuplicateListing(String(store._id), title, typeof dupPrice === 'number' ? dupPrice : Number(dupPrice));
+    const quality = this.checkListing({ title, type: 'physical', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, requestedStatus: status, imageCount: cleanImages.length, duplicateOf });
     const requestedStatus = status ? resolveSellerPublishStatus(status, null, await this.paidPlanSkipsReview(String(store._id))) : 'draft';
     // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
     const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
@@ -1871,7 +1876,8 @@ export class ProductsService {
     assertOfferExclusive(store as any, { ...premiumFieldsFromBody(body), campaignIds });
     const slug = await generateProductSlug(productModel, title);
     const learnMeta = cleanLearningMeta(body);
-    const quality = this.checkListing({ title, type: 'digital', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, deliveryFormat: delivery.deliveryFormat ?? 'download', requestedStatus: status, imageCount: cleanImages.length });
+    const duplicateOf = await this.findDuplicateListing(String(store._id), title, Number(price));
+    const quality = this.checkListing({ title, type: 'digital', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, deliveryFormat: delivery.deliveryFormat ?? 'download', requestedStatus: status, imageCount: cleanImages.length, duplicateOf });
     const requestedStatus = status ? resolveSellerPublishStatus(status, null, paidPlan) : 'draft';
     // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
     const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
@@ -1940,7 +1946,33 @@ export class ProductsService {
    * Quality checks shared by every create/edit: class range (needed to go live for digital), the non-blocking
    * title warnings, and the off-platform contact scan of the seller-written text.
    */
-  private checkListing(opts: { title: string; type: 'physical' | 'digital'; description?: unknown; classFrom?: string | null; classTo?: string | null; requestedStatus?: string | null; fields?: Record<string, unknown>; coverStyle?: string | null; deliveryFormat?: string | null; currentStatus?: string | null; imageCount?: number | null }) {
+  /**
+   * A DIFFERENT product of the same store with a very similar title AND the same default-variant price (non-blocking:
+   * returned as a warning + needs_review reason). Never throws - a failed lookup just means no duplicate is reported.
+   */
+  private async findDuplicateListing(storeId: string, title: string, price: number | null | undefined, excludeId?: string): Promise<string | null> {
+    try {
+      if (price == null || !Number.isFinite(price) || !titleKey(title)) return null;
+      const { productModel, productVariantModel } = this.databaseService.repositories;
+      const rows: any[] = await (productModel as any)
+        .find({ storeId, isDelete: false, isTest: { $ne: true }, ...(excludeId ? { _id: { $ne: excludeId } } : {}) })
+        .select('name')
+        .limit(2000)
+        .lean();
+      const similar = rows.filter((r) => titlesSimilar(title, r.name)).slice(0, 25);
+      if (!similar.length) return null;
+      const variants: any[] = await (productVariantModel as any)
+        .find({ productId: { $in: similar.map((s) => String(s._id)) }, isDelete: false, isDefault: true })
+        .select('productId price')
+        .lean();
+      const hit = variants.find((v) => samePrice(Number(v.price), price));
+      return hit ? String(similar.find((s) => String(s._id) === String(hit.productId))?.name ?? '') || null : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private checkListing(opts: { title: string; type: 'physical' | 'digital'; description?: unknown; classFrom?: string | null; classTo?: string | null; requestedStatus?: string | null; fields?: Record<string, unknown>; coverStyle?: string | null; deliveryFormat?: string | null; currentStatus?: string | null; imageCount?: number | null; duplicateOf?: string | null }) {
     // Re-saving an already-live product with the same status is not a new publish, so legacy products are not blocked by newer required fields.
     const republish = !!opts.currentStatus && opts.requestedStatus === opts.currentStatus;
     const goingLive = (opts.requestedStatus === 'active' || opts.requestedStatus === 'scheduled') && !republish;
@@ -1951,9 +1983,9 @@ export class ProductsService {
       throw new BadRequestException('Choose how your product card looks: Book or Flat photo.');
     }
     return {
-      warnings: productWarnings(opts.title, opts.classFrom, opts.classTo, { type: opts.type, imageCount: opts.imageCount }),
+      warnings: productWarnings(opts.title, opts.classFrom, opts.classTo, { type: opts.type, imageCount: opts.imageCount, duplicateOf: opts.duplicateOf }),
       // 'needs_review' quality flag: same rules as the warnings; only a flag, never a status change.
-      review: applyNeedsReview([], listingReviewReasons({ title: opts.title, type: opts.type, imageCount: opts.imageCount, classFrom: opts.classFrom, classTo: opts.classTo })),
+      review: applyNeedsReview([], listingReviewReasons({ title: opts.title, type: opts.type, imageCount: opts.imageCount, classFrom: opts.classFrom, classTo: opts.classTo, duplicateOf: opts.duplicateOf })),
       scan: scanListingText(opts.fields ?? { name: opts.title, description: opts.description }),
     };
   }
@@ -2203,7 +2235,12 @@ export class ProductsService {
       const effTo = productUpdate.classTo !== undefined ? productUpdate.classTo : product.classTo;
       const effDescription = description !== undefined ? description : product.description;
       const effImages: unknown[] = productUpdate.images ?? (product as any).images ?? [];
-      const quality = this.checkListing({ title: effTitle, type: product.type === 'physical' ? 'physical' : 'digital', imageCount: effImages.length, classFrom: effFrom, classTo: effTo, coverStyle: productUpdate.coverStyle !== undefined ? productUpdate.coverStyle : product.coverStyle, deliveryFormat: productUpdate.deliveryFormat ?? (product as any).deliveryFormat ?? 'download', currentStatus: product.status, requestedStatus: status, fields: { name: effTitle, description: effDescription } });
+      // Duplicate check against the store's OTHER products (non-blocking). Price = the one being sent, else the stored default variant's.
+      const dupPriceNow = price !== undefined && price !== null
+        ? Number(price)
+        : Number(((await productVariantModel.findOne({ productId, isDefault: true, isDelete: false }).select('price').lean()) as any)?.price);
+      const duplicateOf = await this.findDuplicateListing(String(product.storeId), effTitle, dupPriceNow, String(productId));
+      const quality = this.checkListing({ duplicateOf, title: effTitle, type: product.type === 'physical' ? 'physical' : 'digital', imageCount: effImages.length, classFrom: effFrom, classTo: effTo, coverStyle: productUpdate.coverStyle !== undefined ? productUpdate.coverStyle : product.coverStyle, deliveryFormat: productUpdate.deliveryFormat ?? (product as any).deliveryFormat ?? 'download', currentStatus: product.status, requestedStatus: status, fields: { name: effTitle, description: effDescription } });
       editWarnings = quality.warnings;
       if (name !== undefined || description !== undefined) {
         editScan = quality.scan;
@@ -2217,7 +2254,7 @@ export class ProductsService {
       }
       // 'needs_review' quality flag, recomputed on every seller save from the effective values. Only the flag changes:
       // a live product stays live, and the status is never touched here. An admin's approval of exactly these reasons is kept.
-      const nr = applyNeedsReview(productUpdate.flags ?? (product as any).flags, listingReviewReasons({ title: effTitle, type: product.type === 'physical' ? 'physical' : 'digital', imageCount: effImages.length, classFrom: effFrom, classTo: effTo }), (product as any).qualityApprovedSig);
+      const nr = applyNeedsReview(productUpdate.flags ?? (product as any).flags, listingReviewReasons({ title: effTitle, type: product.type === 'physical' ? 'physical' : 'digital', imageCount: effImages.length, classFrom: effFrom, classTo: effTo, duplicateOf }), (product as any).qualityApprovedSig);
       productUpdate.flags = nr.flags;
       productUpdate.qualityReasons = nr.reasons;
       if (!nr.flagged) productUpdate.qualityFixRequest = null; // the seller fixed it (or it was approved)
