@@ -157,6 +157,7 @@ export class OrdersService {
             name: item.name,
             image: item.image,
             sku: item.sku,
+            variantId: item.variantId ?? null,
             type: item.type,
             productType: item.productType ?? null,
             quantity: item.quantity,
