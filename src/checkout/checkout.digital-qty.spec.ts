@@ -40,6 +40,8 @@ function world(seeds: Seed[]) {
     cart.items.push({ productId: pid, productVariantId: vid, name: `P${s.product}`, quantity: s.qty, price: 10, currency: 'USD', images: [], options: [] });
   }
   const repos: any = {
+    // 'Already in your library' check (digital lines): nobody owns anything in these tests.
+    orderModel: { findOne: jest.fn(() => chain(null)) },
     cartModel: {
       find: jest.fn(() => chain(carts)),
       findOne: jest.fn(async (f: any) => carts.find((c) => c.storeId === f.storeId) ?? null),

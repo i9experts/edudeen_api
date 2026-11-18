@@ -24,19 +24,34 @@ export class StoreDashboardService {
     @InjectModel(ProductQuestion.name) private readonly questionModel: Model<ProductQuestionDocument>,
   ) {}
 
+  /** Light read for the seller sidebar badges: only the "Action required" counts (same function the summary uses). */
+  async getActionItems(sellerId: string, storeId: string) {
+    const { storeModel, payoutMethodModel, productModel } = this.db.repositories;
+    const store: any = await storeModel.findOne({ _id: storeId, sellerId, isDelete: false }).select('directPayment').lean();
+    if (!store) throw new ForbiddenException('Store not found or unauthorized');
+    const payoutCount = await payoutMethodModel.countDocuments({ storeId });
+    const actionItems = await computeActionItems(
+      { orderModel: this.db.repositories.orderModel, conversationModel: this.db.repositories.conversationModel, questionModel: this.questionModel, productModel },
+      storeId,
+      sellerId,
+      !(payoutCount > 0 || hasDirectPayment(store.directPayment)),
+    ).catch(() => null);
+    return { success: true, data: { actionItems } };
+  }
+
   async getSummary(sellerId: string, storeId: string) {
-    const { storeModel, productModel, productVariantModel, payoutMethodModel, storeBannerModel, shippingZoneModel } =
+    const { storeModel, productModel, productVariantModel, payoutMethodModel, storeBannerModel } =
       this.db.repositories;
 
     const store: any = await storeModel
       .findOne({ _id: storeId, sellerId, isDelete: false })
-      .select('logo coverImage directPayment description')
+      .select('logo coverImage directPayment description deliveryMethod deliverySettings shipFrom')
       .lean();
     if (!store) throw new ForbiddenException('Store not found or unauthorized');
 
     const productFilter = { storeId, sellerId, isDelete: false };
 
-    const [overviewRes, revenueRes, todayRes, shelfDocs, totalProducts, activeProducts, physicalProducts, payoutCount, bannerCount, zoneCount] =
+    const [overviewRes, revenueRes, todayRes, shelfDocs, totalProducts, activeProducts, physicalProducts, payoutCount, bannerCount] =
       await Promise.all([
         this.analytics.getOverview(sellerId, storeId, { storeId, range: '30d' }),
         this.analytics.getRevenueOverTime(sellerId, storeId, { storeId, range: '6m', granularity: 'month' }),
@@ -47,7 +62,6 @@ export class StoreDashboardService {
         productModel.countDocuments({ ...productFilter, type: 'physical' }),
         payoutMethodModel.countDocuments({ storeId }),
         storeBannerModel.countDocuments({ storeId }),
-        shippingZoneModel.countDocuments({ isDelete: false, status: { $ne: 'inactive' } }),
       ]);
 
     // Edudeen Premium (additive): member orders + the member discount this store gave, last 30 days. Never breaks the summary.
@@ -85,7 +99,7 @@ export class StoreDashboardService {
       hasPayoutOrBank: payoutCount > 0 || hasDirectPayment(store.directPayment),
       productCount: totalProducts,
       physicalProductCount: physicalProducts,
-      activeShippingZones: zoneCount,
+      shippingConfigured: !!store.deliveryMethod || store.deliverySettings?.enabled === true || !!String(store.shipFrom?.city ?? '').trim(),
     });
 
     // "Action required" counts (read-only; each equals its target page's filtered list). Never breaks the summary.

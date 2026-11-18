@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { Controller, Post, Get, Put, Patch, Body, Req, Param, Query, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
+import { Controller, Post, Get, Put, Patch, Body, Req, Res, Param, Query, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
@@ -7,6 +7,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { StoreService } from './store.service';
 import { StoreCustomersService } from './store-customers.service';
+import type { Response } from 'express';
 import { StoreCustomerNoteDto } from './dto/store-customer-note.dto';
 
 @Controller('api/store')
@@ -197,6 +198,18 @@ export class StoreController {
   @Get(':storeId/customers')
   async getStoreCustomers(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Query() query: any) {
     return this.customersService.getCustomers(req.user.userId, storeId, query);
+  }
+
+  // Must stay above ':customerId' so 'export' is not taken for an id.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Get(':storeId/customers/export')
+  async exportStoreCustomers(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Query() query: any, @Res() res: Response) {
+    const csv = await this.customersService.exportCustomersCsv(req.user.userId, storeId, query);
+    res.header('Content-Type', 'text/csv; charset=utf-8');
+    res.header('Content-Disposition', 'attachment; filename=\"customers.csv\"');
+    res.header('Cache-Control', 'no-store');
+    res.send(csv);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

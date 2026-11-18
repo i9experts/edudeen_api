@@ -15,6 +15,9 @@ export interface PayoutScheduleLike {
   dayOfMonth?: number | null;
 }
 
+/** Payout frequencies a schedule can have (`semimonthly` = the 1st and 15th of every month, chosen by the seller). */
+export const SCHEDULED_FREQUENCIES = ['daily', 'weekly', 'biweekly', 'semimonthly', 'monthly'] as const;
+
 /** Next scheduled payout moment strictly after `from` (09:00 local), or null for a manual schedule. */
 export function nextPayoutDate(schedule: PayoutScheduleLike | null | undefined, from: Date = new Date()): Date | null {
   const freq = schedule?.frequency ?? 'monthly';
@@ -25,6 +28,12 @@ export function nextPayoutDate(schedule: PayoutScheduleLike | null | undefined, 
     next.setDate(from.getDate() + diff);
   } else if (freq === 'biweekly') {
     next.setDate(from.getDate() + 14);
+  } else if (freq === 'semimonthly') {
+    // Twice a month: the 1st and the 15th at 09:00 (server-local, like the monthly rule), strictly after rom.
+    // Fixed calendar days: no 28/30/31 problem, and the (year, month, day) constructor rolls Dec -> Jan by itself.
+    const y = from.getFullYear(); const m = from.getMonth();
+    const slots = [new Date(y, m, 1, 9, 0, 0, 0), new Date(y, m, 15, 9, 0, 0, 0), new Date(y, m + 1, 1, 9, 0, 0, 0)];
+    return slots.find((d) => d > from) ?? null;
   } else if (freq === 'monthly') {
     // (year, month, day) constructor: a late-month "from" can never overflow into skipping a month.
     const day = Math.min(Math.max(schedule?.dayOfMonth ?? 1, 1), 28);

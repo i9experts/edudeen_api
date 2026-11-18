@@ -8,9 +8,9 @@ export class UpdatePayoutScheduleDto {
   @IsOptional() @IsEnum(['USD', 'PKR'])
   currency?: string;
 
-  @ApiProperty({ required: false, enum: ['daily', 'weekly', 'biweekly', 'monthly', 'manual'] })
+  @ApiProperty({ required: false, enum: ['daily', 'weekly', 'biweekly', 'semimonthly', 'monthly', 'manual'], description: 'semimonthly = the 1st and 15th of every month (seller choice; existing schedules are never moved automatically)' })
   @IsOptional()
-  @IsEnum(['daily', 'weekly', 'biweekly', 'monthly', 'manual'])
+  @IsEnum(['daily', 'weekly', 'biweekly', 'semimonthly', 'monthly', 'manual'])
   frequency?: string;
 
   @ApiProperty({ required: false, example: 1, description: '0=Sun … 6=Sat — used when frequency is weekly' })

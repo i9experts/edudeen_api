@@ -1982,6 +1982,10 @@ export class ProductsService {
     if (goingLive && needsCoverStyle && opts.coverStyle !== 'book' && opts.coverStyle !== 'flat') {
       throw new BadRequestException('Choose how your product card looks: Book or Flat photo.');
     }
+    // Publishing needs at least one photo (drafts may have none; an already-live product re-saved as-is is not blocked).
+    if (goingLive && opts.imageCount === 0) {
+      throw new BadRequestException('Add at least 1 photo before publishing. You can save it as a draft without one.');
+    }
     return {
       warnings: productWarnings(opts.title, opts.classFrom, opts.classTo, { type: opts.type, imageCount: opts.imageCount, duplicateOf: opts.duplicateOf }),
       // 'needs_review' quality flag: same rules as the warnings; only a flag, never a status change.

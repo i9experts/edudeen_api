@@ -17,7 +17,7 @@ import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 
 import { clampInt, csvCell, csvLine, parseDateParam } from 'src/common/query-safety.util';
 import { encryptSeoCredential, decryptSeoCredential } from 'src/common/seo-token-encryption.util';
-import { nextPayoutDate, resolveNextPayout, earliestRelease, buildStatementLines, statementCsv, lineStatusText, type LedgerTx } from './seller-earnings.util';
+import { SCHEDULED_FREQUENCIES, nextPayoutDate, resolveNextPayout, earliestRelease, buildStatementLines, statementCsv, lineStatusText, type LedgerTx } from './seller-earnings.util';
 
 /** Keys the account-number encryption may use, most preferred first. Always has JWT_SECRET to fall back on, so saving a payout method never fails just because a dedicated key was not configured; decryption tries every candidate so adding a dedicated key later does not strand existing data. */
 const accountKeyCandidates = () => [process.env.PAYOUT_ENCRYPTION_KEY, process.env.SEO_TOKEN_ENCRYPTION_KEY, process.env.JWT_SECRET].filter((k, i, a): k is string => !!k && a.indexOf(k) === i);
@@ -279,7 +279,7 @@ export class FinanceService {
   /** Compute next scheduled payout date from current schedule */
   private computeNextPayoutDate(schedule: any): Date | null {
     // Frequencies other than the known ones (e.g. 'manual') have no next date.
-    if (!['weekly', 'biweekly', 'monthly', 'daily'].includes(schedule?.frequency)) return null;
+    if (!(SCHEDULED_FREQUENCIES as readonly string[]).includes(schedule?.frequency)) return null;
     return nextPayoutDate(schedule, new Date());
   }
 
@@ -302,7 +302,7 @@ export class FinanceService {
     }
     let sched = schedule;
     if (!sched?.frequency) sched = { frequency: await this.adminConfigService.getPayoutFrequency().catch(() => 'monthly'), dayOfMonth: 1, dayOfWeek: 1 };
-    if (!['weekly', 'biweekly', 'monthly', 'daily'].includes(sched.frequency)) return null;
+    if (!(SCHEDULED_FREQUENCIES as readonly string[]).includes(sched.frequency)) return null;
     return resolveNextPayout(sched, payable, new Date(), notBefore);
   }
 

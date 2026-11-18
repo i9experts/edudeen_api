@@ -88,6 +88,8 @@ function world(seeds: Seed[], opts: { userId?: string } = {}) {
   }
   const created: any[] = [];
   const repos: any = {
+    // 'Already in your library' check (digital lines): nobody owns anything in these tests.
+    orderModel: { findOne: jest.fn(() => chain(null)) },
     cartModel: {
       find: jest.fn((f: any) =>
         chain(
@@ -188,8 +190,8 @@ const create = (w: ReturnType<typeof world>, body: any = {}) =>
 describe("createCheckout — one checkout across all of the buyer's store carts", () => {
   it("without a storeId merges every store's cart; totals are converted per line into the checkout currency", async () => {
     const w = world([
-      { storeId: 'A', productId: 'pa', price: 1000, currency: 'PKR', qty: 2 }, // PKR 2000
-      { storeId: 'B', productId: 'pb', price: 10, currency: 'USD', qty: 3 }, //  USD 30 = PKR 8400
+      { storeId: 'A', productId: 'pa', type: 'physical', price: 1000, currency: 'PKR', qty: 2 }, // PKR 2000 (physical: digital lines are clamped to quantity 1)
+      { storeId: 'B', productId: 'pb', type: 'physical', price: 10, currency: 'USD', qty: 3 }, //  USD 30 = PKR 8400
     ]);
     const { data } = await create(w);
     expect(data.checkout.items.map((i: any) => i.storeId).sort()).toEqual([

@@ -3,7 +3,8 @@ import { auditDiff } from './config-audit.util';
 import { JwtService } from '@nestjs/jwt';
 import { blockingScope, maintenanceState, normalizeMaintenance, type MaintenanceSettings } from './maintenance.util';
 import { UpdateMaintenanceDto } from './dto/update-maintenance.dto';
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Optional } from '@nestjs/common';
+import { RedisService } from '../redis/redis.service';
 import { DatabaseService } from '../database/databaseservice';
 import { isPublicStoreUrl, publicHomeContent, sanitizeHomeContact, sanitizeHomeUrdu, sanitizeStatsThresholds } from './home-content.util';
 import { ActivityLogService } from '../activity-log/activity-log.service';
@@ -24,6 +25,9 @@ import { sanitizeSellerPage } from './seller-page.util';
 import { effectiveChatbot, sanitizeChatbot } from '../chatbot/chatbot.config';
 import { configuredHostedProviderIds } from '../payment/providers/hosted-providers.registry';
 
+const PUBLIC_CONFIG_KEY = 'platform-config:public:v1';
+const PUBLIC_CONFIG_TTL_S = 30;
+
 export type FeatureFlagKey =
   | 'aiStudio' | 'marketplace' | 'digitalUploads' | 'affiliateProgram'
   | 'giftCards' | 'posMode' | 'storeBuilder' | 'bulkProductImport' | 'promotions'
@@ -42,6 +46,7 @@ export class AdminConfigService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly activityLogService: ActivityLogService,
+    @Optional() private readonly redis?: RedisService,
   ) {}
 
   private get model() {
@@ -64,6 +69,8 @@ export class AdminConfigService {
 
   private invalidateCache() {
     this.cached = null;
+    // The shared (all-instances) public copy goes too, so an admin edit shows on the next read.
+    void this.redis?.del(PUBLIC_CONFIG_KEY).catch(() => undefined);
   }
 
   async getConfig() {
@@ -467,6 +474,17 @@ export class AdminConfigService {
    * public site (footer social icons, seller marketing copy).
    */
   async getPublicConfig() {
+    // Redis copy (30 s): this endpoint runs on every page load and used to run 3 extra DB reads each time. Cache only; falls back to a live read.
+    try {
+      const hit = await this.redis?.get(PUBLIC_CONFIG_KEY);
+      if (hit) return JSON.parse(hit);
+    } catch { /* cache miss */ }
+    const fresh = await this.buildPublicConfig();
+    try { await this.redis?.set(PUBLIC_CONFIG_KEY, JSON.stringify(fresh), PUBLIC_CONFIG_TTL_S); } catch { /* cache only */ }
+    return fresh;
+  }
+
+  private async buildPublicConfig() {
     const config = await this.getRawConfig();
     const links = (config.socialLinks ?? {}) as Record<string, string | null | undefined>;
     const socialLinks: Record<string, string> = {};

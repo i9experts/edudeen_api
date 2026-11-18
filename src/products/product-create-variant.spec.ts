@@ -86,7 +86,7 @@ describe('ProductsService.addPhysicalProduct validation', () => {
 describe('contact info in the listing text', () => {
   it('is saved but held for review (never rejected) with the matched text', async () => {
     const svc = makeSvc();
-    const res = await svc.addPhysicalProduct('s1', body({}, { status: 'active', coverStyle: 'book', description: 'A wooden counting frame. Order on WhatsApp 0300-1234567' }));
+    const res = await svc.addPhysicalProduct('s1', body({}, { status: 'active', coverStyle: 'book', images: ['https://img.test/a.jpg', 'https://img.test/b.jpg'], description: 'A wooden counting frame. Order on WhatsApp 0300-1234567' }));
     const saved = svc.databaseService.repositories.productModel.create.mock.calls[0][0];
     expect(saved.status).toBe('pending_review');
     expect(saved.flags).toEqual(['contact_info']);
@@ -96,8 +96,11 @@ describe('contact info in the listing text', () => {
   });
   it('a clean listing is untouched and a short title is refused', async () => {
     const svc = makeSvc();
-    await svc.addPhysicalProduct('s1', body({}, { status: 'active', coverStyle: 'book' }));
+    await svc.addPhysicalProduct('s1', body({}, { status: 'active', coverStyle: 'book', images: ['https://img.test/a.jpg', 'https://img.test/b.jpg'] }));
     expect(svc.databaseService.repositories.productModel.create.mock.calls[0][0].flags).toEqual([]);
+    // Publishing without any photo is refused; a draft without one is fine.
+    await expect(makeSvc().addPhysicalProduct('s1', body({}, { status: 'active', coverStyle: 'book' }))).rejects.toThrow(/at least 1 photo/);
+    await makeSvc().addPhysicalProduct('s1', body({}, { status: 'draft' }));
     await expect(makeSvc().addPhysicalProduct('s1', body({}, { name: 'Abacus' }))).rejects.toThrow(/at least 10 characters/);
   });
   it('capitalises the title and builds the slug from the full title', async () => {

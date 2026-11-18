@@ -589,9 +589,10 @@ export class StoreService {
 
     const { sellerModel, productModel, orderModel } = this.databaseService.repositories;
 
-    const [seller, productCount, orderAgg] = await Promise.all([
+    const [seller, productCount, activeProductCount, orderAgg] = await Promise.all([
       sellerModel.findById(store.sellerId).select('name email phone').lean(),
       productModel.countDocuments({ storeId, isDelete: false }),
+      productModel.countDocuments({ storeId, isDelete: false, status: 'active', isTest: { $ne: true } }),
       orderModel.aggregate([
         { $match: { isDelete: false } },
         { $unwind: '$sellerOrders' },
@@ -629,6 +630,8 @@ export class StoreService {
         sellerEmail: seller?.email ?? null,
         sellerPhone: seller?.phone ?? null,
         productCount,
+        // Live (buyer-visible) products only: 0 = the store is 'Not visible yet' (hidden from marketplace search, noindex).
+        activeProductCount,
         orderCount: agg?.orderCount ?? 0,
         totalSalesUSD: round((agg?.gross ?? 0) - (agg?.refunds ?? 0)),
       },
@@ -978,6 +981,7 @@ export class StoreService {
   }
 
   private async shapePublicStoreResponse(store: any) {
+    const hasActiveProducts = !!(await this.databaseService.repositories.productModel.exists({ storeId: String(store._id), isDelete: false, status: 'active', isTest: { $ne: true } }));
     const campaigns = await this.marketingService.getActiveCampaignsForStore(store._id.toString());
     const primaryCampaign = pickPrimaryCampaignForBadge(campaigns);
 
@@ -999,8 +1003,10 @@ export class StoreService {
         description: store.description,
         tagline: store.tagline ?? null,
         contactEmail: store.contactEmail ?? null,
-        contactPhone: store.contactPhone ?? null,
+        // contactPhone is private (owner settings + the buyer's own order invoice only): never in the public storefront shape.
         categoryId: store.categoryId ?? null,
+        // false = no live product yet: the storefront page sets noindex (the store is also left out of marketplace store search + sitemap).
+        hasActiveProducts,
         followersCount: store.followersCount ?? 0,
         averageRating: store.averageRating ?? 0,
         reviewCount: store.reviewCount ?? 0,
@@ -1082,6 +1088,8 @@ export class StoreService {
     const skip = (page - 1) * limit;
 
     const filter: any = { status: 'active', isDelete: false };
+    // A store with no live product is 'Not visible yet': it stays out of marketplace store search.
+    filter._id = { $in: await productModel.distinct('storeId', { isDelete: false, status: 'active', isTest: { $ne: true } }) };
     if (query.categoryId && query.categoryId !== 'all') filter.categoryId = query.categoryId;
 
     const term = (query.q || '').trim();

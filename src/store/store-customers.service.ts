@@ -20,6 +20,10 @@ import {
  * Buyer contact details are MASKED here on purpose (email s***5@gmail.com, phone +92 3** ***0161);
  * orders / print / courier endpoints are separate and still carry the real phone for delivery.
  */
+import { toCsv } from '../analytics/utils/csv.util';
+
+const EXPORT_MAX = 5000;
+
 @Injectable()
 export class StoreCustomersService {
   constructor(
@@ -64,12 +68,13 @@ export class StoreCustomersService {
     ]);
   }
 
-  async getCustomers(sellerId: string, storeId: string, query: any) {
+  /** `all` = the CSV export: every customer (capped at EXPORT_MAX), same search / sort / masking as the list. */
+  async getCustomers(sellerId: string, storeId: string, query: any, all = false) {
     const store = await this.ownStore(sellerId, storeId);
     const { orderModel, userModel } = this.databaseService.repositories;
 
-    const page = clampInt(query.page, 1, 1, 1000);
-    const limit = clampInt(query.limit, 20, 1, 100);
+    const page = all ? 1 : clampInt(query.page, 1, 1, 1000);
+    const limit = all ? EXPORT_MAX : clampInt(query.limit, 20, 1, 100);
     const { field, dir } = parseCustomerSort(query.sort, query.order);
 
     const owner = await this.ownerBuyerId(store);
@@ -142,6 +147,16 @@ export class StoreCustomersService {
       success: true,
       data: { pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }, summary, customers },
     };
+  }
+
+  /** CSV of the customer list (same masked e-mail / phone as the screen: a seller never gets full contact details). */
+  async exportCustomersCsv(sellerId: string, storeId: string, query: any): Promise<string> {
+    const res: any = await this.getCustomers(sellerId, storeId, query, true);
+    const iso = (d: unknown) => (d ? new Date(d as any).toISOString().slice(0, 10) : '');
+    return toCsv(
+      ['Name', 'Email (masked)', 'Phone (masked)', 'Orders', 'Total spent', 'Free orders', 'Last order', 'Joined'],
+      res.data.customers.map((c: any) => [c.name ?? '', c.email ?? '', c.phone ?? '', c.orderCount ?? 0, c.totalSpent ?? 0, c.freeOrderCount ?? 0, iso(c.lastOrderAt), iso(c.createdAt)]),
+    );
   }
 
   /** Detail panel: figures, latest 10 orders in THIS store, the existing chat thread and the seller's private note. */

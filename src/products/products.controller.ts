@@ -12,7 +12,17 @@ import {
   Req,
   Query,
   UseGuards,
+  BadRequestException,
+  UseInterceptors,
+  UploadedFile,
+  Res,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { Throttle } from '@nestjs/throttler';
+import type { Response } from 'express';
+import { ProductImportService } from './product-import.service';
+import { IMPORT_MAX_BYTES, isImportType } from './product-import.util';
 
 import { ProductsService } from './products.service';
 import { ProductStockService } from './product-stock.service';
@@ -33,6 +43,7 @@ export class productController {
     private readonly productOffersService: ProductOffersService,
     private readonly lifecycle: ProductLifecycleService,
     private readonly bulk: ProductBulkService,
+    private readonly importer: ProductImportService,
   ) {}
 
   @UseGuards(OptionalJwtAuthGuard)
@@ -326,6 +337,39 @@ export class productController {
     return this.bulk.bulkSetStatus(req.user.userId, body);
   }
 
+  // ── CSV import (drafts only): template -> preview (writes nothing) -> commit ──────────────────────────────────
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Get('import/template')
+  importTemplate(@Query('type') type: string, @Res() res: Response) {
+    if (!isImportType(type)) throw new BadRequestException('type must be physical or digital');
+    res.header('Content-Type', 'text/csv; charset=utf-8');
+    res.header('Content-Disposition', `attachment; filename="products-${type}-template.csv"`);
+    res.header('Cache-Control', 'no-store');
+    res.send(this.importer.template(type));
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Throttle({ default: { limit: 30, ttl: 3_600_000 } })
+  @Post('import/preview')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: IMPORT_MAX_BYTES, files: 1 } }))
+  importPreview(@Req() req: any, @Body() body: any, @UploadedFile() file?: { buffer: Buffer }) {
+    if (!file?.buffer) throw new BadRequestException('Choose a CSV file to upload');
+    if (!isImportType(body?.type)) throw new BadRequestException('type must be physical or digital');
+    return this.importer.preview(req.user.userId, String(body?.storeId ?? ''), body.type, file.buffer);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Throttle({ default: { limit: 10, ttl: 3_600_000 } })
+  @Post('import/commit')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: IMPORT_MAX_BYTES, files: 1 } }))
+  importCommit(@Req() req: any, @Body() body: any, @UploadedFile() file?: { buffer: Buffer }) {
+    if (!file?.buffer) throw new BadRequestException('Choose a CSV file to upload');
+    if (!isImportType(body?.type)) throw new BadRequestException('type must be physical or digital');
+    return this.importer.commit(req.user.userId, String(body?.storeId ?? ''), body.type, file.buffer);
+  }
   // Bulk price: { ids[<=100], mode: 'set'|'percent', value, dryRun? }. All-or-nothing; dryRun = preview.
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')

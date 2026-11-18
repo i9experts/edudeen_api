@@ -1,11 +1,12 @@
-﻿/** Seller onboarding checklist: pure logic, computed from real store data. */
+/** Seller onboarding checklist: pure logic, computed from real store data. */
 export interface ChecklistInput {
   hasLogo: boolean;
   hasBanner: boolean;
   hasPayoutOrBank: boolean;
   productCount: number;
   physicalProductCount: number;
-  activeShippingZones: number;
+  /** The seller's own Shipping setup exists (delivery method, own delivery, or a ship-from city) - the same rule as the web Shipping page. */
+  shippingConfigured: boolean;
 }
 
 export interface ChecklistStep {
@@ -36,7 +37,7 @@ export function buildOnboardingChecklist(i: ChecklistInput): ChecklistResult {
     {
       key: 'shipping',
       label: 'Review delivery options',
-      done: shippingNotNeeded || i.activeShippingZones > 0,
+      done: shippingNotNeeded || i.shippingConfigured,
       notNeeded: shippingNotNeeded,
       path: 'shipping',
     },

@@ -20,8 +20,8 @@ export class NotificationsController {
   }
 
   @Get('unread-count')
-  unreadCount(@Req() req: any) {
-    return this.notificationsService.unreadCount(req.user.userId);
+  unreadCount(@Req() req: any, @Query() query: any) {
+    return this.notificationsService.unreadCount(req.user.userId, query);
   }
 
   @Get('preferences')
@@ -45,8 +45,8 @@ export class NotificationsController {
   }
 
   @Patch('read-all')
-  markAllRead(@Req() req: any) {
-    return this.notificationsService.markAllRead(req.user.userId);
+  markAllRead(@Req() req: any, @Query() query: any) {
+    return this.notificationsService.markAllRead(req.user.userId, query);
   }
 
   @Patch(':id/read')
@@ -56,8 +56,8 @@ export class NotificationsController {
 
   // Must stay above ':id' so "clear-read" is not taken for an id.
   @Delete('clear-read')
-  clearRead(@Req() req: any) {
-    return this.notificationsService.clearRead(req.user.userId);
+  clearRead(@Req() req: any, @Query() query: any) {
+    return this.notificationsService.clearRead(req.user.userId, query);
   }
 
   @Delete(':id')

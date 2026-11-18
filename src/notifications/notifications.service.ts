@@ -63,6 +63,8 @@ export class NotificationsService {
         title,
         body,
         data: data ?? null,
+        // Store notices carry data.storeId or a /store/<id>/… link; anything else is account-level.
+        storeId: data?.storeId ? String(data.storeId) : (/^\/store\/([a-f0-9]{24})\//i.exec(String(data?.link ?? ''))?.[1] ?? null),
       });
 
       this.gateway.emitNewNotification(recipientId, doc.toObject());
@@ -119,10 +121,23 @@ export class NotificationsService {
 
   // ── Inbox REST surface (called by NotificationsController) ────────────────
 
-  async list(userId: string, query: { page?: string; limit?: string; unreadOnly?: string; type?: string }) {
+  /**
+   * Seller scoping: `storeId` = only that store's notices (old rows carry it in data.storeId, no backfill needed);
+   * `scope=account` = notices that belong to no store. Neither = everything (buyers / old clients).
+   */
+  private scopeFilter(userId: string, query: { storeId?: string; scope?: string }): Record<string, any> {
+    const filter: Record<string, any> = { recipientId: userId };
+    const sid = query.storeId && /^[a-f0-9]{24}$/i.test(String(query.storeId)) ? String(query.storeId) : null;
+    if (sid) filter.$or = [{ storeId: sid }, { 'data.storeId': sid }, { 'data.link': { $regex: `^/store/${sid}/` } }];
+    else if (query.scope === 'account') filter.$and = [{ storeId: null }, { 'data.storeId': null }, { 'data.link': { $not: /^\/store\/[a-f0-9]{24}\//i } }];
+    return filter;
+  }
+
+  async list(userId: string, query: { page?: string; limit?: string; unreadOnly?: string; type?: string; storeId?: string; scope?: string }) {
     const page = Math.max(1, clampInt(query.page, 1, 1, 100000));
     const limit = Math.min(100, Math.max(1, clampInt(query.limit, 20, 1, 100)));
-    const filter: Record<string, any> = { recipientId: userId };
+    const scoped = this.scopeFilter(userId, query);
+    const filter: Record<string, any> = { ...scoped };
     if (query.unreadOnly === 'true') filter.isRead = false;
     if (query.type) filter.type = String(query.type);
 
@@ -130,15 +145,15 @@ export class NotificationsService {
     const [items, total, unreadCount] = await Promise.all([
       model.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
       model.countDocuments(filter),
-      model.countDocuments({ recipientId: userId, isRead: false }),
+      model.countDocuments({ ...scoped, isRead: false }),
     ]);
 
     return { success: true, data: { items, total, unreadCount, page, limit } };
   }
 
-  async unreadCount(userId: string) {
+  async unreadCount(userId: string, query: { storeId?: string; scope?: string } = {}) {
     const unreadCount = await this.databaseService.repositories.notificationModel.countDocuments({
-      recipientId: userId,
+      ...this.scopeFilter(userId, query),
       isRead: false,
     });
     return { success: true, data: { unreadCount } };
@@ -154,17 +169,17 @@ export class NotificationsService {
     return { success: true, data: doc };
   }
 
-  async markAllRead(userId: string) {
+  async markAllRead(userId: string, query: { storeId?: string; scope?: string } = {}) {
     await this.databaseService.repositories.notificationModel.updateMany(
-      { recipientId: userId, isRead: false },
+      { ...this.scopeFilter(userId, query), isRead: false },
       { $set: { isRead: true, readAt: new Date() } },
     );
     return { success: true, message: 'All notifications marked as read' };
   }
 
   /** Deletes every notification the user has already read (the unread ones are kept). */
-  async clearRead(userId: string) {
-    const res = await this.databaseService.repositories.notificationModel.deleteMany({ recipientId: userId, isRead: true });
+  async clearRead(userId: string, query: { storeId?: string; scope?: string } = {}) {
+    const res = await this.databaseService.repositories.notificationModel.deleteMany({ ...this.scopeFilter(userId, query), isRead: true });
     return { success: true, message: 'Read notifications cleared', data: { deleted: res.deletedCount ?? 0 } };
   }
 

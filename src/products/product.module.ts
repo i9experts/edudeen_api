@@ -5,6 +5,7 @@ import { ProductStockService } from './product-stock.service';
 import { ProductOffersService } from './product-offers.service';
 import { ProductLifecycleService } from './product-lifecycle.service';
 import { ProductBulkService } from './product-bulk.service';
+import { ProductImportService } from './product-import.service';
 import { AuthModule } from 'src/auth/auth.module';
 import { RedisModule } from 'src/redis/redis.module';
 import { AdminConfigModule } from 'src/admin-config/admin-config.module';
@@ -25,7 +26,7 @@ import { StockHistory, StockHistorySchema } from 'src/inventory/stock-history.sc
     MongooseModule.forFeature([{ name: StockHistory.name, schema: StockHistorySchema }]),
   ],
   controllers: [productController],
-  providers: [ProductsService, ProductStockService, ProductOffersService, ProductLifecycleService, ProductBulkService],
+  providers: [ProductsService, ProductStockService, ProductOffersService, ProductLifecycleService, ProductBulkService, ProductImportService],
   exports: [ProductsService],
 })
 export class ProductsModule {}

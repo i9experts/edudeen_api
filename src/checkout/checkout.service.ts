@@ -1025,7 +1025,7 @@ export class CheckoutService {
           ? 0
           : this.round(this.exchangeRateService.convertWithSnapshots(ds.fee || 0, storeCcy, checkout.currency, snaps));
       }
-      const giftWrapFee = checkout.giftWrap && sellerStore?.giftWrap?.enabled !== false && (sellerStore?.giftWrap?.fee ?? 0) > 0
+      const giftWrapFee = checkout.giftWrap && sellerStore?.giftWrap?.enabled === true && (sellerStore?.giftWrap?.fee ?? 0) > 0
         ? this.round(this.exchangeRateService.convertWithSnapshots(sellerStore.giftWrap.fee, storeCcy, checkout.currency, snaps))
         : 0;
       const discountPercent = 0;
@@ -1197,7 +1197,7 @@ export class CheckoutService {
     let delta = 0;
     for (const line of lines) {
       const st = stores.find((s) => String(s._id) === String(line.storeId));
-      const fee = opts.giftWrap && st?.giftWrap?.enabled !== false && (st?.giftWrap?.fee ?? 0) > 0
+      const fee = opts.giftWrap && st?.giftWrap?.enabled === true && (st?.giftWrap?.fee ?? 0) > 0
         ? this.round(this.exchangeRateService.convertWithSnapshots(st.giftWrap.fee, st.baseCurrency ?? checkout.currency, checkout.currency, snaps))
         : 0;
       const old = line.giftWrapFee ?? 0;
@@ -1230,7 +1230,7 @@ export class CheckoutService {
     if (!checkout) throw new NotFoundException('Checkout not found');
     const storeIds = [...new Set<string>((checkout.items ?? []).filter((i: any) => i.type === 'physical').map((i: any) => String(i.storeId)))];
     const stores: any[] = storeIds.length ? await this.databaseService.repositories.storeModel.find({ _id: { $in: storeIds } }).select('giftWrap baseCurrency').lean() : [];
-    const offering = stores.filter((s) => s.giftWrap?.enabled !== false);
+    const offering = stores.filter((s) => s.giftWrap?.enabled === true);
     let fee = 0;
     for (const s of offering) {
       if ((s.giftWrap?.fee ?? 0) > 0) fee += this.exchangeRateService.convertWithSnapshots(s.giftWrap.fee, s.baseCurrency ?? checkout.currency, checkout.currency, checkout.fxSnapshots ?? []);

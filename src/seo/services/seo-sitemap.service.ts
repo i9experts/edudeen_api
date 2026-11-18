@@ -77,8 +77,10 @@ export class SeoSitemapService {
   }
 
   private async regenerateStores() {
-    const { storeModel } = this.db.repositories;
-    const stores = await storeModel.find({ status: 'active', isDelete: false, 'seo.noindex': { $ne: true } }).select('slug updatedAt').lean();
+    const { storeModel, productModel } = this.db.repositories;
+    // Stores with no live product are 'Not visible yet' -> not in the sitemap.
+    const withProducts = await productModel.distinct('storeId', { isDelete: false, status: 'active', isTest: { $ne: true } });
+    const stores = await storeModel.find({ _id: { $in: withProducts }, status: 'active', isDelete: false, 'seo.noindex': { $ne: true } }).select('slug updatedAt').lean();
     // The storefront lives at /shop/<slug> on edudeen.com (the canonical URL the prerender also uses).
     const urls = stores.map((s: any) => ({ loc: `${PLATFORM_ORIGIN}/shop/${s.slug}`, lastmod: s.updatedAt }));
     await this.writeChunks('stores', null, urls);

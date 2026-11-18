@@ -637,6 +637,8 @@ OrderSchema.index({ 'sellerOrders.storeId': 1 });
 // Dashboard to-ship / overdue counts and the Needs-action tab: bound the scan to a store's WAITING packages (elemMatch on both fields).
 OrderSchema.index({ 'sellerOrders.storeId': 1, 'sellerOrders.status': 1 });
 OrderSchema.index({ 'sellerOrders.items.status': 1 });
+// Seller sidebar "returns pending" count ($match on returnStatus 'requested') used to scan the collection.
+OrderSchema.index({ 'sellerOrders.items.returnStatus': 1 });
 OrderSchema.index({ paymentStatus: 1 });
 OrderSchema.index({ createdAt: -1 });
 // perf: compound indexes for hot query paths (additive)

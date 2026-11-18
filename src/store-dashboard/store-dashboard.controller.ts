@@ -19,6 +19,14 @@ export class StoreDashboardController {
     return this.service.getSummary(req.user.userId, storeId);
   }
 
+  /** GET /api/store/:storeId/action-items — only the sidebar badge counts (far lighter than dashboard-summary). */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Get(':storeId/action-items')
+  getActionItems(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string) {
+    return this.service.getActionItems(req.user.userId, storeId);
+  }
+
   /** GET /api/store/:storeId/health?range=30|90 — read-only Store Health (ownership checked in the service). */
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
