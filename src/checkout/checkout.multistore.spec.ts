@@ -42,6 +42,7 @@ function world(seeds: Seed[], opts: { userId?: string } = {}) {
         _id: s.storeId,
         status: s.storeStatus ?? 'active',
         codEnabled: s.codEnabled ?? true,
+        shipFrom: { city: 'Lahore' }, // shipping set up (COD gate)
         name: `Store ${s.storeId}`,
         slug: s.storeId,
         isDelete: false,

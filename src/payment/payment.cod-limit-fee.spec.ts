@@ -28,7 +28,7 @@ function makeService(items: any[], cod: { maxPerPackagePKR: number | null; feePe
       updateOne: jest.fn().mockResolvedValue({}),
     },
     storeModel: {
-      find: jest.fn((f: any) => ({ select: () => ({ lean: async () => (f.codEnabled === false ? [] : [...new Set(items.map((i: any) => i.storeId))].map((_id) => ({ _id, fulfillmentMode: !platformStores || platformStores.includes(_id as string) ? 'platform' : 'seller' }))) }) })),
+      find: jest.fn((f: any) => ({ select: () => ({ lean: async () => (f.codEnabled === false ? [] : [...new Set(items.map((i: any) => i.storeId))].map((_id) => ({ _id, shipFrom: { city: 'Lahore' }, fulfillmentMode: !platformStores || platformStores.includes(_id as string) ? 'platform' : 'seller' }))) }) })),
     },
     productVariantModel: {
       findOne: jest.fn().mockResolvedValue({ stock: 10, unlimitedStock: false }),

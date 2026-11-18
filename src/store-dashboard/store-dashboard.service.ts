@@ -6,7 +6,8 @@ import { computeActionItems } from './action-items.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { AnalyticsService } from 'src/analytics/analytics.service';
 import { hasDirectPayment } from 'src/common/direct-payment.util';
-import { buildOnboardingChecklist } from './onboarding-checklist.util';
+import { buildOnboardingChecklist, storePageDetails } from './onboarding-checklist.util';
+import { isStoreShippingConfigured } from 'src/store/store-shipping.util';
 import { storePremiumStats } from 'src/premium/premium-stats.util';
 import { buildProfileCompleteness } from 'src/store/featured-stores.util';
 
@@ -45,7 +46,7 @@ export class StoreDashboardService {
 
     const store: any = await storeModel
       .findOne({ _id: storeId, sellerId, isDelete: false })
-      .select('logo coverImage directPayment description deliveryMethod deliverySettings shipFrom')
+      .select('logo coverImage directPayment description tagline faqs educatorProfile gradesServed subjects teachingLanguages deliveryMethod deliverySettings shipFrom')
       .lean();
     if (!store) throw new ForbiddenException('Store not found or unauthorized');
 
@@ -97,9 +98,10 @@ export class StoreDashboardService {
       hasLogo: !!store.logo,
       hasBanner: !!store.coverImage || bannerCount > 0,
       hasPayoutOrBank: payoutCount > 0 || hasDirectPayment(store.directPayment),
-      productCount: totalProducts,
+      productCount: activeProducts,
       physicalProductCount: physicalProducts,
-      shippingConfigured: !!store.deliveryMethod || store.deliverySettings?.enabled === true || !!String(store.shipFrom?.city ?? '').trim(),
+      shippingConfigured: isStoreShippingConfigured(store),
+      pageDetails: storePageDetails(store),
     });
 
     // "Action required" counts (read-only; each equals its target page's filtered list). Never breaks the summary.

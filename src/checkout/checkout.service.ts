@@ -12,6 +12,7 @@ import { hasStarted, couponScope, lineMatchesCoupon } from '../marketing/coupon-
 import { getDescendantIds } from '../categories/category-tree.util';
 import { licenseFromVariant } from 'src/products/product-input.util';
 import { holidayBlocks, holidayRefusal } from 'src/store/store-holiday.util';
+import { isStoreShippingConfigured } from 'src/store/store-shipping.util';
 import { DatabaseService } from 'src/database/databaseservice';
 import { MarketingService } from 'src/marketing/marketing.service';
 import { campaignsForProduct } from 'src/marketing/campaign-eligibility.util';
@@ -286,7 +287,7 @@ export class CheckoutService {
     const prefetchStoreIds = [...new Set([...pricedProducts.map((p: any) => String(p.storeId)), ...(storeId ? [String(storeId)] : [])])];
     const sellerIds = [...new Set(pricedProducts.map((p: any) => p.sellerId).filter(Boolean))];
     const [storeDocs, sellers] = await Promise.all([
-      storeModel.find({ _id: { $in: prefetchStoreIds } }).select('status isDelete codEnabled directPayment name slug premiumDiscount holiday').lean(),
+      storeModel.find({ _id: { $in: prefetchStoreIds } }).select('status isDelete codEnabled directPayment name slug premiumDiscount holiday deliveryMethod deliverySettings shipFrom').lean(),
       sellerIds.length
         ? this.databaseService.repositories.sellerModel.find({ _id: { $in: sellerIds } }).select('name isVerified').lean()
         : Promise.resolve([] as any[]),
@@ -739,7 +740,7 @@ export class CheckoutService {
       ? physicalStoreIds
           .map((id) => storeDocById.get(String(id)))
           .filter(Boolean)
-          .every((s: any) => s.codEnabled !== false)
+          .every((s: any) => s.codEnabled !== false && isStoreShippingConfigured(s))
       : true;
 
     // Manual bank-transfer (Pakistan track — pay into the platform's own
@@ -1071,6 +1072,7 @@ export class CheckoutService {
       ? await productVariantModel.findOne({ _id: variantId, productId, isDelete: false }).select('price currency').lean()
       : await productVariantModel.findOne({ productId, isDelete: false, isDefault: true }).select('price currency').lean();
     const store: any = await storeModel.findById(product.storeId).select('codEnabled baseCurrency deliverySettings giftWrap shipFrom deliveryMethod dispatchDays deliveryDays').lean();
+    // COD shows only once the seller has set up Shipping (same rule as the seller checklist).
     if (!store || !variant) throw new NotFoundException('Product not found');
     // Seller's stated dispatch time in working days (the product's own override wins, as when the order is placed).
     // Only a real stored number is returned; the page never invents a date.
@@ -1101,7 +1103,7 @@ export class CheckoutService {
       ? await this.adminConfigService.getCodConfig().catch(() => null)
       : { maxPerPackagePKR: null, feePerPackagePKR: 0 };
     const platformCod = await this.adminConfigService.isCodOffered().catch(() => false);
-    let codAvailable = platformCod && store.codEnabled !== false && codCfg != null;
+    let codAvailable = platformCod && store.codEnabled !== false && isStoreShippingConfigured(store) && codCfg != null;
     if (codAvailable && codCfg) {
       const ev = evaluateCod(
         { ...checkout, shippingByStore: shippingLines, shippingFee: fee ?? 0 },

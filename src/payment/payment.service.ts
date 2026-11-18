@@ -1,4 +1,5 @@
 import { resolvePackageDispatchDays } from 'src/common/dispatch.util';
+import { STORE_SHIPPING_SELECT, isStoreShippingConfigured } from 'src/store/store-shipping.util';
 import {
   Injectable,
   Optional,
@@ -303,10 +304,7 @@ export class PaymentService {
     // this endpoint doesn't trust that client-side state alone.
     if (useSplit) {
       const physicalStoreIds = [...new Set(physicalItems.map((i: any) => i.storeId))];
-      const codDisabledStores = await this.databaseService.repositories.storeModel
-        .find({ _id: { $in: physicalStoreIds }, codEnabled: false })
-        .select('name')
-        .lean();
+      const codDisabledStores = await this.codBlockedStores(physicalStoreIds as string[]);
       if (codDisabledStores.length > 0) {
         throw new BadRequestException(
           `Cash on Delivery isn't available for: ${codDisabledStores.map((s: any) => s.name).join(', ')} — please pay the full amount online instead.`,
@@ -1510,6 +1508,18 @@ export class PaymentService {
     };
   }
 
+  /**
+   * Stores that cannot take COD: the seller opted out (Store.codEnabled === false), or has not set up Shipping yet
+   * (same rule as the seller checklist). Server-side gate; the checkout `cod.available` flag only mirrors it.
+   */
+  private async codBlockedStores(storeIds: string[]): Promise<any[]> {
+    const storeModel = this.databaseService.repositories.storeModel;
+    const optedOut = await storeModel.find({ _id: { $in: storeIds }, codEnabled: false }).select('name').lean();
+    if (optedOut.length > 0) return optedOut as any[];
+    const docs = (await storeModel.find({ _id: { $in: storeIds } }).select(`name ${STORE_SHIPPING_SELECT}`).lean()) as any[];
+    return docs.filter((s) => !isStoreShippingConfigured(s));
+  }
+
   async codPayment(userId: string, body: any) {
     const { checkoutId } = body;
     if (!checkoutId) throw new BadRequestException('checkoutId is required');
@@ -1552,10 +1562,7 @@ export class PaymentService {
     // No platform-wide order-value ceiling — COD is available for any amount.
     const storeIds = [...new Set(checkout.items.map((i: any) => i.storeId))];
     // Several sellers are fine: each package is its own COD collection (SellerOrder.isPaid / codAmount).
-    const codDisabledStores = await this.databaseService.repositories.storeModel
-      .find({ _id: { $in: storeIds }, codEnabled: false })
-      .select('name')
-      .lean();
+    const codDisabledStores = await this.codBlockedStores(storeIds as string[]);
     if (codDisabledStores.length > 0) {
       throw new BadRequestException(
         `Cash on Delivery isn't available for: ${codDisabledStores.map((s: any) => s.name).join(', ')} — please pay online, or remove those items from your cart.`,

@@ -53,7 +53,7 @@ function makeService(
     storeModel: {
       find: jest.fn((f: any) => ({
         select: () => ({
-          lean: async () => (f.codEnabled === false ? [] : [{ _id: 's1' }]),
+          lean: async () => (f.codEnabled === false ? [] : [{ _id: 's1', shipFrom: { city: 'Lahore' } }]),
         }),
       })),
     },

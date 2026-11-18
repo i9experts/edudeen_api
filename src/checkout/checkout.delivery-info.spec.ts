@@ -8,12 +8,12 @@ const ZID = '64b000000000000000000a03';
 
 const lean = (v: any) => ({ select: () => ({ lean: () => Promise.resolve(v) }), lean: () => Promise.resolve(v) });
 
-function make(opts: { type?: string; codEnabled?: boolean; platformCod?: boolean; maxPKR?: number | null; zone?: any } = {}) {
+function make(opts: { type?: string; codEnabled?: boolean; platformCod?: boolean; maxPKR?: number | null; zone?: any; noShipping?: boolean } = {}) {
   const repositories: any = {
     productModel: { findOne: jest.fn(() => lean({ _id: PID, productType: opts.type ?? 'physical', storeId: 's1' })) },
     productVariantModel: { findOne: jest.fn(() => lean({ _id: VID, price: 1000, currency: 'PKR' })) },
     storeModel: {
-      findById: jest.fn(() => lean({ _id: 's1', codEnabled: opts.codEnabled ?? true, baseCurrency: 'PKR' })),
+      findById: jest.fn(() => lean({ _id: 's1', codEnabled: opts.codEnabled ?? true, baseCurrency: 'PKR', ...(opts.noShipping ? {} : { shipFrom: { city: 'Lahore' } }) })),
       find: jest.fn(() => lean([{ _id: 's1', baseCurrency: 'PKR' }])),
     },
     shippingZoneModel: { findOne: jest.fn(() => lean(opts.zone ?? null)) },
@@ -49,6 +49,10 @@ describe('getDeliveryInfo (read-only)', () => {
     const r = await svc.getDeliveryInfo({ productId: PID, variantId: VID, zoneId: ZID, currency: 'PKR' });
     expect(spy).toHaveBeenCalled();
     expect(r.data).toEqual(expect.objectContaining({ fee: 250, estimate: '2-3 days', freeShipping: false }));
+  });
+
+  it('COD hidden until the seller has set up shipping (fresh store)', async () => {
+    expect((await make({ noShipping: true }).svc.getDeliveryInfo({ productId: PID, variantId: VID })).data.cod).toBe(false);
   });
 
   it('COD hidden when the store opted out, platform COD is off, or the package is over the admin limit', async () => {

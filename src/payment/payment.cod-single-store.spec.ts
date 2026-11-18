@@ -51,6 +51,7 @@ function makeService(items: any[], opts: { inactive?: boolean } = {}) {
               ? []
               : [...new Set(items.map((i: any) => i.storeId))].map((_id) => ({
                   _id,
+                  shipFrom: { city: 'Lahore' }, // shipping is set up (COD gate)
                 })),
         }),
       })),
