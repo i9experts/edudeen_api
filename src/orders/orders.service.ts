@@ -20,6 +20,8 @@ import { LoyaltyService } from 'src/loyalty/loyalty.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 import { isPackagePaid } from './package-paid.util';
+import { cancelBlockReason } from './order-action-rules.util';
+import { escapeHtml, notificationEmailShell } from '../notifications/templates/notification-email.template';
 import { cleanRefundEvidence, REFUND_REASON_CODES, reasonDisplayLabel } from 'src/refund-request/refund-evidence.util';
 import { cleanFollowUpNote, cleanRejectReason, requiredPreviousFollowUp, trailEntry } from 'src/refund-request/return-trail.util';
 import { buildReturnDetail } from './return-detail.util';
@@ -1390,6 +1392,9 @@ export class OrdersService {
     if (targetItems.length === 0)
       throw new BadRequestException('No items to cancel');
 
+    const blockedMsg = cancelBlockReason(order as any, targetItems.map((t) => t.item), actor?.role);
+    if (blockedMsg) throw new BadRequestException(blockedMsg);
+
     // A paid digital item was delivered the moment it was paid for (the
     // download link is live), so it goes through a refund request instead.
     if (order.isPaid) {
@@ -1565,6 +1570,11 @@ export class OrdersService {
           title: 'Your order was cancelled',
           body: `Order #${(order as any).orderNumber ?? orderId} was cancelled by ${cancelledBy === 'seller' ? 'the seller' : 'Edudeen'} — ${reason}`,
           data: { orderId, link: `/account/orders/${orderId}` },
+          // The in-app notice always fired; the email was the missing part for seller / admin cancels.
+          email: {
+            subject: `Your Edudeen order #${(order as any).orderNumber ?? orderId} was cancelled`,
+            html: notificationEmailShell('Your order was cancelled', `<p>Your order <b>#${escapeHtml(String((order as any).orderNumber ?? orderId))}</b> was cancelled by ${cancelledBy === 'seller' ? 'the seller' : 'Edudeen'}.</p><p>Reason: ${escapeHtml(String(reason))}</p><p>If you paid online, the refund goes back to your original payment method.</p>`, { label: 'View my order', url: `${(process.env.WEB_APP_URL || 'https://www.edudeen.com').replace(/\/$/, '')}/account/orders/${orderId}` }),
+          },
         })
         .catch(() => {});
       if (cancelledBy === 'admin') {

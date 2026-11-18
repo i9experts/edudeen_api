@@ -14,6 +14,7 @@ import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { verifyStoreOwnershipOrForbidden } from 'src/common/store-ownership.util';
 import { isPackagePaid } from 'src/orders/package-paid.util';
+import { refundBlockReason } from 'src/orders/order-action-rules.util';
 import { RedisService } from 'src/redis/redis.service';
 import { isValidObjectId } from 'mongoose';
 import { escapeRegex } from 'src/common/query-safety.util';
@@ -80,6 +81,8 @@ export class RefundRequestService {
     if (items.length !== dto.itemIds.length) {
       throw new BadRequestException('One or more itemIds were not found on this seller order');
     }
+    const freeMsg = refundBlockReason(order as any, items);
+    if (freeMsg) throw new BadRequestException(freeMsg);
     const alreadyRefunded = items.filter((i) => i.status === 'refunded');
     if (alreadyRefunded.length > 0) {
       throw new BadRequestException('One or more of these items have already been refunded');

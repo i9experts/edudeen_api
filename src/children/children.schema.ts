@@ -12,6 +12,8 @@ export class ChildProfile {
   /** Free-text label shown to the parent, e.g. "Class 3". */
   @Prop({ type: String, default: '' }) gradeLabel: string;
   @Prop({ type: Number, default: null }) age: number | null;
+  /** Optional (additive, no backfill): used for "Son of" / "Daughter of" wording. */
+  @Prop({ type: String, enum: ['male', 'female', null], default: null }) gender: 'male' | 'female' | null;
   @Prop({ type: [String], default: [] }) subjects: string[];
 }
 export type ChildProfileDocument = ChildProfile & Document;

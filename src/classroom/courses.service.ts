@@ -334,7 +334,7 @@ export class CoursesService {
       success: true,
       data: {
         code: p.certificateCode, learnerName: d?.fullName ?? p.learnerName, courseName: product?.name ?? 'Course', courseSlug: product?.slug ?? null, teacher: store?.name ?? null, storeSlug: store?.slug ?? null, completedAt: p.completedAt,
-        guardianName: d?.guardianName ?? null, institute: d?.institute ?? null, city: d?.city ?? null, country: d?.country ?? null,
+        guardianName: d?.guardianName ?? null, gender: d?.gender ?? null, institute: d?.institute ?? null, city: d?.city ?? null, country: d?.country ?? null,
         courseTitle: product?.name ?? 'Course', issuedAt: p.completedAt ?? p.updatedAt ?? null, storeName: store?.name ?? null,
         instructorName: course?.instructor?.name || null,
         config: {

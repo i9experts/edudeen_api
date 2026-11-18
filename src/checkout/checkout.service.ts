@@ -293,6 +293,20 @@ export class CheckoutService {
     ]);
     for (const s of storeDocs as any[]) storeDocById.set(String(s._id), s);
 
+    // A digital item / course (free or paid) is owned once: block buying or claiming it again.
+    const digitalIds = pricedProducts.filter((p: any) => p.type === 'digital').map((p: any) => String(p._id));
+    if (digitalIds.length) {
+      const owned = await (this.databaseService.repositories.orderModel as any).findOne({
+        userId, isDelete: false, $or: [{ isPaid: true }, { isFreeClaim: true }],
+        sellerOrders: { $elemMatch: { items: { $elemMatch: { productId: { $in: digitalIds }, type: 'digital', status: { $nin: ['cancelled', 'refunded'] } } } } },
+      }).select('sellerOrders.items.productId sellerOrders.items.name sellerOrders.items.type sellerOrders.items.status').lean();
+      if (owned) {
+        const hit = ((owned as any).sellerOrders ?? []).flatMap((so: any) => so.items ?? [])
+          .find((i: any) => digitalIds.includes(String(i.productId)) && i.type === 'digital' && !['cancelled', 'refunded'].includes(i.status));
+        throw new BadRequestException(`"${hit?.name ?? 'This item'}" is already in your library. Open it from My Library instead of buying it again.`);
+      }
+    }
+
     for (const cartItem of selectedItems) {
       const product = productById.get(String(cartItem.productId));
       if (!product)

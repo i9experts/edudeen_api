@@ -116,6 +116,7 @@ export function cleanCertificateDetails(raw: any): CertificateDetails {
   return {
     fullName,
     guardianName: certText(raw.guardianName, 80, 'Parent / guardian name'),
+    gender: raw.gender === 'male' || raw.gender === 'female' ? raw.gender : null,
     institute: certText(raw.institute, 120, 'School / institute'),
     city: certText(raw.city, 60, 'City'),
     country: certText(raw.country, 60, 'Country'),

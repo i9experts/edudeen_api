@@ -10,8 +10,8 @@ import { PremiumEntitlementsService } from '../premium/premium-entitlements.serv
 export const MAX_CHILDREN = 8;
 const LEVELS = new Set<string>(Object.values(EducationLevel));
 
-export interface ChildInput { name?: unknown; educationLevel?: unknown; gradeLabel?: unknown; age?: unknown; subjects?: unknown }
-interface Clean { name: string; educationLevel: string; gradeLabel: string; age: number | null; subjects: string[] }
+export interface ChildInput { name?: unknown; educationLevel?: unknown; gradeLabel?: unknown; age?: unknown; subjects?: unknown; gender?: unknown }
+interface Clean { name: string; educationLevel: string; gradeLabel: string; age: number | null; subjects: string[]; gender: 'male' | 'female' | null }
 
 /** Validates + normalises input. `partial` = PATCH (only provided keys are returned). */
 export function cleanChildInput(body: ChildInput, partial = false): Partial<Clean> {
@@ -41,6 +41,11 @@ export function cleanChildInput(body: ChildInput, partial = false): Partial<Clea
       if (!Number.isInteger(n) || n < 2 || n > 25) throw new BadRequestException('Age must be a whole number between 2 and 25');
       out.age = n;
     }
+  }
+  if (b.gender !== undefined) {
+    if (b.gender === null || b.gender === '') out.gender = null;
+    else if (b.gender === 'male' || b.gender === 'female') out.gender = b.gender;
+    else throw new BadRequestException('Gender must be male or female');
   }
   if (b.subjects !== undefined) {
     if (!Array.isArray(b.subjects) || b.subjects.length > 10) throw new BadRequestException('At most 10 subjects');

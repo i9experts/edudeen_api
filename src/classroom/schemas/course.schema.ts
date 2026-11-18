@@ -25,6 +25,8 @@ export interface CertificateConfig {
 export interface CertificateDetails {
   fullName: string;
   guardianName: string | null;
+  /** Optional: drives "Son of" / "Daughter of" (otherwise "Child of"). */
+  gender?: 'male' | 'female' | null;
   institute: string | null;
   city: string | null;
   country: string | null;
