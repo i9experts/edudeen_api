@@ -4,7 +4,7 @@
  */
 export const ROOT_RESERVED_SEGMENTS = new Set<string>([
   // app pages
-  'about', 'faq', 'contact-us', 'learn', 'premium', 'become-a-seller', 'privacy-policy', 'terms-of-service', 'cookie-policy',
+  'about', 'faq', 'contact-us', 'learn', 'premium', 'become-a-seller', 'privacy-policy', 'terms-of-service', 'seller-terms', 'content-policy', 'report-violation', 'cookie-policy',
   'returns', 'sitemap', 'pricing', 'sellers', 'account', 'marketplace', 'cart', 'checkout', 'order-success', 'education',
   'educationmarketplace', 'product', 'maintenance', 'login', 'register', 'onboard', 'onboarding', 'forgot-password',
   'verify-otp', 'new-password', 'seller', 'admin', 'store', 'shop', 'browse', 'c', 'course', 'wishlist', 'compare',

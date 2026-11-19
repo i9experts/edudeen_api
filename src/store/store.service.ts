@@ -46,7 +46,7 @@ import { cleanEducatorProfile, cleanStoreContactEmail, cleanStoreContactPhone, c
 // frontend's top-level static route segments (router/index.tsx), reserved so
 // a store can never claim a URL that collides with a real app page.
 const RESERVED_STORE_SLUGS = new Set([
-  'pricing', 'sellers', 'faq', 'privacy-policy', 'terms-of-service', 'cookie-policy',
+  'pricing', 'sellers', 'faq', 'privacy-policy', 'terms-of-service', 'seller-terms', 'content-policy', 'report-violation', 'cookie-policy',
   'contact-us', 'account', 'marketplace', 'cart', 'checkout', 'order-success',
   'educationmarketplace', 'education', 'product', 'maintenance', 'login', 'register', 'onboard',
   'forgot-password', 'verify-otp', 'new-password', 'seller', 'admin', 'store',
