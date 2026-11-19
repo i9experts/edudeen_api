@@ -184,13 +184,17 @@ export class CoursesService {
   }
 
   private shapeLesson(l: any) {
-    const base = { _id: l._id, title: l.title, type: l.type, text: l.text ?? '', durationMinutes: l.durationMinutes };
+    const base = {
+      _id: l._id, title: l.title, type: l.type, text: l.text ?? '', durationMinutes: l.durationMinutes,
+      // Urdu / English subtitles travel with the video or voice lesson (plain text, rendered as text by the player).
+      ...(l.type === 'video' || l.type === 'audio' ? { subtitles: (l.subtitles ?? []).map((s: any) => ({ lang: s.lang, kind: s.kind, content: s.content })) } : {}),
+    };
     if (l.type === 'video' && l.videoUrl && !l.file?.url) {
       // External (YouTube / Vimeo) video: no file of ours to sign.
       return { ...base, videoUrl: l.videoUrl, media: { kind: 'external', url: l.videoUrl } };
     }
-    if ((l.type === 'video' || l.type === 'pdf') && l.file?.url) {
-      const mime = this.uploadService.resolveMimeType(l.file.name ?? '', l.file.mimeType ?? (l.type === 'pdf' ? 'application/pdf' : 'video/mp4'));
+    if ((l.type === 'video' || l.type === 'pdf' || l.type === 'audio') && l.file?.url) {
+      const mime = this.uploadService.resolveMimeType(l.file.name ?? '', l.file.mimeType ?? (l.type === 'pdf' ? 'application/pdf' : l.type === 'audio' ? 'audio/mpeg' : 'video/mp4'));
       const resourceType = mime.startsWith('video/') ? 'video' : mime.startsWith('image/') ? 'image' : 'raw';
       const url = this.uploadService.generateSignedUrl(l.file.url, resourceType, LESSON_LINK_SECONDS, l.file.name, true);
       return { ...base, file: { name: l.file.name, mimeType: mime, url }, media: { kind: 'file', url } };

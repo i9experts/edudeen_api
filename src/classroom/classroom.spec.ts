@@ -116,6 +116,38 @@ describe('Course builder input', () => {
     expect(() => cleanCourseInput({ sections: 'nope' })).toThrow(BadRequestException);
   });
 
+  describe('voice lessons and subtitles', () => {
+    const vtt = 'WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nاسلام علیکم';
+    const voice = (extra: object = {}) => ({ title: 'Dars', type: 'audio', file: { url: 'private/x/a1', name: 'dars.mp3' }, ...extra });
+    const clean = (lesson: object) => cleanCourseInput({ sections: [{ title: 'A', lessons: [lesson] }] }).sections[0].lessons[0];
+
+    it('accepts an uploaded voice recording and keeps Urdu and English subtitles', () => {
+      const out = cleanCourseInput({ sections: [{ title: 'A', lessons: [voice({ subtitles: [{ lang: 'ur', content: vtt }, { lang: 'en', content: 'Hello, welcome to the lesson.' }] })] }] });
+      expect(out.fileRefs).toEqual([{ url: 'private/x/a1', name: 'dars.mp3' }]);
+      expect(out.sections[0].lessons[0].subtitles).toEqual([
+        { lang: 'ur', kind: 'timed', content: vtt },
+        { lang: 'en', kind: 'text', content: 'Hello, welcome to the lesson.' },
+      ]);
+    });
+
+    it('needs a recording, and only MP3 / M4A / WAV / OGG files', () => {
+      expect(() => clean({ title: 'Dars', type: 'audio' })).toThrow(BadRequestException);
+      expect(() => clean(voice({ file: { url: 'private/x/a2', name: 'dars.exe' } }))).toThrow(BadRequestException);
+      expect(() => clean(voice({ videoUrl: 'https://youtu.be/abc' }))).not.toThrow();
+    });
+
+    it('rejects an unknown language, a duplicate language and oversized subtitles', () => {
+      expect(() => clean(voice({ subtitles: [{ lang: 'fr', content: 'x' }] }))).toThrow(BadRequestException);
+      expect(() => clean(voice({ subtitles: [{ lang: 'ur', content: 'a' }, { lang: 'ur', content: 'b' }] }))).toThrow(BadRequestException);
+      expect(() => clean(voice({ subtitles: [{ lang: 'en', content: 'x'.repeat(120_001) }] }))).toThrow(BadRequestException);
+    });
+
+    it('drops empty subtitles and ignores them on lessons that cannot have any', () => {
+      expect(clean(voice({ subtitles: [{ lang: 'en', content: '   ' }] })).subtitles).toEqual([]);
+      expect(clean({ title: 'Notes', type: 'text', text: 'Read', subtitles: [{ lang: 'en', content: 'x' }] }).subtitles).toEqual([]);
+    });
+  });
+
   it('scores quizzes against the pass mark', () => {
     const quiz = cleanCourseInput({ sections: [{ title: 'A', lessons: [quizLesson] }] }).sections[0].lessons[0].quiz!;
     expect(scoreQuiz(quiz, [1, 0])).toEqual({ correct: 2, total: 2, percent: 100, passed: true });

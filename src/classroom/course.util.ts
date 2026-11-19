@@ -1,7 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { BadRequestException } from '@nestjs/common';
 import { randomBytes } from 'crypto';
-import { CertificateConfig, CertificateDetails, COURSE_LIMITS, LESSON_TYPES, LessonType } from './schemas/course.schema';
+import { AUDIO_EXTENSIONS, CertificateConfig, CertificateDetails, COURSE_LIMITS, LESSON_TYPES, LessonSubtitle, LessonType, SUBTITLE_LANGS, SUBTITLE_LIMITS } from './schemas/course.schema';
 
 const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const newId = () => randomBytes(6).toString('hex');
@@ -13,10 +13,33 @@ export interface CleanLesson {
   type: LessonType;
   file: { url: string; name: string; size: number | null; mimeType: string | null } | null;
   videoUrl: string | null;
+  subtitles: LessonSubtitle[];
   text: string;
   durationMinutes: number | null;
   isPreview: boolean;
   quiz: { passPercent: number; questions: { question: string; options: string[]; answerIndex: number }[] } | null;
+}
+
+/**
+ * Subtitles of one video / voice lesson: at most one per language (Urdu or English). The builder sends WebVTT
+ * (it converts .srt itself) or a plain transcript; empty entries are dropped. `kind` is decided here, from the content.
+ */
+export function cleanSubtitles(raw: unknown, lessonTitle: string): LessonSubtitle[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new BadRequestException(`"${lessonTitle}": subtitles must be a list`);
+  const seen = new Set<string>();
+  const out: LessonSubtitle[] = [];
+  for (const s of raw as any[]) {
+    const lang = s?.lang;
+    if (!(SUBTITLE_LANGS as readonly string[]).includes(lang)) throw new BadRequestException(`"${lessonTitle}": subtitles can be in Urdu or English`);
+    if (seen.has(lang)) throw new BadRequestException(`"${lessonTitle}": add only one subtitle per language`);
+    seen.add(lang);
+    const content = typeof s?.content === 'string' ? s.content.replace(/^﻿/, '').replace(/\r\n?/g, '\n').trim() : '';
+    if (!content) continue;
+    if (content.length > SUBTITLE_LIMITS.perTrack) throw new BadRequestException(`"${lessonTitle}": the ${lang === 'ur' ? 'Urdu' : 'English'} subtitles are too long (max ${SUBTITLE_LIMITS.perTrack.toLocaleString('en-US')} characters)`);
+    out.push({ lang, kind: /^WEBVTT/.test(content) ? 'timed' : 'text', content });
+  }
+  return out;
 }
 
 export const VIDEO_HOSTS = ['youtube.com', 'youtu.be', 'vimeo.com'] as const;
@@ -178,6 +201,7 @@ export function cleanCourseInput(body: any): { sections: { _id: string; title: s
   if (rawSections.length > COURSE_LIMITS.sections) throw new BadRequestException(`A course can have up to ${COURSE_LIMITS.sections} sections`);
   const fileRefs: { url: string; name: string }[] = [];
   const seen = new Set<string>();
+  let subtitleChars = 0;
   const keepId = (v: unknown) => {
     const id = typeof v === 'string' && ID_RX.test(v) && !seen.has(v) ? v : newId();
     seen.add(id);
@@ -192,15 +216,22 @@ export function cleanCourseInput(body: any): { sections: { _id: string; title: s
       const lTitle = str(l?.title, 150);
       if (!lTitle) throw new BadRequestException(`Lesson ${li + 1} in "${title}" needs a title`);
       const type = (LESSON_TYPES as readonly string[]).includes(l?.type) ? (l.type as LessonType) : null;
-      if (!type) throw new BadRequestException(`"${lTitle}": pick video, PDF, text or quiz`);
+      if (!type) throw new BadRequestException(`"${lTitle}": pick video, voice, PDF, text or quiz`);
       let file: CleanLesson['file'] = null;
       let quiz: CleanLesson['quiz'] = null;
       let videoUrl: string | null = null;
       const text = str(l?.text, 20000);
-      if (type === 'video' || type === 'pdf') {
+      const subtitles = type === 'video' || type === 'audio' ? cleanSubtitles(l?.subtitles, lTitle) : [];
+      subtitleChars += subtitles.reduce((n, s) => n + s.content.length, 0);
+      if (subtitleChars > SUBTITLE_LIMITS.perCourse) throw new BadRequestException('The subtitles in this course are too large in total. Shorten or remove some of them.');
+      if (type === 'video' || type === 'pdf' || type === 'audio') {
         const url = str(l?.file?.url, 500);
         if (type === 'video') videoUrl = cleanVideoUrl(l?.videoUrl);
-        if (!url && !videoUrl) throw new BadRequestException(`"${lTitle}": upload the ${type === 'video' ? 'video or paste a YouTube/Vimeo link' : 'PDF'}`);
+        if (!url && !videoUrl) throw new BadRequestException(`"${lTitle}": upload the ${type === 'video' ? 'video or paste a YouTube/Vimeo link' : type === 'audio' ? 'voice recording (MP3, M4A, WAV or OGG)' : 'PDF'}`);
+        if (url && type === 'audio') {
+          const ext = (str(l?.file?.name, 255).split('.').pop() ?? '').toLowerCase();
+          if (!(AUDIO_EXTENSIONS as readonly string[]).includes(ext)) throw new BadRequestException(`"${lTitle}": the voice recording must be an MP3, M4A, WAV or OGG file`);
+        }
         if (url) {
           const name = str(l?.file?.name, 255) || lTitle;
           file = { url, name, size: null, mimeType: null };
@@ -226,7 +257,7 @@ export function cleanCourseInput(body: any): { sections: { _id: string; title: s
       }
       const dur = l?.durationMinutes == null || l.durationMinutes === '' ? null : Number(l.durationMinutes);
       return {
-        _id: keepId(l?._id), title: lTitle, type, file, videoUrl, text: type === 'text' ? text : str(l?.text, 2000), quiz,
+        _id: keepId(l?._id), title: lTitle, type, file, videoUrl, subtitles, text: type === 'text' ? text : str(l?.text, 2000), quiz,
         durationMinutes: dur != null && Number.isFinite(dur) && dur > 0 ? Math.min(Math.round(dur), 1000) : null,
         isPreview: l?.isPreview === true && type !== 'quiz',
       };

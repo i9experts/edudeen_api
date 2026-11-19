@@ -5,8 +5,15 @@ import { Document } from 'mongoose';
 export type CourseDocument = Course & Document;
 export type CourseProgressDocument = CourseProgress & Document;
 
-export const LESSON_TYPES = ['video', 'pdf', 'text', 'quiz'] as const;
+export const LESSON_TYPES = ['video', 'audio', 'pdf', 'text', 'quiz'] as const;
 export type LessonType = (typeof LESSON_TYPES)[number];
+/** Subtitles on a video / voice lesson: Urdu and/or English. `timed` = WebVTT cues, `text` = a plain transcript. */
+export const SUBTITLE_LANGS = ['ur', 'en'] as const;
+export type SubtitleLang = (typeof SUBTITLE_LANGS)[number];
+export interface LessonSubtitle { lang: SubtitleLang; kind: 'timed' | 'text'; content: string }
+/** Caps keep one course document well under Mongo's 16 MB limit (a 1.5 h lecture's captions are ~80 KB). */
+export const SUBTITLE_LIMITS = { perTrack: 120_000, perCourse: 6_000_000 } as const;
+export const AUDIO_EXTENSIONS = ['mp3', 'm4a', 'wav', 'ogg'] as const;
 export const COURSE_LIMITS = { sections: 30, lessonsPerSection: 50, quizQuestions: 30, options: 6 } as const;
 
 export interface CertificateConfig {
@@ -59,6 +66,7 @@ export class Course {
       type: LessonType;
       file: { url: string; name: string; size: number | null; mimeType: string | null } | null;
       videoUrl?: string | null;
+      subtitles?: LessonSubtitle[];
       text: string;
       durationMinutes: number | null;
       isPreview: boolean;
