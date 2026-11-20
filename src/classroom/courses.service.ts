@@ -90,14 +90,34 @@ export class CoursesService {
     return product;
   }
 
+  /**
+   * The builder's subtitle timeline plays the seller's own voice recording, so voice lessons carry a signed
+   * `file.playUrl`. It is only ever sent to the owner and is ignored when the course is saved (never stored).
+   */
+  private withPlayUrls<T extends { lessons?: any[] }>(sections: T[]): T[] {
+    return (sections ?? []).map(s => ({
+      ...s,
+      lessons: (s.lessons ?? []).map((l: any) => {
+        if (l.type !== 'audio' || !l.file?.url) return l;
+        try {
+          const mime = this.uploadService.resolveMimeType(l.file.name ?? '', l.file.mimeType ?? 'audio/mpeg');
+          const resourceType = mime.startsWith('video/') ? 'video' : 'raw';
+          return { ...l, file: { ...l.file, playUrl: this.uploadService.generateSignedUrl(l.file.url, resourceType, 6 * 3600, l.file.name, true) } };
+        } catch {
+          return l; // storage not configured: the builder just has no preview
+        }
+      }),
+    }));
+  }
+
   async getForSeller(storeId: string, sellerId: string, productId: string) {
     const product = await this.sellerProduct(storeId, sellerId, productId);
     const course: any = await this.r.courseModel.findOne({ productId }).lean();
     return {
       success: true,
       data: {
-        product: { _id: String(product._id), name: product.name, slug: product.slug, status: product.status, deliveryFormat: product.deliveryFormat ?? 'download' },
-        sections: course?.sections ?? [],
+        product: { _id: String(product._id), name: product.name, slug: product.slug, status: product.status, deliveryFormat: product.deliveryFormat ?? 'download', imageCount: (product.images ?? []).length, classFrom: product.classFrom ?? null, classTo: product.classTo ?? null },
+        sections: this.withPlayUrls(course?.sections ?? []),
         certificateEnabled: course?.certificateEnabled ?? true,
         outcomes: course?.outcomes ?? [],
         instructor: course?.instructor ?? { name: '', bio: '' },
@@ -139,7 +159,7 @@ export class CoursesService {
       { upsert: true, returnDocument: 'after' },
     );
     if (product.deliveryFormat !== 'course') await this.r.productModel.updateOne({ _id: productId }, { $set: { deliveryFormat: 'course' } });
-    return { success: true, message: 'Course saved', data: { sections, certificateEnabled, outcomes, instructor, accessDays, certificateConfig: certificateConfig ?? { ...EMPTY_CERT_CONFIG, ...(existing?.certificateConfig ?? {}) } } };
+    return { success: true, message: 'Course saved', data: { sections: this.withPlayUrls(sections), certificateEnabled, outcomes, instructor, accessDays, certificateConfig: certificateConfig ?? { ...EMPTY_CERT_CONFIG, ...(existing?.certificateConfig ?? {}) } } };
   }
 
   // ── Public outline (product page "Course content") ─────────────────────────
