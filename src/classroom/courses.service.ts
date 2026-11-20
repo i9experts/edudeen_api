@@ -16,6 +16,8 @@ import { buildRosterView, maskRosterEmail, parseRosterQuery, rosterCsvRows, ROST
 import { toExportCsv } from '../common/csv-export.util';
 
 const LESSON_LINK_SECONDS = 3600;
+/** Largest saved voice the in-browser editor will open (decoding it uses far more memory than the file itself). */
+const VOICE_EDIT_MAX_BYTES = 80 * 1024 * 1024;
 
 @Injectable()
 export class CoursesService {
@@ -108,6 +110,22 @@ export class CoursesService {
         }
       }),
     }));
+  }
+
+  /**
+   * The bytes of a saved voice lesson, for the seller's in-browser voice editor (cut / join). Owner only. Streamed through
+   * the API so the browser does not depend on the storage bucket's CORS settings; capped so the editor never loads a huge file.
+   */
+  async voiceForSeller(storeId: string, sellerId: string, productId: string, lessonId: string) {
+    await this.sellerProduct(storeId, sellerId, productId);
+    const course: any = await this.r.courseModel.findOne({ productId }).select('sections').lean();
+    let lesson: any = null;
+    for (const s of course?.sections ?? []) for (const l of s.lessons ?? []) if (l._id === lessonId) lesson = l;
+    if (!lesson || lesson.type !== 'audio' || !lesson.file?.url) throw new NotFoundException('Voice lesson not found');
+    if ((lesson.file.size ?? 0) > VOICE_EDIT_MAX_BYTES) throw new BadRequestException('This recording is too large to edit here');
+    const buffer = await this.uploadService.downloadPrivateFileBuffer(lesson.file.url, 'raw');
+    if (buffer.length > VOICE_EDIT_MAX_BYTES) throw new BadRequestException('This recording is too large to edit here');
+    return { buffer, mimeType: this.uploadService.resolveMimeType(lesson.file.name ?? '', lesson.file.mimeType ?? 'audio/mpeg') };
   }
 
   async getForSeller(storeId: string, sellerId: string, productId: string) {

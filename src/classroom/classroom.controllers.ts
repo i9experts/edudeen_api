@@ -283,6 +283,20 @@ export class CoursesController {
     return this.courses.getForSeller(storeId, req.user.userId, productId);
   }
 
+  /** The seller's own saved voice recording (bytes) for the voice editor. */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Get('seller/:storeId/:productId/lessons/:lessonId/voice')
+  async voice(@Req() req: any, @Param('storeId') storeId: string, @Param('productId') productId: string, @Param('lessonId') lessonId: string, @Res() res: Response) {
+    const { buffer, mimeType } = await this.courses.voiceForSeller(storeId, req.user.userId, productId, lessonId);
+    res.header('Content-Type', mimeType);
+    res.header('Content-Length', String(buffer.length));
+    res.header('Cache-Control', 'no-store');
+    res.header('X-Content-Type-Options', 'nosniff');
+    res.send(buffer);
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Get('seller/:storeId/:productId/students')
