@@ -8,6 +8,9 @@ import {
   BadRequestException,
   Body,
   Req,
+  Delete,
+  Query,
+  Optional,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -18,6 +21,8 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { STORE_IMAGE_PURPOSES, assertStoreImage } from '../common/store-image.util';
 import { posterFromVideoUrl, sniffVideo } from '../products/product-video.util';
+import { ActivityLogService } from '../activity-log/activity-log.service';
+import { DatabaseService } from '../database/databaseservice';
 
 /** Product video cap (Cloudinary free plan allows up to 100 MB per video). */
 export const PRODUCT_VIDEO_MAX_BYTES = 60 * 1024 * 1024;
@@ -31,6 +36,8 @@ export class UploadController {
   constructor(
     private readonly uploadService: UploadService,
     private readonly uploadedAssets: UploadedAssetsService,
+    @Optional() private readonly activity?: ActivityLogService,
+    @Optional() private readonly db?: DatabaseService,
   ) {}
 
   // ── PUBLIC file (images, videos) — koi bhi logged-in user ──
@@ -98,5 +105,21 @@ export class UploadController {
       data: result,
       note: 'Save publicId in your product — URL is not accessible directly',
     };
+  }
+
+  // ── Delete one of MY unused private files (test / abandoned uploads) — sirf seller ──
+  // DELETE /api/upload/private-file?publicId=<id from private-file>. 404 = not found or not yours; 409 = in use.
+  @Delete('private-file')
+  @UseGuards(RolesGuard)
+  @Roles('seller')
+  async deletePrivateFile(@Req() req: { user: { userId: string; role: string } }, @Query('publicId') publicId?: string) {
+    const out = await this.uploadedAssets.deleteOwnedUnreferenced(req.user.userId, publicId, (id, type) => this.uploadService.deletePrivateFile(id, type));
+    const store: any = this.db ? await this.db.repositories.storeModel.findOne({ sellerId: req.user.userId, isDelete: false }).select('_id').lean().catch(() => null) : null;
+    await this.activity?.log({
+      storeId: store?._id ? String(store._id) : 'platform', category: 'products', action: 'private_file_deleted',
+      description: `Deleted unused private file ${out.fileName ?? out.publicId}`, actorId: req.user.userId, actorRole: req.user.role,
+      targetId: out.publicId, targetType: 'uploaded_asset', metadata: { fileSize: out.fileSize },
+    } as any);
+    return { success: true, message: 'File deleted', data: { publicId: out.publicId } };
   }
 }

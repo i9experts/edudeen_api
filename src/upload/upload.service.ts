@@ -173,6 +173,22 @@ export class UploadService {
     });
   }
 
+  /**
+   * Deletes one private object from storage (R2 when the id is `r2/...`, else Cloudinary `type: private`).
+   * "Already gone" counts as deleted. Throws when storage refuses, so the caller can keep its record.
+   */
+  async deletePrivateFile(publicId: string, resourceType: string = 'raw'): Promise<void> {
+    if (isR2Id(publicId)) {
+      const r2 = this.r2Config();
+      if (!r2) throw new BadRequestException('File storage is not configured');
+      const res = await fetch(presignR2Url(r2, 'DELETE', stripStorageId(publicId), 300), { method: 'DELETE' });
+      if (!res.ok && res.status !== 404) throw new Error(`storage delete failed (${res.status})`);
+      return;
+    }
+    const out: any = await cloudinary.uploader.destroy(publicId, { type: 'private', resource_type: resourceType as any, invalidate: true });
+    if (out?.result !== 'ok' && out?.result !== 'not found') throw new Error(`storage delete failed (${String(out?.result)})`);
+  }
+
   // ── SIGNED URL generate ──
   // WARNING: the `expires_at` option does NOT expire this URL. Cloudinary only enforces `expires_at` on its
   // download-API URLs (`utils.private_download_url`) and on token-authenticated delivery; for a plain signed
