@@ -42,7 +42,7 @@ export function canEditReply(replyCreatedAt: Date | string | null | undefined, n
   return Number.isFinite(t) && now.getTime() - t <= REPLY_EDIT_WINDOW_MS;
 }
 
-/** Seller's reasons for reporting a review. `other` needs text. */
+/** Reasons for reporting a review (seller and buyer use the same list). `other` needs text. */
 export const REPORT_REASONS: Record<string, string> = {
   abusive: 'Abusive language',
   off_topic: 'Not about the product',
@@ -52,6 +52,8 @@ export const REPORT_REASONS: Record<string, string> = {
   other: 'Other',
 };
 export const REPORT_TEXT_MAX = 300;
+/** A buyer may report at most this many reviews per rolling 24 hours (on top of the per-minute throttle). */
+export const BUYER_REPORTS_PER_DAY = 20;
 
 export function cleanReport(codeRaw: unknown, textRaw: unknown): { code: string; text: string | null } | string {
   const code = String(codeRaw ?? '');

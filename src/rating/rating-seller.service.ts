@@ -1,7 +1,7 @@
 /* eslint-disable prettier/prettier */
 import {
   BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional,
-  UnprocessableEntityException,
+  UnprocessableEntityException, HttpException, HttpStatus,
 } from '@nestjs/common';
 import { isValidObjectId } from 'mongoose';
 import { randomUUID } from 'crypto';
@@ -10,7 +10,7 @@ import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
 import {
-  DONE_PACKAGE_STATUSES, REVIEW_REQUEST_REASON_TEXT, REVIEW_REQUEST_WINDOW_DAYS, REPORT_REASONS,
+  DONE_PACKAGE_STATUSES, REVIEW_REQUEST_REASON_TEXT, REVIEW_REQUEST_WINDOW_DAYS, REPORT_REASONS, BUYER_REPORTS_PER_DAY,
   cleanReport, reviewRequestBlock, trustedProgress,
 } from './review-request.util';
 
@@ -180,6 +180,46 @@ export class RatingSellerService {
       throw err;
     }
     return { success: true, message: 'Review reported. Edudeen will look at it.' };
+  }
+
+  // ── report a review (buyer) ─────────────────────────────────────────────
+  /**
+   * A logged-in buyer reports someone else's review. Same reason list as the seller report. One report per buyer per
+   * review (409 on a repeat), at most BUYER_REPORTS_PER_DAY a day. The report lands in the admin Content Moderation
+   * queue (Report targetType 'review', reporterRole 'user'), where Remove deletes the review as for any review report.
+   */
+  async reportReviewByBuyer(userId: string, reviewId: string, dto: { reasonCode?: string; text?: string }) {
+    const review: any = await this.r.ratingModel.findOne({ _id: reviewId, isDelete: false }).select('_id userId storeId').lean();
+    if (!review) throw new NotFoundException('Review not found');
+    if (String(review.userId) === String(userId)) throw new BadRequestException('You cannot report your own review');
+    const cleaned = cleanReport(dto.reasonCode, dto.text);
+    if (typeof cleaned === 'string') throw new BadRequestException(cleaned);
+
+    const key = { reporterId: String(userId), reporterRole: 'user', targetType: 'review', targetId: String(reviewId) };
+    if (await this.r.reportModel.exists(key)) throw new ConflictException('You already reported this review');
+    const since = new Date(Date.now() - 24 * 3600_000);
+    const today = await this.r.reportModel.countDocuments({ reporterId: String(userId), reporterRole: 'user', createdAt: { $gte: since } });
+    if (today >= BUYER_REPORTS_PER_DAY) throw new HttpException('You have reported many reviews today. Please try again tomorrow.', HttpStatus.TOO_MANY_REQUESTS);
+
+    let report: any;
+    try {
+      report = await this.r.reportModel.create({ ...key, reason: REPORT_REASONS[cleaned.code], details: cleaned.text, riskLevel: 'low' });
+    } catch (err: any) {
+      // The partial unique index (one buyer report per review) caught a parallel double tap.
+      if (err?.code === 11000) throw new ConflictException('You already reported this review');
+      throw err;
+    }
+    this.activity?.log({
+      storeId: String(review.storeId ?? 'platform'), category: 'moderation', action: 'review_reported_by_buyer',
+      description: `Review reported by a buyer: ${REPORT_REASONS[cleaned.code]}`, actorId: String(userId), actorRole: 'user',
+      targetId: String(reviewId), targetType: 'review',
+    } as any);
+    return { success: true, message: 'Thanks. Edudeen will look at this review.', data: { reportId: String(report._id), status: 'pending' } };
+  }
+
+  /** The report reasons, for the report forms (buyer and seller). */
+  reportReasons() {
+    return { success: true, data: Object.entries(REPORT_REASONS).map(([code, label]) => ({ code, label, needsText: code === 'other' })) };
   }
 
   // ── insights ──────────────────────────────────────────────────────────────
