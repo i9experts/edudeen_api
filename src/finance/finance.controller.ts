@@ -59,8 +59,11 @@ export class FinanceController {
     @Query('price') price: string,
     @Query('type') type: string,
     @Query('currency') currency?: string,
+    // Optional (additive): earnings at the Premium member price - the seller's percent, or a product to read it from.
+    @Query('premiumPercent') premiumPercent?: string,
+    @Query('productId') productId?: string,
   ) {
-    return this.financeService.estimatePlatformFee(req.user.userId, storeId, { price: Number(price), type, currency });
+    return this.financeService.estimatePlatformFee(req.user.userId, storeId, { price: Number(price), type, currency, premiumPercent, productId });
   }
 
   @Get(':storeId/earnings-statement/download')

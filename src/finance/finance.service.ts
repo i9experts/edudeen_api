@@ -2,6 +2,8 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException, ServiceUnavailableException, Logger, Optional } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection, ClientSession, isValidObjectId } from 'mongoose';
+import { DEFAULT_PREMIUM_TERMS, PREMIUM_MAX_PERCENT, PREMIUM_MIN_PERCENT, premiumLinePrice, premiumPercentFor } from '../premium/premium.util';
+import { PremiumEntitlementsService } from '../premium/premium-entitlements.service';
 import { DatabaseService } from 'src/database/databaseservice';
 import { RequestPayoutDto } from './dto/request-payout.dto';
 import { AddPayoutMethodDto } from './dto/add-payout-method.dto';
@@ -142,6 +144,7 @@ export class FinanceService {
     private readonly notificationsService: NotificationsService,
     @InjectConnection() private readonly connection: Connection,
     @Optional() private readonly exchangeRateService?: ExchangeRateService,
+    @Optional() private readonly premiumEntitlements?: PremiumEntitlementsService,
   ) {}
 
   // ── Shorthand repo getters ───────────────────────────────────────────────
@@ -1360,7 +1363,7 @@ export class FinanceService {
    * `price` (store currency, item price only - never shipping) of `type`. Calls the SAME `perTypePlatformFee`
    * that `recordSale` uses. `fee: null` = Edudeen has not set a fee for that type (UI: "Set by Edudeen").
    */
-  async estimatePlatformFee(sellerId: string, storeId: string, input: { price: number; type: string; currency?: string }) {
+  async estimatePlatformFee(sellerId: string, storeId: string, input: { price: number; type: string; currency?: string; premiumPercent?: string | number; productId?: string }) {
     const store: any = await this.verifyStoreOwnership(sellerId, storeId);
     const currency = await this.resolveWalletCurrency(storeId, store, input.currency);
     const type = input.type === 'physical' ? 'physical' : input.type === 'digital' ? 'digital' : null;
@@ -1380,7 +1383,58 @@ export class FinanceService {
     }
     if (!result) return { ...base, fee: null, net: null, reason: 'not_set' as const };
     const fee = result.platformFee;
-    return { ...base, fee, net: this.round(price - fee), reason: null };
+    const premium = await this.estimatePremiumEarnings(store, storeId, currency, type, price, input);
+    return { ...base, fee, net: this.round(price - fee), reason: null, ...(premium !== undefined ? { premium } : {}) };
+  }
+
+  /**
+   * Fee estimate at the Premium MEMBER price (additive `premium` block; only when premiumPercent or productId is sent).
+   * Same money logic as a real premium sale: the member pays LIST x (1 - seller% - platform%) (premiumLinePrice), the
+   * seller is credited that plus the platform-funded part (recordSale's saleAmount), and the admin's premium sale fee %
+   * replaces the per-type fee on that line (perTypePlatformFee with feePercent). null = no member price applies.
+   */
+  private async estimatePremiumEarnings(
+    store: any, storeId: string, currency: string, type: 'digital' | 'physical', price: number,
+    input: { premiumPercent?: string | number; productId?: string },
+  ) {
+    const hasPercent = input.premiumPercent !== undefined && input.premiumPercent !== '';
+    if (!hasPercent && !input.productId) return undefined;
+    let sellerPercent: number;
+    if (hasPercent) {
+      const n = Number(input.premiumPercent);
+      if (!Number.isFinite(n) || n < PREMIUM_MIN_PERCENT || n > PREMIUM_MAX_PERCENT) {
+        throw new BadRequestException(`premiumPercent must be between ${PREMIUM_MIN_PERCENT} and ${PREMIUM_MAX_PERCENT}`);
+      }
+      sellerPercent = Math.round(n * 100) / 100;
+    } else {
+      if (!isValidObjectId(input.productId)) throw new BadRequestException('Invalid productId');
+      const product: any = await this.db.repositories.productModel
+        .findOne({ _id: input.productId, storeId, isDelete: false }).select('premiumDiscountPercent premiumOptOut').lean();
+      if (!product) throw new NotFoundException('Product not found');
+      sellerPercent = premiumPercentFor(product, store);
+    }
+    const terms = this.premiumEntitlements ? await this.premiumEntitlements.getTerms() : DEFAULT_PREMIUM_TERMS;
+    const calc = premiumLinePrice(price, null, sellerPercent, terms.platformPercent);
+    if (!calc.applies) return null;
+    const saleValue = this.round(calc.unit + calc.platformUnitDiscount);
+    let fee: number;
+    try {
+      const r = await this.perTypePlatformFee(saleValue, currency, [{ type, totalPrice: saleValue, quantity: 1, feePercent: terms.sellerFeePercent }]);
+      fee = r ? r.platformFee : 0;
+    } catch {
+      return null;
+    }
+    return {
+      memberPrice: calc.unit,
+      sellerPercent: calc.sellerPercent,
+      platformPercent: calc.platformPercent,
+      memberDiscountPercent: calc.totalPercent,
+      platformFunded: calc.platformUnitDiscount,
+      saleValue,
+      feePercent: terms.sellerFeePercent,
+      fee,
+      net: this.round(saleValue - fee),
+    };
   }
 
   /**
