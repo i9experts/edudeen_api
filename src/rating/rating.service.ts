@@ -303,6 +303,9 @@ export class RatingService {
           rating: r.rating,
           comments: r.comments,
           media: r.media,
+          // Additive (app backend gap #7): the "Used for" answer and the review photos (same URLs as `media`).
+          usedFor: r.usedFor ?? null,
+          photos: Array.isArray(r.media) ? r.media : [],
           isVerifiedPurchase: r.isVerifiedPurchase,
           sellerReply: r.sellerReply || null,
           createdAt: r.createdAt,
