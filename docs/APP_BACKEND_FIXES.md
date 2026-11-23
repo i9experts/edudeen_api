@@ -101,7 +101,9 @@ Product create (digital) and update.
 ```
 
   `premium: null` when no member price applies (e.g. opt-out). Without the
-  new params the response is unchanged. Same money logic as a real
+  new params the response is unchanged. The `premium` block is also sent
+  when the normal per-type fee is not set (`fee: null, reason: "not_set"`),
+  because a premium line pays the premium fee % either way. Same money logic as a real
   premium sale (`premiumLinePrice`; credited sale value = member price +
   platform-funded part, as `recordSale`'s `saleAmount`; the admin's
   premium sale fee % via `perTypePlatformFee`). Card processing is not

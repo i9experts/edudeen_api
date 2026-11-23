@@ -1386,20 +1386,23 @@ export class FinanceService {
     const price = Number(input.price);
     if (!Number.isFinite(price) || price <= 0 || price > 100_000_000) throw new BadRequestException('price must be a positive number');
     const base = { currency, type, price: this.round(price), generatedAt: new Date().toISOString() };
+    // The member-price block does not depend on the per-type fee (a premium line pays the premium fee % instead),
+    // so it is computed first and sent even when the normal fee is not set or needs an unknown rate.
+    const premium = await this.estimatePremiumEarnings(store, storeId, currency, type, price, input);
+    const withPremium = premium !== undefined ? { premium } : {};
     let result: Awaited<ReturnType<FinanceService['perTypePlatformFee']>> = null;
     const fees: any = typeof this.adminConfigService?.getPlatformFees === 'function'
       ? await this.adminConfigService.getPlatformFees().catch(() => null) : null;
-    if (!fees?.[type]) return { ...base, fee: null, net: null, reason: 'not_set' as const };
+    if (!fees?.[type]) return { ...base, fee: null, net: null, reason: 'not_set' as const, ...withPremium };
     try {
       result = await this.perTypePlatformFee(price, currency, [{ type, totalPrice: price, quantity: 1 }]);
     } catch {
       // A fixed fee needs a USD -> currency rate; none known yet, so no number rather than a wrong one.
-      return { ...base, fee: null, net: null, reason: 'rate_unavailable' as const };
+      return { ...base, fee: null, net: null, reason: 'rate_unavailable' as const, ...withPremium };
     }
-    if (!result) return { ...base, fee: null, net: null, reason: 'not_set' as const };
+    if (!result) return { ...base, fee: null, net: null, reason: 'not_set' as const, ...withPremium };
     const fee = result.platformFee;
-    const premium = await this.estimatePremiumEarnings(store, storeId, currency, type, price, input);
-    return { ...base, fee, net: this.round(price - fee), reason: null, ...(premium !== undefined ? { premium } : {}) };
+    return { ...base, fee, net: this.round(price - fee), reason: null, ...withPremium };
   }
 
   /**

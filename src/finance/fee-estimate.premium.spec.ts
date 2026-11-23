@@ -85,4 +85,14 @@ describe('fee-estimate at the Premium member price', () => {
     await expect(svc.estimatePlatformFee(SELLER, STORE, { price: 100, type: 'digital', productId: 'nope' })).rejects.toBeInstanceOf(BadRequestException);
     await expect(svc.estimatePlatformFee(SELLER, STORE, { price: 100, type: 'digital', productId: PRODUCT })).rejects.toBeInstanceOf(NotFoundException);
   });
+
+  it('platform fees not set: normal fee is null (not_set) but the premium block is still sent', async () => {
+    const { svc } = build({ fees: null as any });
+    (svc as any).adminConfigService.getPlatformFees = jest.fn().mockResolvedValue(null);
+    const est: any = await svc.estimatePlatformFee(SELLER, STORE, { price: 1000, type: 'digital', premiumPercent: 10 });
+    expect(est.fee).toBeNull();
+    expect(est.reason).toBe('not_set');
+    // 1000 x (1 - 10% - 5%) = 850 + 50 platform-funded = 900; premium fee 7% of 900.
+    expect(est.premium).toMatchObject({ memberPrice: 850, saleValue: 900, fee: 63, net: 837 });
+  });
 });
