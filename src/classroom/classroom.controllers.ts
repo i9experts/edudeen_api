@@ -279,7 +279,7 @@ export class CoursesController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Get('seller/:storeId/:productId')
-  getBuilder(@Req() req: any, @Param('storeId') storeId: string, @Param('productId') productId: string) {
+  getBuilder(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Param('productId', ParseObjectIdPipe) productId: string) {
     return this.courses.getForSeller(storeId, req.user.userId, productId);
   }
 
@@ -288,7 +288,7 @@ export class CoursesController {
   @Roles('seller')
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Get('seller/:storeId/:productId/lessons/:lessonId/voice')
-  async voice(@Req() req: any, @Param('storeId') storeId: string, @Param('productId') productId: string, @Param('lessonId') lessonId: string, @Res() res: Response) {
+  async voice(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Param('productId', ParseObjectIdPipe) productId: string, @Param('lessonId') lessonId: string, @Res() res: Response) {
     const { buffer, mimeType } = await this.courses.voiceForSeller(storeId, req.user.userId, productId, lessonId);
     res.header('Content-Type', mimeType);
     res.header('Content-Length', String(buffer.length));
@@ -300,14 +300,14 @@ export class CoursesController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Get('seller/:storeId/:productId/students')
-  students(@Req() req: any, @Param('storeId') storeId: string, @Param('productId') productId: string, @Query('page') page?: string, @Query('limit') limit?: string) {
+  students(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Param('productId', ParseObjectIdPipe) productId: string, @Query('page') page?: string, @Query('limit') limit?: string) {
     return this.courses.studentsForSeller(storeId, req.user.userId, productId, { page, limit });
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Put('seller/:storeId/:productId')
-  saveBuilder(@Req() req: any, @Param('storeId') storeId: string, @Param('productId') productId: string, @Body() body: any) {
+  saveBuilder(@Req() req: any, @Param('storeId', ParseObjectIdPipe) storeId: string, @Param('productId', ParseObjectIdPipe) productId: string, @Body() body: any) {
     return this.courses.saveForSeller(storeId, req.user.userId, productId, body);
   }
 }

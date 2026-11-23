@@ -14,7 +14,7 @@ export interface LessonSubtitle { lang: SubtitleLang; kind: 'timed' | 'text'; co
 /** Caps keep one course document well under Mongo's 16 MB limit (a 1.5 h lecture's captions are ~80 KB). */
 export const SUBTITLE_LIMITS = { perTrack: 120_000, perCourse: 6_000_000 } as const;
 export const AUDIO_EXTENSIONS = ['mp3', 'm4a', 'wav', 'ogg'] as const;
-export const COURSE_LIMITS = { sections: 30, lessonsPerSection: 50, quizQuestions: 30, options: 6 } as const;
+export const COURSE_LIMITS = { sections: 30, lessonsPerSection: 50, quizQuestions: 30, options: 6, sectionTitle: 120, lessonTitle: 150 } as const;
 
 export interface CertificateConfig {
   watermarkText: string | null;

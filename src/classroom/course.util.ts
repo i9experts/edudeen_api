@@ -208,12 +208,18 @@ export function cleanCourseInput(body: any): { sections: { _id: string; title: s
     return id;
   };
 
+  // Titles over the limit are a 400 (they used to be cut silently, so the seller lost text without knowing).
+  const titleOf = (v: unknown, max: number, what: string) => {
+    const t = typeof v === 'string' ? v.trim() : '';
+    if (t.length > max) throw new BadRequestException(`${what} title must be at most ${max} characters`);
+    return t;
+  };
   const sections = rawSections.map((s: any, si: number) => {
-    const title = str(s?.title, 120) || `Section ${si + 1}`;
+    const title = titleOf(s?.title, COURSE_LIMITS.sectionTitle, `Section ${si + 1}`) || `Section ${si + 1}`;
     const rawLessons = Array.isArray(s?.lessons) ? s.lessons : [];
     if (rawLessons.length > COURSE_LIMITS.lessonsPerSection) throw new BadRequestException(`"${title}" has too many lessons (max ${COURSE_LIMITS.lessonsPerSection})`);
     const lessons: CleanLesson[] = rawLessons.map((l: any, li: number) => {
-      const lTitle = str(l?.title, 150);
+      const lTitle = titleOf(l?.title, COURSE_LIMITS.lessonTitle, `Lesson ${li + 1} in "${title}"`);
       if (!lTitle) throw new BadRequestException(`Lesson ${li + 1} in "${title}" needs a title`);
       const type = (LESSON_TYPES as readonly string[]).includes(l?.type) ? (l.type as LessonType) : null;
       if (!type) throw new BadRequestException(`"${lTitle}": pick video, voice, PDF, text or quiz`);
