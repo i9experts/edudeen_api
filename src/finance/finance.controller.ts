@@ -190,7 +190,7 @@ export class FinanceController {
 
   @Get(':storeId/payout-schedule')
   getPayoutSchedule(@Req() req: any, @Param('storeId') storeId: string, @Query('currency') currency?: string) {
-    return this.financeService.getPayoutSchedule(req.user.userId, storeId, currency || 'USD');
+    return this.financeService.getPayoutSchedule(req.user.userId, storeId, currency || undefined);
   }
 
   @Patch(':storeId/payout-schedule')

@@ -342,7 +342,7 @@ export class FinanceService {
    * balance happens to live in a different currency document.
    */
   async getDashboard(sellerId: string, storeId: string) {
-    await this.verifyStoreOwnership(sellerId, storeId);
+    const store: any = await this.verifyStoreOwnership(sellerId, storeId);
 
     const now = new Date();
     const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -368,11 +368,10 @@ export class FinanceService {
     const methods = (rawMethods as any[]).map((m) => ({ ...m, currency: m.currency || 'USD' }));
     const pendingPayouts = (rawPendingPayouts as any[]).map((p) => ({ ...p, currency: p.currency || 'USD' }));
 
-    const currencies = [...new Set([
-      ...(balances as any[]).map((b) => b.currency),
-      ...(schedules as any[]).map((s) => s.currency),
-    ])];
-    if (currencies.length === 0) currencies.push('USD');
+    // One wallet per currency the store holds a balance in. A schedule alone (e.g. the USD one an old GET
+    // payout-schedule created for a PKR store) no longer adds an empty wallet. No balance yet = the store's currency.
+    const currencies = [...new Set((balances as any[]).map((b) => b.currency))];
+    if (currencies.length === 0) currencies.push(store?.baseCurrency || 'USD');
 
     const wallets = await Promise.all(currencies.map(async (currency) => {
       const balance = (balances as any[]).find((b) => b.currency === currency) ?? {
@@ -666,10 +665,12 @@ export class FinanceService {
         const currency = schedule.currency || 'USD';
         const [method, balance, hasPendingPayout] = await Promise.all([
           this.methodModel.findById(schedule.defaultPayoutMethodId),
-          this.getOrCreateBalance(schedule.storeId, schedule.sellerId, currency),
+          // Read only: a schedule in a currency the store never earned in must not create an empty wallet.
+          this.balanceModel.findOne({ storeId: schedule.storeId, currency }),
           this.payoutModel.exists({ storeId: schedule.storeId, currency, status: { $in: ['pending', 'processing'] } }),
         ]);
 
+        if (!balance) { skipped++; continue; }
         if (!method || method.status !== 'active') { skipped++; continue; }
         if (hasPendingPayout) { skipped++; continue; }
 
@@ -993,14 +994,28 @@ export class FinanceService {
   // PAYOUT SCHEDULE
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getPayoutSchedule(sellerId: string, storeId: string, currency = 'USD') {
-    await this.verifyStoreOwnership(sellerId, storeId);
-    return this.getOrCreateSchedule(storeId, sellerId, currency);
+  /**
+   * Read-only: the saved schedule for `currency` (default: the store's own currency), or the default a new schedule
+   * would get - NOT saved (a GET used to create a USD schedule doc, which then showed an empty USD wallet next to
+   * PKR earnings). Defaults carry `saved: false`; a schedule is only created by PATCH (or by a payout flow).
+   */
+  async getPayoutSchedule(sellerId: string, storeId: string, currency?: string) {
+    const store: any = await this.verifyStoreOwnership(sellerId, storeId);
+    const cur = await this.resolveWalletCurrency(storeId, store, currency);
+    const existing = await this.scheduleModel.findOne({ storeId, currency: cur });
+    if (existing) return existing;
+    const frequency = await this.adminConfigService.getPayoutFrequency();
+    const defaults = { frequency, dayOfWeek: 1, dayOfMonth: 1 };
+    return {
+      storeId, sellerId, currency: cur, ...defaults, minimumAmount: 50, isEnabled: true, defaultPayoutMethodId: null,
+      nextPayoutAt: this.computeNextPayoutDate(defaults), saved: false,
+    };
   }
 
   async updatePayoutSchedule(sellerId: string, storeId: string, dto: UpdatePayoutScheduleDto, ip?: string, userAgent?: string) {
-    await this.verifyStoreOwnership(sellerId, storeId);
-    const currency = dto.currency ?? 'USD';
+    const store: any = await this.verifyStoreOwnership(sellerId, storeId);
+    // No currency = the store's own currency (it used to be USD, which made a USD schedule for a PKR store).
+    const currency = await this.resolveWalletCurrency(storeId, store, dto.currency);
     const schedule = await this.getOrCreateSchedule(storeId, sellerId, currency);
     const oldFrequency = schedule.frequency;
 
