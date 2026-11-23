@@ -65,6 +65,8 @@ import { FuzzyIndex, buildAllWordsFilter, relevanceTier } from 'src/search/searc
  *  marketplaces); negative / non-finite values would corrupt order totals
  *  and seller ledgers. */
 const MAX_PRICE = 1_000_000;
+/** 400 when a digital download goes live without a free sample (app backend gap #4). */
+export const FREE_SAMPLE_REQUIRED_MESSAGE = 'Add a free sample file before publishing a digital product. You can save it as a draft without one.';
 function assertValidPrice(value: unknown, field: string, { nullable = false } = {}): void {
   if (value === null && nullable) return;
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > MAX_PRICE) {
@@ -1877,7 +1879,7 @@ export class ProductsService {
     const slug = await generateProductSlug(productModel, title);
     const learnMeta = cleanLearningMeta(body);
     const duplicateOf = await this.findDuplicateListing(String(store._id), title, Number(price));
-    const quality = this.checkListing({ title, type: 'digital', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, deliveryFormat: delivery.deliveryFormat ?? 'download', requestedStatus: status, imageCount: cleanImages.length, duplicateOf });
+    const quality = this.checkListing({ title, type: 'digital', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, deliveryFormat: delivery.deliveryFormat ?? 'download', requestedStatus: status, imageCount: cleanImages.length, duplicateOf, hasSample: !!digitalConfig?.sampleFile?.url });
     const requestedStatus = status ? resolveSellerPublishStatus(status, null, paidPlan) : 'draft';
     // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
     const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
@@ -1972,7 +1974,7 @@ export class ProductsService {
     }
   }
 
-  private checkListing(opts: { title: string; type: 'physical' | 'digital'; description?: unknown; classFrom?: string | null; classTo?: string | null; requestedStatus?: string | null; fields?: Record<string, unknown>; coverStyle?: string | null; deliveryFormat?: string | null; currentStatus?: string | null; imageCount?: number | null; duplicateOf?: string | null }) {
+  private checkListing(opts: { title: string; type: 'physical' | 'digital'; description?: unknown; classFrom?: string | null; classTo?: string | null; requestedStatus?: string | null; fields?: Record<string, unknown>; coverStyle?: string | null; deliveryFormat?: string | null; currentStatus?: string | null; imageCount?: number | null; duplicateOf?: string | null; hasSample?: boolean }) {
     // Re-saving an already-live product with the same status is not a new publish, so legacy products are not blocked by newer required fields.
     const republish = !!opts.currentStatus && opts.requestedStatus === opts.currentStatus;
     const goingLive = (opts.requestedStatus === 'active' || opts.requestedStatus === 'scheduled') && !republish;
@@ -1985,6 +1987,11 @@ export class ProductsService {
     // Publishing needs at least one photo (drafts may have none; an already-live product re-saved as-is is not blocked).
     if (goingLive && opts.imageCount === 0) {
       throw new BadRequestException('Add at least 1 photo before publishing. You can save it as a draft without one.');
+    }
+    // A digital download needs a free sample file (digital.sampleFile) to go live - the same rule as the web and the
+    // app (docs §3). Drafts, courses and physical products are exempt; an already-live product re-saved as-is is not blocked.
+    if (goingLive && opts.type === 'digital' && (opts.deliveryFormat ?? 'download') === 'download' && opts.hasSample === false) {
+      throw new BadRequestException(FREE_SAMPLE_REQUIRED_MESSAGE);
     }
     return {
       warnings: productWarnings(opts.title, opts.classFrom, opts.classTo, { type: opts.type, imageCount: opts.imageCount, duplicateOf: opts.duplicateOf }),
@@ -2244,7 +2251,7 @@ export class ProductsService {
         ? Number(price)
         : Number(((await productVariantModel.findOne({ productId, isDefault: true, isDelete: false }).select('price').lean()) as any)?.price);
       const duplicateOf = await this.findDuplicateListing(String(product.storeId), effTitle, dupPriceNow, String(productId));
-      const quality = this.checkListing({ duplicateOf, title: effTitle, type: product.type === 'physical' ? 'physical' : 'digital', imageCount: effImages.length, classFrom: effFrom, classTo: effTo, coverStyle: productUpdate.coverStyle !== undefined ? productUpdate.coverStyle : product.coverStyle, deliveryFormat: productUpdate.deliveryFormat ?? (product as any).deliveryFormat ?? 'download', currentStatus: product.status, requestedStatus: status, fields: { name: effTitle, description: effDescription } });
+      const quality = this.checkListing({ duplicateOf, title: effTitle, type: product.type === 'physical' ? 'physical' : 'digital', imageCount: effImages.length, classFrom: effFrom, classTo: effTo, coverStyle: productUpdate.coverStyle !== undefined ? productUpdate.coverStyle : product.coverStyle, deliveryFormat: productUpdate.deliveryFormat ?? (product as any).deliveryFormat ?? 'download', currentStatus: product.status, requestedStatus: status, fields: { name: effTitle, description: effDescription }, hasSample: !!(productUpdate.digital ?? (product as any).digital)?.sampleFile?.url });
       editWarnings = quality.warnings;
       if (name !== undefined || description !== undefined) {
         editScan = quality.scan;

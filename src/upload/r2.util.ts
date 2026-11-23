@@ -33,7 +33,7 @@ const hmac = (key: Buffer | string, s: string) => createHmac('sha256', key).upda
 
 export function presignR2Url(
   cfg: R2Config,
-  method: 'GET' | 'PUT',
+  method: 'GET' | 'PUT' | 'DELETE',
   key: string,
   expirySeconds: number,
   extraQuery: Record<string, string> = {},

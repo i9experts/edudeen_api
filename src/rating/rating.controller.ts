@@ -176,6 +176,21 @@ export class RatingController {
     return this.sellerTools.insights(req.user.userId, req.user.role, storeId, range);
   }
 
+  /** The report reasons (same list for buyers and sellers): [{ code, label, needsText }]. Public. */
+  @Get('report-reasons')
+  reportReasons() {
+    return this.sellerTools.reportReasons();
+  }
+
+  /** A buyer reports someone else's review -> admin Content Moderation queue. One per buyer per review (409). */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('user')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post(':reviewId/report-by-buyer')
+  reportReviewByBuyer(@Req() req: any, @Param('reviewId', ParseObjectIdPipe) reviewId: string, @Body() body: any) {
+    return this.sellerTools.reportReviewByBuyer(req.user.userId, reviewId, { reasonCode: body?.reasonCode, text: body?.text });
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Throttle({ default: { limit: 20, ttl: 60_000 } })

@@ -38,3 +38,8 @@ export const ReportSchema = SchemaFactory.createForClass(Report);
 ReportSchema.index({ reporterId: 1 });
 ReportSchema.index({ targetId: 1 });
 ReportSchema.index({ status: 1, createdAt: -1 });
+// One buyer report per review (POST /api/rating/:reviewId/report-by-buyer). Partial: other report kinds are unaffected.
+ReportSchema.index(
+  { reporterId: 1, targetType: 1, targetId: 1 },
+  { unique: true, partialFilterExpression: { reporterRole: 'user', targetType: 'review' }, name: 'one_buyer_report_per_review' },
+);

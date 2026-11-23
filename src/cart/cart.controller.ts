@@ -9,6 +9,8 @@ import {
   Query,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { CartService } from './cart.service';
 import { AddToCartDto } from './dto/add-to-cart.dto';
 
@@ -32,7 +34,9 @@ export class CartController {
   }
 
   // Buy Now: prices one product-page selection without touching the cart (same shape as my-carts, one store).
-  @UseGuards(JwtAuthGuard)
+  // Buyer-only, like create-checkout (a seller / admin token gets 403: they cannot check out anyway).
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('user')
   @Get('buy-now')
   async getBuyNowCart(
     @Req() req: any,

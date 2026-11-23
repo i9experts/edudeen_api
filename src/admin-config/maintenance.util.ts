@@ -84,8 +84,22 @@ export function normalizeMaintenance(raw: any, legacyFlag?: boolean): Maintenanc
   };
 }
 
-/** 'active' = blocking now, 'scheduled' = armed for a future start (banner only), 'off'. */
-export function maintenanceState(m: MaintenanceSettings, now = new Date()): 'active' | 'scheduled' | 'off' {
+/**
+ * The `state` of GET /api/platform-config/maintenance - clients (web, app) can rely on exactly these three values:
+ * - 'off'       : nothing is under maintenance. The response is `{ state: 'off' }` only (no other fields).
+ * - 'scheduled' : armed for a FUTURE `startsAt`; nothing is blocked yet. Show a notice ("Maintenance from <startsAt>").
+ *                 The response also has scopes, type, title, message, scopeMessages, startsAt, endsAt, statusNote, updatedAt.
+ * - 'active'    : blocking now, for `scopes` ('all' | 'buyer' | 'seller' | 'checkout' | 'uploads' | 'feature:<name>').
+ *                 Same fields as 'scheduled'. Blocked API calls answer 503 { statusCode: 503, maintenanceMode: true, scope,
+ *                 scopes, type, title, message, endsAt, statusNote } (admins with a valid token are never blocked).
+ * `endsAt` is an estimate only: maintenance never switches itself off, so 'active' stays until an admin turns it off.
+ * There is no 'on' value.
+ */
+export const MAINTENANCE_STATES = ['off', 'scheduled', 'active'] as const;
+export type MaintenanceState = (typeof MAINTENANCE_STATES)[number];
+
+/** 'active' = blocking now, 'scheduled' = armed for a future start (banner only), 'off'. See MAINTENANCE_STATES. */
+export function maintenanceState(m: MaintenanceSettings, now = new Date()): MaintenanceState {
   if (!m.enabled) return 'off';
   if (m.startsAt && m.startsAt.getTime() > now.getTime()) return 'scheduled';
   return 'active';

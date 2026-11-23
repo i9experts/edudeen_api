@@ -2,6 +2,8 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException, ServiceUnavailableException, Logger, Optional } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection, ClientSession, isValidObjectId } from 'mongoose';
+import { DEFAULT_PREMIUM_TERMS, PREMIUM_MAX_PERCENT, PREMIUM_MIN_PERCENT, premiumLinePrice, premiumPercentFor } from '../premium/premium.util';
+import { PremiumEntitlementsService } from '../premium/premium-entitlements.service';
 import { DatabaseService } from 'src/database/databaseservice';
 import { RequestPayoutDto } from './dto/request-payout.dto';
 import { AddPayoutMethodDto } from './dto/add-payout-method.dto';
@@ -142,6 +144,7 @@ export class FinanceService {
     private readonly notificationsService: NotificationsService,
     @InjectConnection() private readonly connection: Connection,
     @Optional() private readonly exchangeRateService?: ExchangeRateService,
+    @Optional() private readonly premiumEntitlements?: PremiumEntitlementsService,
   ) {}
 
   // ── Shorthand repo getters ───────────────────────────────────────────────
@@ -339,7 +342,7 @@ export class FinanceService {
    * balance happens to live in a different currency document.
    */
   async getDashboard(sellerId: string, storeId: string) {
-    await this.verifyStoreOwnership(sellerId, storeId);
+    const store: any = await this.verifyStoreOwnership(sellerId, storeId);
 
     const now = new Date();
     const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -365,11 +368,10 @@ export class FinanceService {
     const methods = (rawMethods as any[]).map((m) => ({ ...m, currency: m.currency || 'USD' }));
     const pendingPayouts = (rawPendingPayouts as any[]).map((p) => ({ ...p, currency: p.currency || 'USD' }));
 
-    const currencies = [...new Set([
-      ...(balances as any[]).map((b) => b.currency),
-      ...(schedules as any[]).map((s) => s.currency),
-    ])];
-    if (currencies.length === 0) currencies.push('USD');
+    // One wallet per currency the store holds a balance in. A schedule alone (e.g. the USD one an old GET
+    // payout-schedule created for a PKR store) no longer adds an empty wallet. No balance yet = the store's currency.
+    const currencies = [...new Set((balances as any[]).map((b) => b.currency))];
+    if (currencies.length === 0) currencies.push(store?.baseCurrency || 'USD');
 
     const wallets = await Promise.all(currencies.map(async (currency) => {
       const balance = (balances as any[]).find((b) => b.currency === currency) ?? {
@@ -663,10 +665,12 @@ export class FinanceService {
         const currency = schedule.currency || 'USD';
         const [method, balance, hasPendingPayout] = await Promise.all([
           this.methodModel.findById(schedule.defaultPayoutMethodId),
-          this.getOrCreateBalance(schedule.storeId, schedule.sellerId, currency),
+          // Read only: a schedule in a currency the store never earned in must not create an empty wallet.
+          this.balanceModel.findOne({ storeId: schedule.storeId, currency }),
           this.payoutModel.exists({ storeId: schedule.storeId, currency, status: { $in: ['pending', 'processing'] } }),
         ]);
 
+        if (!balance) { skipped++; continue; }
         if (!method || method.status !== 'active') { skipped++; continue; }
         if (hasPendingPayout) { skipped++; continue; }
 
@@ -990,14 +994,28 @@ export class FinanceService {
   // PAYOUT SCHEDULE
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getPayoutSchedule(sellerId: string, storeId: string, currency = 'USD') {
-    await this.verifyStoreOwnership(sellerId, storeId);
-    return this.getOrCreateSchedule(storeId, sellerId, currency);
+  /**
+   * Read-only: the saved schedule for `currency` (default: the store's own currency), or the default a new schedule
+   * would get - NOT saved (a GET used to create a USD schedule doc, which then showed an empty USD wallet next to
+   * PKR earnings). Defaults carry `saved: false`; a schedule is only created by PATCH (or by a payout flow).
+   */
+  async getPayoutSchedule(sellerId: string, storeId: string, currency?: string) {
+    const store: any = await this.verifyStoreOwnership(sellerId, storeId);
+    const cur = await this.resolveWalletCurrency(storeId, store, currency);
+    const existing = await this.scheduleModel.findOne({ storeId, currency: cur });
+    if (existing) return existing;
+    const frequency = await this.adminConfigService.getPayoutFrequency();
+    const defaults = { frequency, dayOfWeek: 1, dayOfMonth: 1 };
+    return {
+      storeId, sellerId, currency: cur, ...defaults, minimumAmount: 50, isEnabled: true, defaultPayoutMethodId: null,
+      nextPayoutAt: this.computeNextPayoutDate(defaults), saved: false,
+    };
   }
 
   async updatePayoutSchedule(sellerId: string, storeId: string, dto: UpdatePayoutScheduleDto, ip?: string, userAgent?: string) {
-    await this.verifyStoreOwnership(sellerId, storeId);
-    const currency = dto.currency ?? 'USD';
+    const store: any = await this.verifyStoreOwnership(sellerId, storeId);
+    // No currency = the store's own currency (it used to be USD, which made a USD schedule for a PKR store).
+    const currency = await this.resolveWalletCurrency(storeId, store, dto.currency);
     const schedule = await this.getOrCreateSchedule(storeId, sellerId, currency);
     const oldFrequency = schedule.frequency;
 
@@ -1360,7 +1378,7 @@ export class FinanceService {
    * `price` (store currency, item price only - never shipping) of `type`. Calls the SAME `perTypePlatformFee`
    * that `recordSale` uses. `fee: null` = Edudeen has not set a fee for that type (UI: "Set by Edudeen").
    */
-  async estimatePlatformFee(sellerId: string, storeId: string, input: { price: number; type: string; currency?: string }) {
+  async estimatePlatformFee(sellerId: string, storeId: string, input: { price: number; type: string; currency?: string; premiumPercent?: string | number; productId?: string }) {
     const store: any = await this.verifyStoreOwnership(sellerId, storeId);
     const currency = await this.resolveWalletCurrency(storeId, store, input.currency);
     const type = input.type === 'physical' ? 'physical' : input.type === 'digital' ? 'digital' : null;
@@ -1368,19 +1386,73 @@ export class FinanceService {
     const price = Number(input.price);
     if (!Number.isFinite(price) || price <= 0 || price > 100_000_000) throw new BadRequestException('price must be a positive number');
     const base = { currency, type, price: this.round(price), generatedAt: new Date().toISOString() };
+    // The member-price block does not depend on the per-type fee (a premium line pays the premium fee % instead),
+    // so it is computed first and sent even when the normal fee is not set or needs an unknown rate.
+    const premium = await this.estimatePremiumEarnings(store, storeId, currency, type, price, input);
+    const withPremium = premium !== undefined ? { premium } : {};
     let result: Awaited<ReturnType<FinanceService['perTypePlatformFee']>> = null;
     const fees: any = typeof this.adminConfigService?.getPlatformFees === 'function'
       ? await this.adminConfigService.getPlatformFees().catch(() => null) : null;
-    if (!fees?.[type]) return { ...base, fee: null, net: null, reason: 'not_set' as const };
+    if (!fees?.[type]) return { ...base, fee: null, net: null, reason: 'not_set' as const, ...withPremium };
     try {
       result = await this.perTypePlatformFee(price, currency, [{ type, totalPrice: price, quantity: 1 }]);
     } catch {
       // A fixed fee needs a USD -> currency rate; none known yet, so no number rather than a wrong one.
-      return { ...base, fee: null, net: null, reason: 'rate_unavailable' as const };
+      return { ...base, fee: null, net: null, reason: 'rate_unavailable' as const, ...withPremium };
     }
-    if (!result) return { ...base, fee: null, net: null, reason: 'not_set' as const };
+    if (!result) return { ...base, fee: null, net: null, reason: 'not_set' as const, ...withPremium };
     const fee = result.platformFee;
-    return { ...base, fee, net: this.round(price - fee), reason: null };
+    return { ...base, fee, net: this.round(price - fee), reason: null, ...withPremium };
+  }
+
+  /**
+   * Fee estimate at the Premium MEMBER price (additive `premium` block; only when premiumPercent or productId is sent).
+   * Same money logic as a real premium sale: the member pays LIST x (1 - seller% - platform%) (premiumLinePrice), the
+   * seller is credited that plus the platform-funded part (recordSale's saleAmount), and the admin's premium sale fee %
+   * replaces the per-type fee on that line (perTypePlatformFee with feePercent). null = no member price applies.
+   */
+  private async estimatePremiumEarnings(
+    store: any, storeId: string, currency: string, type: 'digital' | 'physical', price: number,
+    input: { premiumPercent?: string | number; productId?: string },
+  ) {
+    const hasPercent = input.premiumPercent !== undefined && input.premiumPercent !== '';
+    if (!hasPercent && !input.productId) return undefined;
+    let sellerPercent: number;
+    if (hasPercent) {
+      const n = Number(input.premiumPercent);
+      if (!Number.isFinite(n) || n < PREMIUM_MIN_PERCENT || n > PREMIUM_MAX_PERCENT) {
+        throw new BadRequestException(`premiumPercent must be between ${PREMIUM_MIN_PERCENT} and ${PREMIUM_MAX_PERCENT}`);
+      }
+      sellerPercent = Math.round(n * 100) / 100;
+    } else {
+      if (!isValidObjectId(input.productId)) throw new BadRequestException('Invalid productId');
+      const product: any = await this.db.repositories.productModel
+        .findOne({ _id: input.productId, storeId, isDelete: false }).select('premiumDiscountPercent premiumOptOut').lean();
+      if (!product) throw new NotFoundException('Product not found');
+      sellerPercent = premiumPercentFor(product, store);
+    }
+    const terms = this.premiumEntitlements ? await this.premiumEntitlements.getTerms() : DEFAULT_PREMIUM_TERMS;
+    const calc = premiumLinePrice(price, null, sellerPercent, terms.platformPercent);
+    if (!calc.applies) return null;
+    const saleValue = this.round(calc.unit + calc.platformUnitDiscount);
+    let fee: number;
+    try {
+      const r = await this.perTypePlatformFee(saleValue, currency, [{ type, totalPrice: saleValue, quantity: 1, feePercent: terms.sellerFeePercent }]);
+      fee = r ? r.platformFee : 0;
+    } catch {
+      return null;
+    }
+    return {
+      memberPrice: calc.unit,
+      sellerPercent: calc.sellerPercent,
+      platformPercent: calc.platformPercent,
+      memberDiscountPercent: calc.totalPercent,
+      platformFunded: calc.platformUnitDiscount,
+      saleValue,
+      feePercent: terms.sellerFeePercent,
+      fee,
+      net: this.round(saleValue - fee),
+    };
   }
 
   /**

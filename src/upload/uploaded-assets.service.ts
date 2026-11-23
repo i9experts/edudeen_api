@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/database/databaseservice';
 import type { UploadedAssetKind } from './schemas/uploaded-asset.schema';
 import { stripStorageId } from './r2.util';
@@ -41,6 +41,53 @@ export class UploadedAssetsService {
       },
       { upsert: true },
     );
+  }
+
+  /**
+   * Where a private file can be in use: any product's digital files / free sample / preview source (deleted products
+   * included - past buyers still download through them) and any course lesson file.
+   */
+  async isReferenced(publicId: string): Promise<boolean> {
+    const { productModel, courseModel } = this.db.repositories;
+    const [product, course] = await Promise.all([
+      productModel.exists({ $or: [{ 'digital.files.url': publicId }, { 'digital.sampleFile.url': publicId }, { 'digital.preview.previewSourceUrl': publicId }] }),
+      courseModel.exists({ 'sections.lessons.file.url': publicId }),
+    ]);
+    return !!product || !!course;
+  }
+
+  /**
+   * Owner-scoped delete of an UNUSED private upload (test / abandoned uploads). Only the uploader, only product files
+   * (verification documents are never deleted here), and never while a product or course references it (409). The
+   * ownership row goes first so the file cannot be newly referenced while it is being deleted; it is put back if a
+   * reference appeared meanwhile or storage refuses. Returns the deleted row's facts for the audit entry.
+   */
+  async deleteOwnedUnreferenced(
+    ownerId: string,
+    publicId: unknown,
+    removeFromStorage: (publicId: string, resourceType: string) => Promise<void>,
+  ): Promise<{ publicId: string; fileName: string | null; fileSize: number | null }> {
+    if (typeof publicId !== 'string' || !publicId.trim() || publicId.length > 500) throw new BadRequestException('publicId is required');
+    const row: any = await this.model.findOne({ publicId }).lean();
+    // Someone else's file answers exactly like a missing one (no probing other sellers' uploads).
+    if (!row || row.ownerId !== ownerId) throw new NotFoundException('File not found');
+    if (row.kind !== 'digital_product') throw new BadRequestException('This file cannot be deleted here');
+    const inUse = new ConflictException('This file is used by a product or course. Remove it there first.');
+    if (await this.isReferenced(publicId)) throw inUse;
+    const { _id, ...restore } = row;
+    await this.model.deleteOne({ publicId, ownerId });
+    const putBack = () => this.model.updateOne({ publicId }, { $setOnInsert: restore }, { upsert: true }).catch(() => undefined);
+    if (await this.isReferenced(publicId)) {
+      await putBack();
+      throw inUse;
+    }
+    try {
+      await removeFromStorage(publicId, row.resourceType ?? 'raw');
+    } catch {
+      await putBack();
+      throw new ConflictException('The file could not be deleted from storage right now. Please try again.');
+    }
+    return { publicId, fileName: row.fileName ?? null, fileSize: row.fileSize ?? null };
   }
 
   /** True only for an asset this owner uploaded for this purpose. */
