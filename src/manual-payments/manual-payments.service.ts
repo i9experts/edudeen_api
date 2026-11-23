@@ -18,7 +18,6 @@ import { clampInt } from 'src/common/query-safety.util';
 import { assertProofFile } from 'src/common/proof-file.util';
 import { ReceiptCheckService, buildReceiptExpectation } from './receipt-check.service';
 import { DuplicateHit, findDuplicates, proofFileHash, referenceKey } from './duplicate-proof.util';
-import { GoneException } from '@nestjs/common';
 import type { DirectPaymentDetails } from 'src/common/direct-payment.util';
 /** Mirrors OrdersService's local `sellerPayoutBasis`/`sellerPayoutCurrency` —
  *  settlement must always be computed and labeled in the SELLER'S OWN
@@ -508,21 +507,5 @@ export class ManualPaymentsService {
     return this.presentProof(proof);
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // SELLER — retired. Bank transfers are paid into the PLATFORM account and
-  // confirmed by an admin (who credits the seller's wallet), so the seller-side
-  // direct-bank setup and confirmation endpoints now answer 410 Gone.
-  // Stored Store.directPayment data is left untouched in the DB.
-  // ═══════════════════════════════════════════════════════════════════════
-
-  private gone(): never {
-    throw new GoneException('Bank transfers are now paid to Edudeen and confirmed by the Edudeen team — sellers no longer set up or confirm direct payments.');
-  }
-
-  async getStorePaymentSettings(_sellerId: string, _storeId: string) { return this.gone(); }
-  async updateStorePaymentSettings(_sellerId: string, _storeId: string, _dto: DirectPaymentDetails) { return this.gone(); }
-  async sellerListProofs(_sellerId: string, _storeId: string, _query: any) { return this.gone(); }
-  async sellerGetProofUrl(_sellerId: string, _storeId: string, _proofId: string) { return this.gone(); }
-  async sellerApprove(_sellerId: string, _storeId: string, _proofId: string, _ip?: string, _userAgent?: string) { return this.gone(); }
-  async sellerReject(_sellerId: string, _storeId: string, _proofId: string, _reason: string, _ip?: string, _userAgent?: string) { return this.gone(); }
+  // SELLER direct bank transfer is retired: see SellerManualPaymentsController (every route answers 410 Gone).
 }
