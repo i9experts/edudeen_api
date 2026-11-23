@@ -41,7 +41,7 @@ export class RefundRequestController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('user', 'seller', 'admin')
   @Get('order/:orderId')
-  async listForOrder(@Req() req: any, @Param('orderId') orderId: string) {
+  async listForOrder(@Req() req: any, @Param('orderId', ParseObjectIdPipe) orderId: string) {
     return this.refundRequestService.listForOrder(req.user.userId, req.user.role, orderId);
   }
 
@@ -62,7 +62,7 @@ export class RefundRequestController {
   @Get('seller/:storeId')
   async listForSeller(
     @Req() req: any,
-    @Param('storeId') storeId: string,
+    @Param('storeId', ParseObjectIdPipe) storeId: string,
     @Query('page') page = '1',
     @Query('limit') limit = '20',
   ) {
@@ -73,7 +73,7 @@ export class RefundRequestController {
   @Roles('seller', 'admin')
   @UseInterceptors(IdempotencyInterceptor)
   @Patch(':id/approve')
-  async approve(@Req() req: any, @Param('id') id: string) {
+  async approve(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string) {
     return this.refundRequestService.approve(req.user.userId, req.user.role, id);
   }
 
@@ -90,7 +90,7 @@ export class RefundRequestController {
   @Roles('seller', 'admin')
   @UsePipes(new ValidationPipe({ transform: true }))
   @Patch(':id/reject')
-  async reject(@Req() req: any, @Param('id') id: string, @Body() dto: RejectRefundRequestDto) {
+  async reject(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: RejectRefundRequestDto) {
     return this.refundRequestService.reject(req.user.userId, req.user.role, id, dto.notes);
   }
 }
