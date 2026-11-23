@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { isValidObjectId } from 'mongoose';
+import { cleanCodEnabled, cleanShipFrom, cleanStoreProductTypes } from './store-settings.util';
 import { courierDeliveryEnabled } from 'src/checkout/courier-settings.util';
 import { DISPATCH_DAYS_DEFAULT, parseDispatchDays } from 'src/common/dispatch.util';
 import { cleanDeliveryDays } from './delivery-days.util';
@@ -690,15 +691,7 @@ export class StoreService {
       throw new BadRequestException('Invalid sellerType');
     }
 
-    if (productTypes && Array.isArray(productTypes)) {
-      for (const pt of productTypes) {
-        if (!SELECTABLE_STORE_PRODUCT_TYPES.includes(pt)) {
-          throw new BadRequestException(
-            `Invalid productType: ${pt}. Allowed: ${SELECTABLE_STORE_PRODUCT_TYPES.join(', ')}`,
-          );
-        }
-      }
-    }
+    const cleanProductTypes = productTypes !== undefined ? cleanStoreProductTypes(productTypes, SELECTABLE_STORE_PRODUCT_TYPES) : undefined;
 
     const updateData: any = {};
 
@@ -720,7 +713,7 @@ export class StoreService {
     if (contactEmail !== undefined) updateData.contactEmail = cleaned.contactEmail;
     if (contactPhone !== undefined) updateData.contactPhone = cleaned.contactPhone;
     if (sellerType !== undefined) updateData.sellerType = sellerType;
-    if (codEnabled !== undefined) updateData.codEnabled = !!codEnabled;
+    if (codEnabled !== undefined) updateData.codEnabled = cleanCodEnabled(codEnabled);
     // Seller-funded Edudeen Premium member price { enabled, percent 1-50 }; null clears it.
     {
       const pd = cleanStorePremiumDiscount(body.premiumDiscount);
@@ -813,16 +806,7 @@ export class StoreService {
       } else if (typeof dm === 'string' && ['self', 'tcs', 'leopards', 'postex', 'auto'].includes(dm)) updateData.deliveryMethod = dm;
       else throw new BadRequestException('deliveryMethod must be self, tcs, leopards, postex, auto or empty');
     }
-    if (body.shipFrom !== undefined) {
-      const sf = body.shipFrom;
-      if (sf === null || (typeof sf === 'object' && !String(sf?.city ?? '').trim())) updateData.shipFrom = null;
-      else {
-        if (typeof sf !== 'object' || Array.isArray(sf)) throw new BadRequestException('shipFrom must be an object');
-        const city = String(sf.city).trim().slice(0, 60);
-        const province = sf.province == null || String(sf.province).trim() === '' ? null : String(sf.province).trim().slice(0, 60);
-        updateData.shipFrom = { city, province };
-      }
-    }
+    if (body.shipFrom !== undefined) updateData.shipFrom = cleanShipFrom(body.shipFrom);
     // Optional transit days per route (display only on the product page; no fee logic).
     if (body.deliveryDays !== undefined) updateData.deliveryDays = cleanDeliveryDays(body.deliveryDays);
     // Dispatch time (working days, Sundays not counted). Only NEW orders use it: each order snapshots its own value.
@@ -844,9 +828,9 @@ export class StoreService {
     }
 
     // productTypes change ho to enabledTools bhi refresh
-    if (productTypes !== undefined) {
-      updateData.productTypes = productTypes;
-      updateData.enabledTools = resolveTools(productTypes);
+    if (cleanProductTypes !== undefined) {
+      updateData.productTypes = cleanProductTypes;
+      updateData.enabledTools = resolveTools(cleanProductTypes as any);
     }
 
     if (body.categoryId !== undefined && body.categoryId !== store.categoryId) {
