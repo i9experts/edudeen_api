@@ -197,6 +197,12 @@ export class productController {
     return this.ProductsService.getAlsoBought(id, clampInt(limit, 8, 1, 20), req.user?.userId ?? null);
   }
 
+  @UseGuards(OptionalJwtAuthGuard)
+  @Get('also-viewed/:id')
+  async getAlsoViewed(@Req() req: any, @Param('id') id: string, @Query('limit') limit?: string) {
+    return this.ProductsService.getAlsoViewed(id, clampInt(limit, 12, 1, 20), req.user?.userId ?? null);
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Post('add-physical-product')

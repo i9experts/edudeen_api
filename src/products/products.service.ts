@@ -1052,8 +1052,8 @@ export class ProductsService {
    */
   async getAlsoBought(idOrSlug: string, limit = 8, customerId?: string | null) {
     const { productModel, orderModel } = this.databaseService.repositories;
-    let product: any = await productModel.findOne({ slug: idOrSlug, status: 'active', isDelete: false, isTest: { $ne: true } }).select('_id categoryId').lean();
-    if (!product && isValidObjectId(idOrSlug)) product = await productModel.findOne({ _id: idOrSlug, status: 'active', isDelete: false, isTest: { $ne: true } }).select('_id categoryId').lean();
+    let product: any = await productModel.findOne({ slug: idOrSlug, status: 'active', isDelete: false, isTest: { $ne: true } }).select('_id categoryId educationLevel').lean();
+    if (!product && isValidObjectId(idOrSlug)) product = await productModel.findOne({ _id: idOrSlug, status: 'active', isDelete: false, isTest: { $ne: true } }).select('_id categoryId educationLevel').lean();
     if (!product) throw new NotFoundException('Product not found');
     const pid = String(product._id);
     const max = Math.min(Math.max(limit, 1), 20);
@@ -1071,18 +1071,53 @@ export class ProductsService {
     ]);
     const coIds = rows.map(r => r._id).filter(id => isValidObjectId(id));
     let picked: any[] = (await this.getShapedProductsByIds(coIds, customerId)).slice(0, max);
-    let basis: 'bought_together' | 'similar' = picked.length ? 'bought_together' : 'similar';
+    // The rail heading must match what is inside it:
+    //  bought_together = only real co-purchases (never topped up with unrelated items),
+    //  same_level      = same category AND same education level (product has a level),
+    //  similar         = same category only (product has no level).
+    let basis: 'bought_together' | 'same_level' | 'similar' = picked.length ? 'bought_together' : 'similar';
 
-    if (picked.length < max) {
-      const have = new Set([pid, ...picked.map(p => String(p._id))]);
-      const filter: any = { status: 'active', isDelete: false, isTest: { $ne: true }, _id: { $nin: [...have] } };
+    if (!picked.length) {
+      const filter: any = { status: 'active', isDelete: false, isTest: { $ne: true }, _id: { $ne: pid } };
       filter.categoryId = product.categoryId;
+      if (product.educationLevel) { filter.educationLevel = product.educationLevel; basis = 'same_level'; }
       await this.restrictToActiveStores(filter);
-      const extra = await productModel.find(filter).sort({ purchaseCount: -1, averageRating: -1 }).limit(max - picked.length).lean();
-      picked = [...picked, ...(await this.attachVariantsAndPricing(extra, customerId))];
-      if (!rows.length) basis = 'similar';
+      const extra = await productModel.find(filter).sort({ purchaseCount: -1, averageRating: -1 }).limit(max).lean();
+      picked = await this.attachVariantsAndPricing(extra, customerId);
     }
     return { success: true, data: { basis, products: picked.map(p => this.sanitizeDigitalForPublicView(p)) } };
+  }
+
+  /**
+   * "Students also viewed": other products opened by the buyers who recently opened this one (from the per-user
+   * RecentlyViewed collection). Returns product ids only — never user ids. Needs >= 3 viewers and a product seen
+   * by >= 2 of them, otherwise the rail is empty. Candidate ids cached 10 min; products re-shaped per request.
+   */
+  async getAlsoViewed(idOrSlug: string, limit = 12, customerId?: string | null) {
+    const { productModel, recentlyViewedModel } = this.databaseService.repositories;
+    const base = { status: 'active', isDelete: false, isTest: { $ne: true } };
+    let product: any = await productModel.findOne({ slug: idOrSlug, ...base }).select('_id').lean();
+    if (!product && isValidObjectId(idOrSlug)) product = await productModel.findOne({ _id: idOrSlug, ...base }).select('_id').lean();
+    if (!product) throw new NotFoundException('Product not found');
+    const pid = String(product._id);
+    const max = Math.min(Math.max(limit, 1), 20);
+
+    const ids = await this.cachedShelfIds(`product:also-viewed:v1:${pid}`, async () => {
+      const viewers = await recentlyViewedModel.find({ productId: pid }).sort({ updatedAt: -1 }).limit(200).select('userId').lean();
+      if (viewers.length < 3) return [];
+      const rows: { _id: string; n: number }[] = await recentlyViewedModel.aggregate([
+        { $match: { userId: { $in: viewers.map((v: any) => v.userId) }, productId: { $ne: pid } } },
+        { $group: { _id: '$productId', n: { $sum: 1 } } },
+        { $match: { n: { $gte: 2 } } },
+        { $sort: { n: -1 } },
+        { $limit: 40 },
+      ]);
+      return rows.map(r => r._id).filter(id => isValidObjectId(id));
+    });
+    if (!ids.length) return { success: true, data: { products: [] } };
+
+    const shaped = filterRailEligible(await this.getShapedProductsByIds(ids.slice(0, max * 3), customerId ?? null)) as any[];
+    return { success: true, data: { products: shaped.slice(0, max).map(p => this.sanitizeDigitalForPublicView(p)) } };
   }
 
   // ── Typo tolerance: in-memory word index of product names/tags, rebuilt lazily every 10 minutes ──

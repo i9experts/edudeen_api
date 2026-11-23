@@ -21,3 +21,5 @@ export class RecentlyViewed {
 export const RecentlyViewedSchema = SchemaFactory.createForClass(RecentlyViewed);
 RecentlyViewedSchema.index({ userId: 1, productId: 1 }, { unique: true });
 RecentlyViewedSchema.index({ userId: 1, updatedAt: -1 });
+// "Students also viewed" rail: find the recent viewers of one product.
+RecentlyViewedSchema.index({ productId: 1, updatedAt: -1 });
