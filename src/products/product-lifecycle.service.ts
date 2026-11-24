@@ -10,7 +10,7 @@ import { allocateSkus } from './sku.util';
 /** Content fields a copy inherits. Everything else (sales counters, ratings, offers, flags, review/plan markers, slugs) starts fresh. */
 export const DUPLICATE_COPY_FIELDS = [
   'description', 'productType', 'type', 'categoryId', 'subCategoryId', 'educationLevel', 'customLevel', 'normalizedCustomLevel',
-  'curricula', 'ageMin', 'ageMax', 'classFrom', 'classTo', 'language', 'author', 'publisher', 'edition', 'coverStyle', 'parcelType', 'dispatchDaysOverride',
+  'curricula', 'ageMin', 'ageMax', 'classFrom', 'classTo', 'language', 'author', 'publisher', 'edition', 'pages', 'isbn', 'binding', 'coverStyle', 'parcelType', 'dispatchDaysOverride',
   'packageCm', 'deliveryFormat', 'images', 'tags', 'digital', 'isListedOnEdudeen', 'nameUr', 'descriptionUr',
 ] as const;
 export const VARIANT_COPY_FIELDS = ['price', 'compareAtPrice', 'currency', 'options', 'stock', 'unlimitedStock', 'shippingWeight', 'images', 'isDefault', 'status'] as const;

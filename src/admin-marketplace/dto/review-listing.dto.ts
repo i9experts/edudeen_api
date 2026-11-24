@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class RejectListingDto {
   @ApiProperty({ example: 'Please add a clear cover image and the grade level.' })
@@ -25,4 +25,17 @@ export class ApproveListingDto {
   @IsString()
   @MaxLength(1000)
   note?: string;
+}
+
+/** Hide a listing from recommendations + search (or show it again). Reason is required when hiding (checked in the service). */
+export class SetRecommendationVisibilityDto {
+  @ApiProperty({ description: 'true = hide from the product-page rails and search, false = show again' })
+  @IsBoolean()
+  hidden: boolean;
+
+  @ApiProperty({ required: false, example: 'Placeholder title and one image' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }

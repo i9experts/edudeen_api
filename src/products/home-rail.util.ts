@@ -28,6 +28,20 @@ export function filterValidRailProducts<T>(products: T[]): T[] {
 // the public view exposes only the boolean `needsReview` (never the flags/reasons themselves).
 export const RAIL_QUERY_EXCLUDE = { flags: { $ne: 'needs_review' } } as const;
 
+// ── Admin "hide from recommendations": out of discovery rails + search, still reachable by URL / store page ──
+/** Mongo side (same idea as RAIL_QUERY_EXCLUDE). Missing field = not hidden, so no migration is needed. */
+export const RAIL_HIDDEN_EXCLUDE = { hiddenFromRecommendations: { $ne: true } } as const;
+
+/** Shaped-product side: the public view carries only the booleans `hiddenFromRecommendations` / `lowQuality`. */
+export function notHiddenFromRecommendations<T>(list: T[]): T[] {
+  return list.filter((p: any) => p?.hiddenFromRecommendations !== true);
+}
+
+/** Low-quality listings rank lower, never removed. Stable inside each group. */
+export function demoteLowQuality<T>(list: T[]): T[] {
+  return [...list.filter((p: any) => p?.lowQuality !== true), ...list.filter((p: any) => p?.lowQuality === true)];
+}
+
 /** Valid price AND not flagged for review. For Bestsellers, Premium deals, curated/featured shelves, flash/campaign rails. */
 export function isRailEligible(p: any): boolean {
   return isValidRailProduct(p) && p?.needsReview !== true;

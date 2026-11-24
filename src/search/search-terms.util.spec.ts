@@ -1,6 +1,15 @@
-import { FuzzyIndex, boundedEditDistance, buildSearchRegex, expandSearchTerms, normalizeSearchText } from './search-terms.util';
+import { FuzzyIndex, boundedEditDistance, buildAllWordsFilter, buildSearchRegex, expandSearchTerms, normalizeSearchText } from './search-terms.util';
 
 describe('search-terms.util', () => {
+  it('product search also looks at author, publisher and the language word', () => {
+    const f = buildAllWordsFilter('oxford');
+    const keys = f.$or.map((c: Record<string, unknown>) => Object.keys(c)[0]);
+    expect(keys).toEqual(expect.arrayContaining(['name', 'author', 'publisher']));
+    expect(f.$or.find((c: any) => c.publisher).publisher.test('Oxford University Press')).toBe(true);
+    expect(buildAllWordsFilter('urdu').$or).toContainEqual({ language: 'ur' });
+    expect(buildAllWordsFilter('oxford').$or.some((c: any) => 'language' in c)).toBe(false);
+  });
+
   it('normalises case, diacritics and Arabic letter variants', () => {
     expect(normalizeSearchText("  Qur'an-Pak ")).toBe('quran pak');
     expect(normalizeSearchText('قُرآن')).toBe(normalizeSearchText('قرآن'));

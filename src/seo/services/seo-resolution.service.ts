@@ -154,6 +154,7 @@ export class SeoResolutionService {
         averageRating: product.averageRating,
         ratingCount: product.totalRatings,
         currency: defaultVariant?.currency ?? (store as any)?.baseCurrency ?? 'USD',
+        book: { author: product.author, publisher: product.publisher, edition: product.edition, pages: product.pages, isbn: product.isbn, binding: product.binding, language: product.language },
       }),
       this.schemaGenerator.buildBreadcrumbSchema([
         { name: 'Home', url: PLATFORM_ORIGIN },

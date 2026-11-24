@@ -1,3 +1,5 @@
+import { basicListingQuality } from './product-quality.util';
+
 /**
  * What a NON-owner may see of a digital product. The private file manifest (publicIds/names/sizes/mime
  * types) and the server-managed preview source are never exposed, and neither is `buyerDeliveryMessage` —
@@ -54,9 +56,15 @@ function hideAiReview<T>(product: T): T {
     flags, flagReason, contactMatches, reviewNote, reviewedAt, removedByAdmin,
     isDelete, isTest, ratingSum, normalizedCustomLevel, aiReviewSummary,
     qualityReasons, qualityApprovedSig, qualityFixRequest,
+    recommendationHiddenReason, recommendationHiddenBy, recommendationHiddenAt,
     ...rest
   } = product as Record<string, unknown>;
   void qualityReasons; void qualityApprovedSig; void qualityFixRequest; // "needs_review" bookkeeping: admin/seller only
+  void recommendationHiddenReason; void recommendationHiddenBy; void recommendationHiddenAt; // admin note + admin id: never public
+  // Booleans only (true or absent): rails/search skip a hidden listing and rank a low-quality one lower. Only computed
+  // when the doc carries the fields it needs (a projected-down doc must not read as "low quality").
+  if (rest.hiddenFromRecommendations !== true) delete rest.hiddenFromRecommendations;
+  if ('description' in rest && 'images' in rest && basicListingQuality(rest as { name?: string; images?: unknown; description?: string }).low) rest.lowQuality = true;
   // Internal moderation/bookkeeping fields are never part of a public product (`previousSlugs` is kept: the product
   // page uses it to redirect an old URL, `trust` is the public badge below).
   void flags; void flagReason; void contactMatches; void reviewNote; void reviewedAt; void removedByAdmin;

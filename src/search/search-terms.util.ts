@@ -96,13 +96,18 @@ export function searchWords(term: string): string[] {
   return Array.from(new Set(words.map((w) => w.toLowerCase()))).slice(0, 8);
 }
 
-/** Mongo filter: EVERY word must match name, tags or description (any order). A word also matches its synonym variants. */
+/** Language words a buyer may type -> the stored language code (the field holds 'ur' | 'en' | 'ar' | 'mixed'). */
+const LANGUAGE_WORDS: Record<string, string> = { urdu: 'ur', english: 'en', arabic: 'ar' };
+
+/** Mongo filter: EVERY word must match name, tags, description, author or publisher (any order); a language word also matches the language. A word also matches its synonym variants. */
 export function buildAllWordsFilter(term: string): Record<string, any> {
   const words = searchWords(term);
   if (!words.length) return {};
   const clauses = words.map((w) => {
     const rx = buildSearchRegex(w);
-    return { $or: [{ name: rx }, { nameUr: rx }, { tags: rx }, { description: rx }] };
+    const or: Record<string, any>[] = [{ name: rx }, { nameUr: rx }, { tags: rx }, { description: rx }, { author: rx }, { publisher: rx }];
+    if (LANGUAGE_WORDS[w]) or.push({ language: LANGUAGE_WORDS[w] });
+    return { $or: or };
   });
   return clauses.length === 1 ? clauses[0] : { $and: clauses };
 }

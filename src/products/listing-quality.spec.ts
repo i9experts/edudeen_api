@@ -51,3 +51,40 @@ describe('listingQuality', () => {
     expect(listingQuality({ ...full, coverStyle: null }).missing).toContain('Choose a product card style');
   });
 });
+
+import { basicListingQuality, placeholderTitle } from './product-quality.util';
+import { demoteLowQuality } from './home-rail.util';
+
+describe('basicListingQuality (admin filter, seller tips, rail ranking)', () => {
+  const good = { name: 'Grade 5 Complete Maths Workbook', images: ['a', 'b'], description: 'x'.repeat(80) };
+  it('a good listing passes every check', () => {
+    expect(basicListingQuality(good)).toEqual({ score: 100, reasons: [], low: false });
+  });
+  it('boundaries: 1 image, 79 chars, 14-char title fail; 2 / 80 / 15 pass', () => {
+    expect(basicListingQuality({ ...good, images: ['a'] }).reasons.join()).toMatch(/at least 2 images/);
+    expect(basicListingQuality({ ...good, description: 'x'.repeat(79) }).reasons.join()).toMatch(/at least 80 characters/);
+    expect(basicListingQuality({ ...good, name: 'Maths Workbooks' }).low).toBe(false); // 15 chars
+    expect(basicListingQuality({ ...good, name: 'Maths Workbook' }).reasons.join()).toMatch(/at least 15 characters/); // 14
+  });
+  it('html in the description does not count as text; a missing doc is just low', () => {
+    expect(basicListingQuality({ ...good, description: '<p>' + 'x'.repeat(70) + '</p>' }).low).toBe(true);
+    expect(basicListingQuality({}).score).toBe(0);
+  });
+  it('placeholder titles: words and a digit glued to the last word', () => {
+    expect(placeholderTitle('Brouchure1')).toBe(true);
+    expect(placeholderTitle('Demo product for class 5')).toBe(true);
+    expect(placeholderTitle('Product name here')).toBe(true);
+    expect(basicListingQuality({ ...good, name: 'Grade 5 Maths Workbook Brouchure1' }).low).toBe(true);
+  });
+  it('real education titles are not placeholders', () => {
+    expect(placeholderTitle('Class 5 Complete Maths Workbook Vol 2')).toBe(false);
+    expect(placeholderTitle('Matric Sample Papers 2025 - Physics')).toBe(false);
+    expect(placeholderTitle('MDCAT Mock Test Series Class 12')).toBe(false);
+    expect(placeholderTitle('IELTS Test Preparation Guide')).toBe(false);
+  });
+  it('demoteLowQuality keeps everything, moves low-quality last, stable inside each group', () => {
+    const l = [{ id: 1, lowQuality: true }, { id: 2 }, { id: 3, lowQuality: true }, { id: 4 }];
+    expect(demoteLowQuality(l).map((x) => x.id)).toEqual([2, 4, 1, 3]);
+    expect(demoteLowQuality([])).toEqual([]);
+  });
+});

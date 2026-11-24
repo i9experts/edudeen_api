@@ -181,6 +181,46 @@ export function listingQuality(i: QualityInput): QualityResult {
   return { score: possible > 0 ? Math.round((earned / possible) * 100) : 0, missing };
 }
 
+// ── Basic listing quality (read-time only, nothing stored): drives "Low quality" admin filter, seller tips and rail ranking ──
+export const BASIC_MIN_IMAGES = 2;
+export const BASIC_MIN_DESCRIPTION = 80;
+export const BASIC_MIN_TITLE = 15;
+
+// Real education titles that contain a placeholder-looking word ("Sample Papers", "Mock Test", "Test Preparation").
+const LEGIT_PLACEHOLDER_PHRASE = /\b(?:sample|model|past)\s+papers?\b|\b(?:mock|practice|entry|unit|chapter|online|aptitude)\s+tests?\b|\btests?\s+(?:prep|preparation|series|bank|book)\b/gi;
+const PLACEHOLDER_WORD = /\b(?:test|testing|demo|sample|name|dummy|untitled)\b/i;
+// A number glued to the last word ("Brouchure1", "Product2"). "Class 5" / "Vol 2" (separate number) are fine.
+const GLUED_TRAILING_DIGIT = /[A-Za-z]\d+$/;
+
+export interface BasicQualityInput { name?: string | null; images?: unknown; description?: string | null }
+export interface BasicQualityResult { score: number; reasons: string[]; low: boolean }
+
+/** True when the title looks like a placeholder: test/demo/sample/name word, or a trailing digit glued to a word. */
+export function placeholderTitle(title: unknown): boolean {
+  const t = normalizeTitle(title).replace(LEGIT_PLACEHOLDER_PHRASE, ' ');
+  return PLACEHOLDER_WORD.test(t) || GLUED_TRAILING_DIGIT.test(t.trim());
+}
+
+/**
+ * 4 simple checks (>= 2 images, description >= 80 chars, title >= 15 chars, no placeholder title); score = 25 per pass.
+ * `low` = at least one check failed. `reasons` are plain-language, shown to admin and (as tips) to the seller. Pure, cheap,
+ * works on a raw product doc (name, images, description) - no extra queries.
+ */
+export function basicListingQuality(p: BasicQualityInput): BasicQualityResult {
+  const reasons: string[] = [];
+  const imgs = Array.isArray(p?.images) ? p.images.filter(Boolean).length : 0;
+  if (imgs < BASIC_MIN_IMAGES) reasons.push(`Add at least ${BASIC_MIN_IMAGES} images (${imgs} now)`);
+  const dlen = plain(p?.description).length;
+  if (dlen < BASIC_MIN_DESCRIPTION) reasons.push(`Write a description of at least ${BASIC_MIN_DESCRIPTION} characters (${dlen} now)`);
+  const tlen = normalizeTitle(p?.name).length;
+  if (tlen < BASIC_MIN_TITLE) reasons.push(`Make the title at least ${BASIC_MIN_TITLE} characters (${tlen} now)`);
+  // An empty title is already reported above; it must not also pass the 'real title' check.
+  const placeholder = placeholderTitle(p?.name);
+  if (placeholder) reasons.push('Replace the placeholder-looking title (test / demo / sample / name or a trailing number) with a real one');
+  const failed = reasons.length + (tlen === 0 && !placeholder ? 1 : 0);
+  return { score: Math.round(((4 - failed) / 4) * 100), reasons, low: failed > 0 };
+}
+
 // ── Search visibility score (read-time only; reuses the title/description/image rules above) ───────────
 export const SEARCH_WEIGHTS = { title: 20, description: 20, images: 15, classRange: 15, subject: 10, language: 10, board: 10 } as const;
 export const SEARCH_TITLE_MIN = 30;

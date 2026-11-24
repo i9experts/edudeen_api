@@ -16,7 +16,10 @@ import { MarketplaceListingQueryDto } from './dto/marketplace-listing-query.dto'
 import { LeadsQueryDto } from './dto/leads-query.dto';
 import { mergeTrustBadges } from '../products/trust-badges.util';
 import { buildEditDiff } from '../products/product-edit-review.util';
-import { NEEDS_REVIEW_FLAG, reasonsSignature } from '../products/product-quality.util';
+import { NEEDS_REVIEW_FLAG, reasonsSignature, basicListingQuality } from '../products/product-quality.util';
+
+/** Live listings scanned for the read-time 'low_quality' filter (nothing is stored; newest first). */
+const LOW_QUALITY_SCAN_LIMIT = 5000;
 
 interface AuditMeta {
   adminId: string;
@@ -90,7 +93,16 @@ export class AdminMarketplaceService {
     if (query.search) filter.name = { $regex: escapeRegex(query.search), $options: 'i' };
 
     let flaggedProductIds: string[] | null = null;
-    if (query.status === 'flagged') {
+    let lowQualityCapped = false;
+    if (query.status === 'low_quality') {
+      // Computed at read time (basicListingQuality): scan live listings, keep the ones failing a check. Read-only.
+      const rows: any[] = await this.r.productModel.find({ isDelete: false, status: 'active' }).select('name images description').sort({ createdAt: -1 }).limit(LOW_QUALITY_SCAN_LIMIT).lean();
+      lowQualityCapped = rows.length >= LOW_QUALITY_SCAN_LIMIT;
+      filter.status = 'active';
+      filter._id = { $in: rows.filter((p) => basicListingQuality(p).low).map((p) => String(p._id)) };
+    } else if (query.status === 'hidden') {
+      filter.hiddenFromRecommendations = true;
+    } else if (query.status === 'flagged') {
       const reports = await this.r.reportModel.find({ targetType: 'listing', status: { $ne: 'resolved' } }, { targetId: 1 });
       flaggedProductIds = reports.map((r) => r.targetId).filter((id) => isValidObjectId(id));
       filter._id = { $in: flaggedProductIds };
@@ -160,10 +172,14 @@ export class AdminMarketplaceService {
       // 'needs_review': why it was flagged, and whether the admin already asked the seller to fix it.
       qualityReasons: (p as any).qualityReasons ?? [],
       qualityFixRequestedAt: (p as any).qualityFixRequest?.at ?? null,
+      // Read-time listing quality (4 checks, 25 points each) + why it fails; and the admin 'hide from recommendations' state.
+      quality: basicListingQuality(p as any),
+      hiddenFromRecommendations: (p as any).hiddenFromRecommendations === true,
+      recommendationHiddenReason: (p as any).recommendationHiddenReason ?? null,
       createdAt: (p as any).createdAt,
     }));
 
-    return { success: true, data: { items, total, page, limit } };
+    return { success: true, data: { items, total, page, limit, ...(query.status === 'low_quality' ? { scanCapped: lowQualityCapped } : {}) } };
   }
 
   private async findProductOrThrow(id: string) {
@@ -188,6 +204,55 @@ export class AdminMarketplaceService {
       id,
     );
     return { success: true, message: isFeatured ? 'Listing featured' : 'Listing unfeatured' };
+  }
+
+  /**
+   * Hide a listing from recommendations (the 4 product-page rails + search) or show it again. The listing stays live: its
+   * direct URL and store page still work. Reason required when hiding. Audit entry is awaited (no entry = change undone).
+   */
+  async setRecommendationVisibility(id: string, hidden: boolean, reason: string | undefined, meta: AuditMeta) {
+    const why = typeof reason === 'string' ? reason.trim().slice(0, 500) : '';
+    if (hidden && why.length < 3) throw new BadRequestException('A reason is required to hide a listing from recommendations');
+    const current: any = await this.findProductOrThrow(id);
+    const was = current.hiddenFromRecommendations === true;
+    if (was === hidden) throw new ConflictException(hidden ? 'This listing is already hidden from recommendations' : 'This listing is not hidden from recommendations');
+    const prev = { hiddenFromRecommendations: current.hiddenFromRecommendations, recommendationHiddenReason: current.recommendationHiddenReason ?? null, recommendationHiddenBy: current.recommendationHiddenBy ?? null, recommendationHiddenAt: current.recommendationHiddenAt ?? null };
+    const stateNow = hidden ? { $ne: true } : true;
+    const updated: any = await this.r.productModel.findOneAndUpdate(
+      { _id: id, isDelete: false, hiddenFromRecommendations: stateNow },
+      { $set: hidden
+        ? { hiddenFromRecommendations: true, recommendationHiddenReason: why, recommendationHiddenBy: meta.adminId, recommendationHiddenAt: new Date() }
+        : { hiddenFromRecommendations: false, recommendationHiddenReason: null, recommendationHiddenBy: null, recommendationHiddenAt: null } },
+      { returnDocument: 'after' },
+    );
+    if (!updated) throw new ConflictException('Someone else just changed this listing - refresh the list');
+    await this.auditOrUndo(
+      hidden ? 'listing_hidden_from_recommendations' : 'listing_shown_in_recommendations',
+      hidden ? `Listing "${updated.name}" hidden from recommendations and search: ${why}` : `Listing "${updated.name}" shown in recommendations and search again`,
+      meta, id,
+      () => this.r.productModel.updateOne({ _id: id }, { $set: prev }),
+      { hidden, reason: hidden ? why : null, quality: basicListingQuality(updated) },
+    );
+    return { success: true, message: hidden ? 'Hidden from recommendations and search (the page still works)' : 'Shown in recommendations again', data: { hiddenFromRecommendations: hidden } };
+  }
+
+  /** Admin unpublish: a live listing goes to 'inactive' (seller can re-activate). Reason required; audited (awaited, undone if the log fails). */
+  async unpublish(id: string, reason: string | undefined, meta: AuditMeta) {
+    const why = typeof reason === 'string' ? reason.trim().slice(0, 500) : '';
+    if (why.length < 3) throw new BadRequestException('A reason is required to unpublish a listing');
+    const current: any = await this.findProductOrThrow(id);
+    if (!['active', 'scheduled'].includes(current.status)) throw new ConflictException('Only a live or scheduled listing can be unpublished');
+    const prev = { status: current.status, isFeatured: current.isFeatured === true };
+    const updated: any = await this.r.productModel.findOneAndUpdate(
+      { _id: id, isDelete: false, status: current.status },
+      { $set: { status: 'inactive', isFeatured: false } },
+      { returnDocument: 'after' },
+    );
+    if (!updated) throw new ConflictException('Someone else just changed this listing - refresh the list');
+    await this.auditOrUndo('listing_unpublished', `Listing "${updated.name}" unpublished by admin: ${why}`, meta, id,
+      () => this.r.productModel.updateOne({ _id: id }, { $set: prev }),
+      { reason: why, previousStatus: prev.status });
+    return { success: true, message: 'Listing unpublished', data: { status: 'inactive' } };
   }
 
   /** QA flag: a test listing is hidden from every public query (browse, search, rails, sitemap...). Marking it also drops the featured flag. */

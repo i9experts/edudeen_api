@@ -17,7 +17,7 @@ import { SetFeaturedRankDto } from './dto/set-featured-rank.dto';
 import { LeadsQueryDto } from './dto/leads-query.dto';
 import { RejectLeadDto } from './dto/reject-lead.dto';
 import { DeleteStoreDto } from './dto/delete-store.dto';
-import { ApproveListingDto, AskFixDto, RejectListingDto } from './dto/review-listing.dto';
+import { ApproveListingDto, AskFixDto, RejectListingDto, SetRecommendationVisibilityDto } from './dto/review-listing.dto';
 
 @ApiTags('Admin Marketplace')
 @ApiBearerAuth()
@@ -61,6 +61,18 @@ export class AdminMarketplaceController {
   @Patch('listings/:id/remove')
   remove(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: RemoveListingDto) {
     return this.adminMarketplaceService.remove(id, this.meta(req), dto.reason);
+  }
+
+  /** Hide from / show in recommendations (product-page rails + search). The page and URL keep working. Audited. */
+  @Patch('listings/:id/recommendations')
+  setRecommendationVisibility(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: SetRecommendationVisibilityDto) {
+    return this.adminMarketplaceService.setRecommendationVisibility(id, dto.hidden, dto.reason, this.meta(req));
+  }
+
+  /** Take a live listing offline (status inactive). Reason required, audited. */
+  @Patch('listings/:id/unpublish')
+  unpublish(@Req() req: any, @Param('id', ParseObjectIdPipe) id: string, @Body() dto: RemoveListingDto) {
+    return this.adminMarketplaceService.unpublish(id, dto.reason, this.meta(req));
   }
 
   // ── Listing review (new listings wait here before going live) ──

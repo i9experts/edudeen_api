@@ -22,7 +22,7 @@ import { VisitDaily } from '../analytics-visits/visit-daily.schema';
 import { conversionRate, pktDateOf, pktDayStartOf } from '../analytics-visits/visit-tracking.util';
 import { resolveDateRange } from '../analytics/utils/analytics-date.util';
 import { productSalesRows } from '../analytics/utils/product-performance.util';
-import { QUALITY_LOW, listingQuality } from '../products/product-quality.util';
+import { QUALITY_LOW, listingQuality, basicListingQuality } from '../products/product-quality.util';
 import { DEFAULT_LOW_STOCK_THRESHOLD, effectiveThreshold, isLowStock, parseThresholdInput } from './stock-threshold.util';
 import { StockHistory } from './stock-history.schema';
 
@@ -375,6 +375,8 @@ export class InventoryService {
         conversionLocked: !convAllowed,
         qualityScore: quality.score,
         qualityMissing: quality.missing,
+        // Seller 'Listing tips' (only when a basic check fails: < 2 images, short description/title, placeholder title).
+        listingTips: basicListingQuality(product as any).reasons,
         tags: product.tags ?? [],
         // physical-only (defaultVariant fields)
         options: defaultVariant?.options ?? [],
