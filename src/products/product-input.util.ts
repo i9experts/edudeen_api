@@ -52,17 +52,67 @@ export function cleanShortText(v: unknown, field: string, max: number): string |
   return clean === '' ? null : clean;
 }
 
+export const BOOK_BINDINGS = ['paperback', 'hardcover', 'spiral'] as const;
+export const BOOK_PAGES_MAX = 5000;
+
+/** ISBN-10 / ISBN-13 checksum. Takes digits (last char of an ISBN-10 may be X). */
+export function isValidIsbn(digits: string): boolean {
+  if (/^\d{13}$/.test(digits)) {
+    const sum = [...digits].reduce((s, c, i) => s + Number(c) * (i % 2 === 0 ? 1 : 3), 0);
+    return sum % 10 === 0;
+  }
+  if (/^\d{9}[\dX]$/.test(digits)) {
+    const sum = [...digits].reduce((s, c, i) => s + (c === 'X' ? 10 : Number(c)) * (10 - i), 0);
+    return sum % 11 === 0;
+  }
+  return false;
+}
+
+/** Optional ISBN: undefined = not sent, ''/null = clear, else hyphens/spaces dropped, checksum-validated, stored as digits. */
+export function cleanIsbn(v: unknown): string | null | undefined {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  if (typeof v !== 'string') throw new BadRequestException('isbn must be text');
+  const digits = v.replace(/[\s-]/g, '').toUpperCase();
+  if (digits === '') return null;
+  if (!isValidIsbn(digits)) throw new BadRequestException('isbn must be a valid 10 or 13 digit ISBN');
+  return digits;
+}
+
 export interface LearningMeta {
   curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null;
   coverStyle?: 'book' | 'flat' | null; language?: 'ur' | 'en' | 'ar' | 'mixed' | null;
   author?: string | null; publisher?: string | null; edition?: string | null;
+  pages?: number | null; isbn?: string | null; binding?: (typeof BOOK_BINDINGS)[number] | null;
+  series?: string | null; seriesOrder?: number | null;
 }
 
 export function cleanLearningMeta(body: Record<string, unknown>): LearningMeta {
   const out: LearningMeta = {};
+  if (body.pages !== undefined) {
+    const p = body.pages;
+    if (p === null || p === '') out.pages = null;
+    else if (typeof p === 'number' && Number.isInteger(p) && p >= 1 && p <= BOOK_PAGES_MAX) out.pages = p;
+    else throw new BadRequestException(`pages must be a whole number from 1 to ${BOOK_PAGES_MAX}`);
+  }
+  const isbn = cleanIsbn(body.isbn);
+  if (isbn !== undefined) out.isbn = isbn;
+  if (body.binding !== undefined) {
+    if (body.binding === null || body.binding === '') out.binding = null;
+    else if ((BOOK_BINDINGS as readonly unknown[]).includes(body.binding)) out.binding = body.binding as (typeof BOOK_BINDINGS)[number];
+    else throw new BadRequestException(`binding must be one of: ${BOOK_BINDINGS.join(', ')}`);
+  }
   for (const k of ['author', 'publisher', 'edition'] as const) {
     const v = cleanShortText(body[k], k, BOOK_DETAIL_LIMITS[k]);
     if (v !== undefined) out[k] = v;
+  }
+  const series = cleanShortText(body.series, 'series', 80);
+  if (series !== undefined) out.series = series;
+  if (body.seriesOrder !== undefined) {
+    const o = body.seriesOrder;
+    if (o === null || o === '') out.seriesOrder = null;
+    else if (typeof o === 'number' && Number.isInteger(o) && o >= 1 && o <= 999) out.seriesOrder = o;
+    else throw new BadRequestException('seriesOrder must be a whole number from 1 to 999');
   }
   if (body.language !== undefined) {
     if (body.language === null || body.language === '') out.language = null;

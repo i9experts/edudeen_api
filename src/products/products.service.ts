@@ -26,7 +26,7 @@ import { UploadService } from 'src/upload/upload.service';
 import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
 import { fetchPdfPageCount, isPdfName } from './pdf-page-count.util';
 import { sanitizeDigitalForPublicView } from './product-public-view.util';
-import { filterValidRailProducts, filterRailEligible, RAIL_QUERY_EXCLUDE } from './home-rail.util';
+import { filterValidRailProducts, filterRailEligible, RAIL_QUERY_EXCLUDE, RAIL_HIDDEN_EXCLUDE, notHiddenFromRecommendations, demoteLowQuality } from './home-rail.util';
 import { publishedHighlights } from 'src/store-theme/featured-products.util';
 import { verifyStoreOwnershipStrict } from 'src/common/store-ownership.util';
 import { classFilter, classIndex } from './class-levels';
@@ -36,6 +36,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { notifyPublishRequest, pktLabel } from './product-schedule-notify.util';
 import { NOTIFICATION_TYPES } from '../notifications/notification.types';
 import { cleanProductVideo } from './product-video.util';
+import { BESTSELLER_MIN_SOLD, isBestsellerBadge, pickSeriesRows } from './bestseller.util';
 import { assertSellerStatus, parseScheduledAt, assertStringArray, assertText, cleanDigitalSettings, resolveSellerPublishStatus, sellerSkipsListingReview, cleanLearningMeta, cleanParcelMeta, cleanLicenseTiers, cleanDeliveryFormat } from './product-input.util';
 import { allocateSkus, cleanSku } from './sku.util';
 import { generateProductSlug, nextPreviousSlugs } from 'src/common/slug.util';
@@ -630,6 +631,7 @@ export class ProductsService {
     if (term) {
       // Every word must match (any order) in name/tags/description; each word also matches its Roman-Urdu/Urdu synonyms.
       query.$and = [...(query.$and ?? []), buildAllWordsFilter(term)];
+      Object.assign(query, RAIL_HIDDEN_EXCLUDE); // hidden from recommendations = hidden from search too
     }
 
     // Optional productType filter ('educational' is retired and counts as digital).
@@ -1018,6 +1020,7 @@ export class ProductsService {
     const query: any = {
       status: 'active',
       isDelete: false, isTest: { $ne: true },
+      ...RAIL_HIDDEN_EXCLUDE, // admin 'hide from recommendations': out of search, the direct URL still works
       $and: [buildAllWordsFilter(term)],
     };
 
@@ -1070,7 +1073,8 @@ export class ProductsService {
       { $limit: 40 },
     ]);
     const coIds = rows.map(r => r._id).filter(id => isValidObjectId(id));
-    let picked: any[] = (await this.getShapedProductsByIds(coIds, customerId)).slice(0, max);
+    // Hidden-from-recommendations listings never show; low-quality ones rank after the rest (no extra queries: the shaped docs carry the booleans).
+    let picked: any[] = demoteLowQuality(notHiddenFromRecommendations(await this.getShapedProductsByIds(coIds, customerId) as any[])).slice(0, max);
     // The rail heading must match what is inside it:
     //  bought_together = only real co-purchases (never topped up with unrelated items),
     //  same_level      = same category AND same education level (product has a level),
@@ -1078,12 +1082,13 @@ export class ProductsService {
     let basis: 'bought_together' | 'same_level' | 'similar' = picked.length ? 'bought_together' : 'similar';
 
     if (!picked.length) {
-      const filter: any = { status: 'active', isDelete: false, isTest: { $ne: true }, _id: { $ne: pid } };
+      const filter: any = { status: 'active', isDelete: false, isTest: { $ne: true }, _id: { $ne: pid }, ...RAIL_HIDDEN_EXCLUDE };
       filter.categoryId = product.categoryId;
       if (product.educationLevel) { filter.educationLevel = product.educationLevel; basis = 'same_level'; }
       await this.restrictToActiveStores(filter);
-      const extra = await productModel.find(filter).sort({ purchaseCount: -1, averageRating: -1 }).limit(max).lean();
-      picked = await this.attachVariantsAndPricing(extra, customerId);
+      // Fetch a few extra so low-quality ones can drop to the end while the rail stays full.
+      const extra = await productModel.find(filter).sort({ purchaseCount: -1, averageRating: -1 }).limit(max * 2).lean();
+      picked = demoteLowQuality(await this.attachVariantsAndPricing(extra, customerId) as any[]).slice(0, max);
     }
     return { success: true, data: { basis, products: picked.map(p => this.sanitizeDigitalForPublicView(p)) } };
   }
@@ -1116,7 +1121,7 @@ export class ProductsService {
     });
     if (!ids.length) return { success: true, data: { products: [] } };
 
-    const shaped = filterRailEligible(await this.getShapedProductsByIds(ids.slice(0, max * 3), customerId ?? null)) as any[];
+    const shaped = demoteLowQuality(notHiddenFromRecommendations(filterRailEligible(await this.getShapedProductsByIds(ids.slice(0, max * 3), customerId ?? null)) as any[]));
     return { success: true, data: { products: shaped.slice(0, max).map(p => this.sanitizeDigitalForPublicView(p)) } };
   }
 
@@ -1230,15 +1235,47 @@ export class ProductsService {
     return ids;
   }
 
-  /** Real best sellers: ordered by the number of units on paid orders (`purchaseCount`); products nobody has bought are left out. */
-  async getBestsellers(limit = 10, customerId?: string | null) {
-    const lim = Math.min(24, Math.max(1, Math.floor(limit) || 10));
-    const ids = await this.cachedShelfIds('home:bestsellers:v1', async () => {
+  /** Cached (10 min, read-only) ids of the top sellers - the same list the home Bestsellers shelf uses. */
+  private topSellerIds(): Promise<string[]> {
+    return this.cachedShelfIds('home:bestsellers:v1', async () => {
       const rows: any[] = await this.databaseService.repositories.productModel
         .find({ status: 'active', isDelete: false, isTest: { $ne: true }, purchaseCount: { $gte: 1 }, ...RAIL_QUERY_EXCLUDE })
         .sort({ purchaseCount: -1, averageRating: -1, _id: -1 }).limit(60).select('_id').lean();
       return rows.map((r) => String(r._id));
     });
+  }
+
+  /** Best-seller badge: top-seller list AND at least BESTSELLER_MIN_SOLD real sales. Never throws (badge is optional). */
+  private async isBestsellerProduct(productId: string, purchaseCount: number | null | undefined): Promise<boolean> {
+    if (Number(purchaseCount ?? 0) < BESTSELLER_MIN_SOLD) return false;
+    try { return isBestsellerBadge(productId, purchaseCount, await this.topSellerIds()); } catch { return false; }
+  }
+
+  /** Other books of the same series from the SAME store (max 8, shaped like listing cards so price/stock are current). */
+  async getSeries(idOrSlug: string, customerId?: string | null) {
+    const { productModel } = this.databaseService.repositories as any;
+    const base = { status: 'active', isDelete: false, isTest: { $ne: true } };
+    let product: any = await productModel.findOne({ slug: idOrSlug, ...base }).select('_id storeId series').lean();
+    if (!product && isValidObjectId(idOrSlug)) product = await productModel.findOne({ _id: idOrSlug, ...base }).select('_id storeId series').lean();
+    if (!product) throw new NotFoundException('Product not found');
+    const series = typeof product.series === 'string' ? product.series.trim() : '';
+    if (!series) return { success: true, data: { series: null, products: [] as any[] } };
+    const escaped = series.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const rows: any[] = await productModel
+      .find({ ...base, storeId: product.storeId, series: { $regex: `^${escaped}$`, $options: 'i' }, ...RAIL_QUERY_EXCLUDE })
+      .select('_id seriesOrder name').limit(40).lean();
+    const ids = pickSeriesRows(rows).map((r) => String(r._id));
+    if (ids.length < 2) return { success: true, data: { series, products: [] as any[] } }; // a series of one is not a series
+    const shaped: any[] = await this.getShapedProductsByIds(ids, customerId ?? null);
+    const order = new Map(ids.map((id, i) => [id, i]));
+    const products = shaped.sort((a, b) => (order.get(String(a._id)) ?? 0) - (order.get(String(b._id)) ?? 0)).map((p) => this.sanitizeDigitalForPublicView(p));
+    return { success: true, data: { series, products } };
+  }
+
+  /** Real best sellers: ordered by the number of units on paid orders (`purchaseCount`); products nobody has bought are left out. */
+  async getBestsellers(limit = 10, customerId?: string | null) {
+    const lim = Math.min(24, Math.max(1, Math.floor(limit) || 10));
+    const ids = await this.topSellerIds();
     // Over-ask: some candidates may belong to a store that has since gone offline.
     const products = filterRailEligible(await this.getShapedProductsByIds(ids.slice(0, lim * 3), customerId ?? null)).slice(0, lim);
     return { success: true, data: { products } };
@@ -1526,6 +1563,7 @@ export class ProductsService {
     }
     (productWithSeller as any).canonicalSlug = product.slug;
     (productWithSeller as any).slugRedirect = viaPreviousSlug;
+    (productWithSeller as any).isBestseller = await this.isBestsellerProduct(String(product._id), (product as any).purchaseCount);
     (productWithSeller as any).publicCoupon = await this.findPublicCouponBadge(product as any);
 
     // Edudeen Premium: teaser percent for everyone, member price on the variants for active members.
@@ -1765,6 +1803,7 @@ export class ProductsService {
       subCategoryId: await this.resolveSubCategoryId(categoryId, subCategoryId),
       images: cleanImages,
       descriptionImages: body.descriptionImages === undefined ? [] : assertStringArray(body.descriptionImages, 'descriptionImages', { maxItems: 6, maxLength: 2048 }),
+      samplePages: body.samplePages === undefined ? [] : assertStringArray(body.samplePages, 'samplePages', { maxItems: 6, maxLength: 2048 }),
       video: cleanProductVideo(body.video) ?? null,
       tags: cleanTags,
       digital: null,
@@ -1932,6 +1971,7 @@ export class ProductsService {
       subCategoryId: validSubCategoryId,
       images: cleanImages,
       descriptionImages: body.descriptionImages === undefined ? [] : assertStringArray(body.descriptionImages, 'descriptionImages', { maxItems: 6, maxLength: 2048 }),
+      samplePages: body.samplePages === undefined ? [] : assertStringArray(body.samplePages, 'samplePages', { maxItems: 6, maxLength: 2048 }),
       video: cleanProductVideo(body.video) ?? null,
       tags: cleanTags,
       digital: digitalConfig,
@@ -2216,6 +2256,7 @@ export class ProductsService {
     if (images !== undefined) productUpdate.images = assertStringArray(images, 'images', { maxItems: 20, maxLength: 2048 });
     if (body.video !== undefined) productUpdate.video = cleanProductVideo(body.video);
     if (body.descriptionImages !== undefined) productUpdate.descriptionImages = assertStringArray(body.descriptionImages, 'descriptionImages', { maxItems: 6, maxLength: 2048 });
+    if (body.samplePages !== undefined) productUpdate.samplePages = assertStringArray(body.samplePages, 'samplePages', { maxItems: 6, maxLength: 2048 });
     if (tags !== undefined) productUpdate.tags = assertStringArray(tags, 'tags', { maxItems: 30, maxLength: 60 });
     if (isListedOnEdudeen !== undefined)
       productUpdate.isListedOnEdudeen = isListedOnEdudeen;

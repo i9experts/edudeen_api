@@ -27,6 +27,17 @@ export function reviewRequestBlock(f: ReviewRequestFacts): ReviewRequestBlock | 
   return null;
 }
 
+/** Automatic in-app reminder: sent this many days after delivery, at most REVIEW_REMINDER_MAX_PER_RUN per cron run. */
+export const REVIEW_REMINDER_AFTER_DAYS = 3;
+export const REVIEW_REMINDER_MAX_PER_RUN = 50;
+
+/** Due = still requestable (reviewRequestBlock is null: not requested, not reviewed, inside the window) AND delivered 3+ days ago. */
+export function reviewReminderDue(f: ReviewRequestFacts): boolean {
+  if (reviewRequestBlock(f) !== null) return false;
+  const now = (f.now ?? new Date()).getTime();
+  return now - new Date(f.doneAt as any).getTime() >= REVIEW_REMINDER_AFTER_DAYS * 86_400_000;
+}
+
 export const REVIEW_REQUEST_REASON_TEXT: Record<ReviewRequestBlock, string> = {
   not_completed: 'The order is not completed yet',
   expired: `Older than ${REVIEW_REQUEST_WINDOW_DAYS} days`,

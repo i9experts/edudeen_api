@@ -191,6 +191,13 @@ export class productController {
     return this.ProductsService.getProductSample(id, req.ip);
   }
 
+  /** Public: the other books of this product's series (same store, max 8). */
+  @UseGuards(OptionalJwtAuthGuard)
+  @Get('series/:id')
+  async getSeries(@Req() req: any, @Param('id') id: string) {
+    return this.ProductsService.getSeries(id, req.user?.userId ?? null);
+  }
+
   @UseGuards(OptionalJwtAuthGuard)
   @Get('also-bought/:id')
   async getAlsoBought(@Req() req: any, @Param('id') id: string, @Query('limit') limit?: string) {

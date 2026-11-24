@@ -219,6 +219,24 @@ export class Product {
   @Prop({ type: String, maxlength: 60, default: null })
   edition: string | null;
 
+  // More optional book details. null = not stated. isbn is stored as digits only (10 or 13, checksum-valid).
+  @Prop({ type: Number, min: 1, max: 5000, default: null })
+  pages: number | null;
+
+  @Prop({ type: String, maxlength: 13, default: null })
+  isbn: string | null;
+
+  @Prop({ type: String, enum: ['paperback', 'hardcover', 'spiral'], default: null })
+  binding: 'paperback' | 'hardcover' | 'spiral' | null;
+
+  // Optional series (e.g. "Maths Workbook"). Products of the SAME store with the same series name are listed in a table
+  // on the product page, ordered by seriesOrder. Old products: null.
+  @Prop({ type: String, maxlength: 80, default: null })
+  series: string | null;
+
+  @Prop({ type: Number, min: 1, max: 999, default: null })
+  seriesOrder: number | null;
+
   // How the product card is drawn: 'book' (book-cover shape) or 'flat' (plain photo, e.g. toys, stationery).
   // null = legacy listing, shown as a book like before. Required to publish new listings.
   @Prop({ type: String, enum: ['book', 'flat'], default: null })
@@ -253,6 +271,10 @@ export class Product {
   // Pictures the seller adds INSIDE the description (shown in the product page Description tab). Max 6.
   @Prop({ type: [String], default: [] })
   descriptionImages: string[];
+
+  // Optional "Look inside" sample pages (book pages, worksheets). Array order = page order. Max 6. Old products: [].
+  @Prop({ type: [String], default: [] })
+  samplePages: string[];
 
   @Prop({ type: [String], default: [] })
   tags: string[];
@@ -370,6 +392,20 @@ export class Product {
 
   @Prop({ type: Object, default: null })
   qualityFixRequest: { note: string; at: Date; by: string } | null;
+
+  // Admin "hide from recommendations": out of the product-page rails and search, still reachable by direct URL and on the
+  // store page. All optional with no default (a missing field = not hidden), so no migration. Reason/admin never public.
+  @Prop({ type: Boolean })
+  hiddenFromRecommendations?: boolean;
+
+  @Prop({ type: String })
+  recommendationHiddenReason?: string | null;
+
+  @Prop({ type: String })
+  recommendationHiddenBy?: string | null;
+
+  @Prop({ type: Date })
+  recommendationHiddenAt?: Date | null;
 
   // Seller edits to a LIVE (admin-approved) listing wait here until an admin approves them; the live fields stay as
   // they were. `changes` is a $set-ready object. Reject drops it; approve applies it (see AdminMarketplaceService).

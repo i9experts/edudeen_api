@@ -18,6 +18,7 @@ import { clampInt } from 'src/common/query-safety.util';
 import { recalcProductRating, recalcStoreRating } from './rating-aggregate.util';
 import { checkVerifiedPurchase } from './verified-purchase.util';
 import { canEditReply } from './review-request.util';
+import { customersSay, starPercentages } from './review-insights.util';
 const DELIVERED_ITEM_STATUSES = ['delivered', 'completed'];
 
 @Injectable()
@@ -367,7 +368,7 @@ export class RatingService {
 
     const allForStats = await ratingModel
       .find({ productId, isDelete: false, rating: { $ne: null } })
-      .select('rating')
+      .select('rating comments')
       .lean();
     const ratingBreakdown: Record<string, number> = {
       '5': 0,
@@ -423,6 +424,8 @@ export class RatingService {
           averageRating,
           totalReviews: allForStats.length,
           ratingBreakdown,
+          ratingPercentages: starPercentages(ratingBreakdown),
+          customersSay: customersSay(allForStats.map((r: any) => r.comments), allForStats.length),
         },
         pagination: {
           page,
