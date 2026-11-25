@@ -71,6 +71,11 @@ export class PaymentService {
       this.stripe = new Stripe(secretKey, {
         apiVersion: '2025-04-30.basil' as any,
       });
+      if (!(this.configService.get<string>('STRIPE_PUBLISHABLE_KEY') ?? '').trim()) {
+        console.warn(
+          '[PaymentService] STRIPE_PUBLISHABLE_KEY not set — card is reported as UNAVAILABLE to the web/admin until it is set (use the same pk_ key as VITE_STRIPE_PUBLISHABLE_KEY).',
+        );
+      }
     } else {
       // Matches the pattern in subscriptions/payment-gateway — degrade
       // gracefully rather than crash the whole app when the key hasn't

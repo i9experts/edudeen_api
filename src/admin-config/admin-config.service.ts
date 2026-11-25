@@ -513,8 +513,13 @@ export class AdminConfigService {
     const mp = config?.manualPaymentConfig;
     const bank = !!mp && mp.enabled !== false && [mp.accountNumber, mp.iban, mp.jazzcashNumber, mp.easypaisaNumber].some((v) => typeof v === 'string' && v.trim());
     const hosted = configuredHostedProviderIds('PKR');
+    // Card is only "available" when BOTH Stripe keys exist: the secret key (creates the PaymentIntent) and the publishable key
+    // (the buyer's browser needs the same key as VITE_STRIPE_PUBLISHABLE_KEY on the web build). `cardKeys` says which one is missing.
+    const secretKey = !!(process.env.STRIPE_SECRET_KEY ?? '').trim();
+    const publishableKey = !!(process.env.STRIPE_PUBLISHABLE_KEY ?? '').trim();
     return {
-      card: !!(process.env.STRIPE_SECRET_KEY ?? '').trim(),
+      card: secretKey && publishableKey,
+      cardKeys: { secretKey, publishableKey },
       bankTransfer: bank,
       jazzcash: hosted.includes('jazzcash'),
       easypaisa: hosted.includes('easypaisa'),
