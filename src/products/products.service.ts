@@ -742,70 +742,54 @@ export class ProductsService {
     let products: any[];
 
     if (needsPriceAggregation) {
-      const priceRange: any = {};
-      if (minPrice !== undefined) priceRange.$gte = minPrice;
-      if (maxPrice !== undefined) priceRange.$lte = maxPrice;
+      // Price lives on the variants, so a price sort / filter needs every candidate's cheapest ACTIVE variant. The old
+      // per-product $lookup pipeline ran one sub-query per product (about 1.8 s for 3000 products); this reads the
+      // light candidate rows and ONE grouped variant pass, then sorts and pages in memory (same order and totals).
+      const cands: any[] = await productModel
+        .find(query)
+        .select('_id createdAt isFeatured averageRating purchaseCount')
+        .lean();
+      const candIds = cands.map((p) => String(p._id));
+      const minRows: any[] = candIds.length
+        ? await productVariantModel.aggregate([
+            { $match: { productId: { $in: candIds }, status: 'active', isDelete: false } },
+            { $group: { _id: '$productId', min: { $min: '$price' } } },
+          ])
+        : [];
+      const minById = new Map<string, number>(minRows.map((r) => [String(r._id), r.min]));
+      const priceOf = (p: any): number | null => (minById.has(String(p._id)) ? (minById.get(String(p._id)) as number) : null);
 
-      const pipeline: any[] = [
-        { $match: query },
-        {
-          // `ProductVariant.productId` is stored as a plain string (not an
-          // ObjectId ref), so the join needs `$toString` on the product side.
-          $lookup: {
-            from: productVariantModel.collection.name,
-            let: { pid: { $toString: '$_id' } },
-            pipeline: [
-              {
-                $match: {
-                  $expr: { $eq: ['$productId', '$$pid'] },
-                  status: 'active',
-                  isDelete: false,
-                },
-              },
-              { $project: { price: 1 } },
-            ],
-            as: '_variantsForFilter',
-          },
-        },
-        { $addFields: { _minVariantPrice: { $min: '$_variantsForFilter.price' } } },
-      ];
-
-      if (Object.keys(priceRange).length) {
-        // A product with no active variants has no price at all — exclude
-        // it whenever a price filter is actually active rather than letting
-        // it slip through as a false match.
-        pipeline.push({ $match: { _minVariantPrice: { $ne: null, ...priceRange } } });
+      // A product with no active variants has no price at all: excluded whenever a price filter is active.
+      let pool = cands;
+      if (minPrice !== undefined || maxPrice !== undefined) {
+        pool = cands.filter((p) => {
+          const pr = priceOf(p);
+          return pr !== null && (minPrice === undefined || pr >= minPrice) && (maxPrice === undefined || pr <= maxPrice);
+        });
       }
 
-      const sortStage =
-        sortBy === 'price_asc'
-          ? { _minVariantPrice: 1, _id: -1 }
-          : sortBy === 'price_desc'
-            ? { _minVariantPrice: -1, _id: -1 }
-            : sortBy === 'rating'
-              ? { averageRating: -1, _id: -1 }
-              : sortBy === 'popularity'
-                ? { purchaseCount: -1, _id: -1 }
-                : sortBy === 'newest'
-                  ? { createdAt: -1, _id: -1 }
-                  // Default order: Edudeen-featured listings first, then newest.
-                  : { isFeatured: -1, createdAt: -1, _id: -1 };
-
-      pipeline.push({
-        $facet: {
-          metadata: [{ $count: 'total' }],
-          data: [
-            { $sort: sortStage },
-            { $skip: skip },
-            { $limit: limit },
-            { $project: { _variantsForFilter: 0, _minVariantPrice: 0 } },
-          ],
-        },
-      });
-
-      const [result] = await productModel.aggregate(pipeline);
-      total = result?.metadata?.[0]?.total ?? 0;
-      products = result?.data ?? [];
+      // Mongo order rules kept: null sorts lowest (first ascending, last descending); ties fall back to _id descending.
+      const num = (v: any) => (typeof v === 'number' ? v : Number.NEGATIVE_INFINITY);
+      const bool = (v: any) => (v === true ? 2 : v === false ? 1 : 0);
+      const idDesc = (x: any, y: any) => (String(x._id) < String(y._id) ? 1 : String(x._id) > String(y._id) ? -1 : 0);
+      const cmp = (x: any, y: any): number => {
+        let d = 0;
+        if (sortBy === 'price_asc') d = num(priceOf(x)) - num(priceOf(y));
+        else if (sortBy === 'price_desc') d = num(priceOf(y)) - num(priceOf(x));
+        else if (sortBy === 'rating') d = num(y.averageRating) - num(x.averageRating);
+        else if (sortBy === 'popularity') d = num(y.purchaseCount) - num(x.purchaseCount);
+        else {
+          if (sortBy !== 'newest') d = bool(y.isFeatured) - bool(x.isFeatured);
+          if (d === 0) d = (new Date(y.createdAt).getTime() || 0) - (new Date(x.createdAt).getTime() || 0);
+        }
+        return Number.isNaN(d) || d === 0 ? idDesc(x, y) : d;
+      };
+      pool = pool.slice().sort(cmp);
+      total = pool.length;
+      const pageIds = pool.slice(skip, skip + limit).map((p) => String(p._id));
+      const docs: any[] = pageIds.length ? await productModel.find({ _id: { $in: pageIds } }).lean() : [];
+      const byId = new Map(docs.map((d: any) => [String(d._id), d]));
+      products = pageIds.map((id) => byId.get(id)).filter(Boolean);
     } else {
       const sortStage =
         sortBy === 'rating'

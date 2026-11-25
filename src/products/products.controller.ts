@@ -16,7 +16,13 @@ import {
   UseInterceptors,
   UploadedFile,
   Res,
+  Optional,
+  OnModuleInit,
+  OnModuleDestroy,
 } from '@nestjs/common';
+import { createHash } from 'crypto';
+import { RedisService } from '../redis/redis.service';
+import { RealtimeService } from '../realtime/realtime.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { Throttle } from '@nestjs/throttler';
@@ -36,7 +42,13 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
 
 @Controller('api/products')
-export class productController {
+export class productController implements OnModuleInit, OnModuleDestroy {
+  // Guest browse/rail lists are cached for a minute; any catalog/product/category/campaign change bumps the version (below).
+  private static readonly BROWSE_TTL_S = 60;
+  private static readonly BROWSE_VER_KEY = 'pbc:ver';
+  private static readonly BROWSE_TOPICS = new Set(['catalog', 'products', 'categories', 'campaigns', 'store', 'storefront', 'marketplace', 'config']);
+  private unsubscribe: (() => void) | null = null;
+
   constructor(
     private readonly ProductsService: ProductsService,
     private readonly productStockService: ProductStockService,
@@ -44,7 +56,36 @@ export class productController {
     private readonly lifecycle: ProductLifecycleService,
     private readonly bulk: ProductBulkService,
     private readonly importer: ProductImportService,
+    private readonly redis: RedisService,
+    @Optional() private readonly realtime?: RealtimeService,
   ) {}
+
+  onModuleInit() {
+    this.unsubscribe = this.realtime?.onTopics((topics) => {
+      if (topics.some((t) => productController.BROWSE_TOPICS.has(t))) {
+        this.redis.incrBy(productController.BROWSE_VER_KEY, 1, 86400).catch(() => undefined);
+      }
+    }) ?? null;
+  }
+
+  onModuleDestroy() {
+    this.unsubscribe?.();
+  }
+
+  /** Guest-only cache (a signed-in buyer's list carries member prices / personal badges, so it is never shared). Failures fall through to the DB. */
+  private async cachedBrowse(cacheable: boolean, keyParts: unknown, load: () => Promise<any>): Promise<any> {
+    if (!cacheable) return load();
+    let key = '';
+    try {
+      const ver = (await this.redis.get(productController.BROWSE_VER_KEY)) ?? '0';
+      key = `pbc:v${ver}:` + createHash('sha1').update(JSON.stringify(keyParts)).digest('hex');
+      const hit = await this.redis.get(key);
+      if (hit) return JSON.parse(hit);
+    } catch { key = ''; }
+    const out = await load();
+    if (key) { try { await this.redis.set(key, JSON.stringify(out), productController.BROWSE_TTL_S); } catch { /* optional */ } }
+    return out;
+  }
 
   @UseGuards(OptionalJwtAuthGuard)
   @Get('products-by-category')
@@ -135,7 +176,12 @@ export class productController {
       },
     );
     // Typo tolerance only for real keyword searches (?exact=1 = "search instead for what I typed").
-    return this.ProductsService.withSpellFix(searchQuery, exactQuery === '1' || exactQuery === 'true', run);
+    const userId = req.user?.userId ?? null;
+    return this.cachedBrowse(
+      !userId && !searchQuery,
+      { id, page, limit, productType, campaignId, minPriceQuery, maxPriceQuery, minRatingQuery, sortBy, attributesQuery, curriculumQuery, ageQuery, featuredQuery, classQuery, formatQuery },
+      () => this.ProductsService.withSpellFix(searchQuery, exactQuery === '1' || exactQuery === 'true', run),
+    );
   }
 
   /** Public: up to 4 products for the Compare page (?ids=a,b,c) — same shaping/sanitising as listings. */
@@ -157,7 +203,9 @@ export class productController {
   @UseGuards(OptionalJwtAuthGuard)
   @Get('bestsellers')
   async bestsellers(@Req() req: any, @Query('limit') limit?: string) {
-    return this.ProductsService.getBestsellers(clampInt(limit, 10, 1, 24), req.user?.userId ?? null);
+    const lim = clampInt(limit, 10, 1, 24);
+    const userId = req.user?.userId ?? null;
+    return this.cachedBrowse(!userId, { bestsellers: lim }, () => this.ProductsService.getBestsellers(lim, userId));
   }
 
   /** Public home shelf: free downloads and free samples. */

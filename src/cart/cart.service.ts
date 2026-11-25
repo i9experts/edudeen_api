@@ -49,7 +49,12 @@ export class CartService {
         throw new BadRequestException('This product is not sold by this store');
       }
       // Items of a pending/suspended store can't be added (checkout refuses them anyway, but they used to sit in carts).
-      const storeLive: any = await this.databaseService.repositories.storeModel.findOne({ _id: storeId, status: 'active', isDelete: false }).select('holiday').lean();
+      // The store, the variant and the buyer's cart do not depend on each other: one round trip instead of three.
+      const [storeLive, variantDoc, existingCart]: any[] = await Promise.all([
+        this.databaseService.repositories.storeModel.findOne({ _id: storeId, status: 'active', isDelete: false }).select('holiday').lean(),
+        variantModel.findById(dto.productVariantId).lean(),
+        cartModel.findOne({ userId, storeId, isDelete: false }),
+      ]);
       if (!storeLive) throw new BadRequestException('Product not found');
       // Store on holiday: physical items (and digital ones when the seller paused them too) cannot be added.
       if (holidayBlocks(storeLive.holiday, (product as any).type)) throw new BadRequestException(holidayRefusal(product.name, storeLive.holiday));
@@ -58,14 +63,14 @@ export class CartService {
       if ((product as any).deliveryFormat === 'live_class') throw new BadRequestException('This product is no longer available');
 
       // 2️⃣ Get variant
-      const variant = await variantModel.findById(dto.productVariantId).lean();
+      const variant: any = variantDoc;
       if (!variant || variant.isDelete || variant.status !== 'active' || variant.productId !== dto.productId) {
         throw new BadRequestException('Product variant not found');
       }
 
       // 3️⃣ find cart — scoped to this store, so the same buyer's cart on a
       // different store's subdomain is a separate document
-      let cart = await cartModel.findOne({ userId, storeId, isDelete: false });
+      let cart: any = existingCart;
 
       // 4️⃣ prepare cart item
       // Variant images are optional overrides — most variants have none, so
@@ -467,14 +472,10 @@ export class CartService {
       .lean();
     const storeById = new Map((stores as any[]).map((s) => [s._id.toString(), s]));
 
-    const rows: { cart: any; store: any; storeId: string }[] = [];
-    for (const storeId of storeIds) {
-      const store = storeById.get(storeId);
-      if (!store) continue;
-      const { data: cart } = await this.getCart(userId, storeId);
-      rows.push({ cart, store, storeId });
-    }
-    return rows;
+    // Every store's cart is priced independently, so they run side by side (order of the list is kept).
+    const live = storeIds.filter((id) => storeById.has(id));
+    const carts2 = await Promise.all(live.map((storeId) => this.getCart(userId, storeId)));
+    return live.map((storeId, i) => ({ cart: carts2[i].data, store: storeById.get(storeId), storeId }));
   }
 
   /** Every non-empty cart the buyer has, one per store — the main
