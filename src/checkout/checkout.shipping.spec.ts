@@ -44,6 +44,7 @@ function makeService(opts: { pickedAddress?: any; zonesConfigured?: boolean } = 
   );
   jest.spyOn(svc, 'resolveCheckoutCurrency').mockResolvedValue('PKR');
   jest.spyOn(svc, 'convertedSubtotal').mockReturnValue(900);
+  jest.spyOn(svc, 'splitSubtotalsByType').mockReturnValue({ digitalSubtotal: 0, physicalSubtotal: 900 });
   const addShipping = jest.spyOn(svc, 'addShippingInCheckout').mockResolvedValue({ data: { shippingFee: 250, totalAmount: 1150 } });
   return { svc, addressModel, checkoutModel, addShipping };
 }

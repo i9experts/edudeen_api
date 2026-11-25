@@ -92,12 +92,17 @@ export class CheckoutService {
    *  numbers are read straight off `item.totalPrice`, which already has
    *  subscriber/campaign/coupon discounts baked in, so this stays correct
    *  after `applyCoupon`/`removeCoupon` mutate `items` in place. */
-  private splitSubtotalsByType(items: any[]) {
+  private splitSubtotalsByType(items: any[], checkoutCurrency?: string, fxSnapshots?: FxSnapshot[]) {
+    // Each line's totalPrice is in its OWN seller currency: convert into the checkout currency first (when known).
+    const line = (i: any) =>
+      checkoutCurrency
+        ? this.exchangeRateService.convertWithSnapshots(i.totalPrice, i.currency ?? checkoutCurrency, checkoutCurrency, fxSnapshots ?? [])
+        : i.totalPrice;
     const digitalSubtotal = this.round(
-      items.filter((i) => i.type === 'digital').reduce((s, i) => s + i.totalPrice, 0),
+      items.filter((i) => i.type === 'digital').reduce((s, i) => s + line(i), 0),
     );
     const physicalSubtotal = this.round(
-      items.filter((i) => i.type === 'physical').reduce((s, i) => s + i.totalPrice, 0),
+      items.filter((i) => i.type === 'physical').reduce((s, i) => s + line(i), 0),
     );
     return { digitalSubtotal, physicalSubtotal };
   }
@@ -852,7 +857,7 @@ export class CheckoutService {
           campaignDiscountUSD: campaignSavingsUSD,
           autoDiscountUSD: autoDiscountSavingsUSD,
           ...(isPremiumBuyer ? { premiumDiscountUSD: premiumSavingsUSD, premiumPlatformDiscountUSD: premiumPlatformSavingsUSD } : {}),
-          ...this.splitSubtotalsByType(checkoutItems),
+          ...this.splitSubtotalsByType(checkoutItems, checkoutCurrency, fxSnapshots as any),
         },
         appliedCampaigns,
         // Lines skipped because their store is not active (unified checkout only); still in the cart.
@@ -947,7 +952,7 @@ export class CheckoutService {
         shippingEstimate,
         subtotal: checkout.subtotal,
         totalAmount,
-        ...this.splitSubtotalsByType(checkout.items as any[]),
+        ...this.splitSubtotalsByType(checkout.items as any[], checkout.currency, checkout.fxSnapshots as any),
       },
     };
   }
@@ -1532,7 +1537,7 @@ export class CheckoutService {
         subtotal: newSubtotal,
         shippingFee: checkout.shippingFee || 0,
         totalAmount: newTotal,
-        ...this.splitSubtotalsByType(items),
+        ...this.splitSubtotalsByType(items, checkout.currency, checkout.fxSnapshots as any),
       },
     };
   }
@@ -1598,7 +1603,7 @@ export class CheckoutService {
         subtotal: newSubtotal,
         shippingFee: checkout.shippingFee || 0,
         totalAmount: newTotal,
-        ...this.splitSubtotalsByType(items),
+        ...this.splitSubtotalsByType(items, checkout.currency, checkout.fxSnapshots as any),
       },
     };
   }
@@ -1682,7 +1687,7 @@ export class CheckoutService {
         subtotal: newSubtotal,
         shippingFee: checkout.shippingFee || 0,
         totalAmount: newTotal,
-        ...this.splitSubtotalsByType(items),
+        ...this.splitSubtotalsByType(items, checkout.currency, checkout.fxSnapshots as any),
       },
     };
   }
@@ -1727,7 +1732,7 @@ export class CheckoutService {
         subtotal: newSubtotal,
         shippingFee: checkout.shippingFee || 0,
         totalAmount: newTotal,
-        ...this.splitSubtotalsByType(items),
+        ...this.splitSubtotalsByType(items, checkout.currency, checkout.fxSnapshots as any),
       },
     };
   }
@@ -1835,7 +1840,7 @@ export class CheckoutService {
           subtotal: newSubtotal,
           shippingFee: checkout.shippingFee || 0,
           totalAmount: newTotal,
-          ...this.splitSubtotalsByType(items),
+          ...this.splitSubtotalsByType(items, checkout.currency, checkout.fxSnapshots as any),
         },
       };
     }
@@ -1882,7 +1887,7 @@ export class CheckoutService {
         subtotal: newSubtotal,
         shippingFee: checkout.shippingFee || 0,
         totalAmount: newTotal,
-        ...this.splitSubtotalsByType(items),
+        ...this.splitSubtotalsByType(items, checkout.currency, checkout.fxSnapshots as any),
       },
     };
   }
