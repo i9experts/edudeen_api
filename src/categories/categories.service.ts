@@ -23,6 +23,8 @@ import {
   nestCategories,
 } from './category-tree.util';
 
+import { TtlCache } from '../common/ttl-cache.util';
+
 export interface AdminAuditMeta { adminId: string; ip?: string; userAgent?: string }
 
 @Injectable()
@@ -32,7 +34,10 @@ export class CategoriesService {
     private readonly activityLogService: ActivityLogService,
   ) {}
 
+  private readonly treeCache = new TtlCache<any>(60_000, 5);
+
   private audit(action: string, description: string, meta: AdminAuditMeta, targetId?: string, metadata?: object) {
+    this.treeCache.clear(); // every admin category write is audited here, so the cached public tree never outlives an edit on this instance
     void this.activityLogService.log({
       storeId: 'platform',
       category: 'settings',
@@ -285,6 +290,7 @@ export class CategoriesService {
         createdByRole: role,
       });
       invalidateCategoryTreeCache();
+      this.treeCache.clear();
 
       return {
         success: true,
@@ -307,7 +313,13 @@ export class CategoriesService {
 
   /** Public tree: every ACTIVE category nested to any depth. One query (not one per node), so it stays fast
    *  however many categories exist. A node under an inactive/deleted parent is hidden with it. */
+  /** The full public tree is the same for everyone and costs a product-count aggregation: served from a 60 s cache (admin category edits clear it). */
   async getCategoryTreeNested(categoryId?: string) {
+    if (categoryId) return this.buildCategoryTreeNested(categoryId);
+    return this.treeCache.get('all', () => this.buildCategoryTreeNested());
+  }
+
+  private async buildCategoryTreeNested(categoryId?: string) {
     const categoryModel = this.databaseService.repositories.categoryModel;
 
     // A non-ObjectId string (e.g. a category name leaking in from stale data) would otherwise throw an

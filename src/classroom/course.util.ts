@@ -277,6 +277,35 @@ export function scoreQuiz(quiz: NonNullable<CleanLesson['quiz']>, answers: unkno
 
 export const lessonIds = (sections: { lessons: { _id: string }[] }[]) => sections.flatMap(s => s.lessons.map(l => l._id));
 
+// ── Audio / video completion: the learner must really have played >= 90% of the lesson ─────────────────────────────
+export const PLAY_REQUIRED_RATIO = 0.9;
+/** Largest chunk of played time one report may claim. */
+export const PLAY_MAX_DELTA_S = 30;
+export interface PlayedEntry { seconds: number; durationSeconds: number | null; lastAt: Date | string | null }
+
+/** Seconds that count as "the whole lesson". The teacher's length (minutes, coarse) wins, but a shorter real media length is
+ *  accepted down to half of it (minutes are rounded up); a lesson with no teacher length uses the player's own report. */
+export function lessonLengthSeconds(durationMinutes: number | null | undefined, reportedSeconds: number | null | undefined): number | null {
+  const declared = typeof durationMinutes === 'number' && durationMinutes > 0 ? durationMinutes * 60 : null;
+  const reported = typeof reportedSeconds === 'number' && Number.isFinite(reportedSeconds) && reportedSeconds >= 10 ? reportedSeconds : null;
+  if (declared && reported) return reported >= declared * 0.5 ? Math.min(declared, reported) : declared;
+  return declared ?? reported;
+}
+
+/** New played total after a report of `delta` seconds: the credit can never exceed the real time since the previous report. */
+export function creditPlayed(prev: PlayedEntry | undefined, delta: number, nowMs: number): number {
+  const d = Math.min(PLAY_MAX_DELTA_S, Math.max(0, Number.isFinite(delta) ? delta : 0));
+  const last = prev?.lastAt ? new Date(prev.lastAt).getTime() : null;
+  // First report: no earlier timestamp to compare with, so at most 15 s. Later: never more than the real time since the last one (+2 s slack).
+  return (prev?.seconds ?? 0) + (last ? Math.min(d, Math.max(0, (nowMs - last) / 1000) + 2) : Math.min(d, 15));
+}
+
+/** True when the credited time reaches the required share. Unknown length = not enough (the player must report one). */
+export function playedEnough(entry: PlayedEntry | undefined, durationMinutes: number | null | undefined): boolean {
+  const len = lessonLengthSeconds(durationMinutes, entry?.durationSeconds);
+  return !!entry && len !== null && entry.seconds >= len * PLAY_REQUIRED_RATIO;
+}
+
 export function certificateCode() {
   return `EDU-${randomBytes(4).toString('hex').toUpperCase()}`;
 }

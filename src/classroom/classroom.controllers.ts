@@ -244,6 +244,12 @@ export class CoursesController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post('learn/:idOrSlug/lessons/:lessonId/played')
+  played(@Req() req: any, @Param('idOrSlug') idOrSlug: string, @Param('lessonId') lessonId: string, @Body() body: any) {
+    return this.courses.recordPlayed(req.user.userId, idOrSlug, lessonId, body);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post('learn/:idOrSlug/lessons/:lessonId/quiz')
   quiz(@Req() req: any, @Param('idOrSlug') idOrSlug: string, @Param('lessonId') lessonId: string, @Body('answers') answers: unknown) {
     return this.courses.submitQuiz(req.user.userId, idOrSlug, lessonId, answers);

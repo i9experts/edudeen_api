@@ -112,6 +112,10 @@ export class CourseProgress {
   @Prop({ type: Object, default: {} })
   quizScores: Record<string, number>;
 
+  // Optional: audio/video time the SERVER credited per lesson (see CoursesService.recordPlayed). Old progress has none.
+  @Prop({ type: Object, default: {} })
+  lessonPlayed?: Record<string, { seconds: number; durationSeconds: number | null; lastAt: Date }>;
+
   @Prop({ type: String, default: null })
   lastLessonId: string | null;
 

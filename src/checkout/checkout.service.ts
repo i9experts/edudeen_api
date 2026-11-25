@@ -168,7 +168,24 @@ export class CheckoutService {
    * and turns data problems in a cart (bad ids, a value that fails validation) into a 400 with a message.
    * Genuine server faults (database down, ...) are logged and still 500.
    */
+  // Identical create-checkout requests from the same buyer that overlap in time (a double-fired effect, a double tap,
+  // two tabs) share ONE run, so only one checkout document is made. Per process; later requests start a fresh run.
+  private readonly createCheckoutInFlight = new Map<string, Promise<any>>();
+
   async createCheckout(userId: string, body: any = {}) {
+    let key: string | null = null;
+    try { key = `${userId}|${JSON.stringify(body ?? {})}`; } catch { /* unserialisable body: no sharing */ }
+    if (key) {
+      const running = this.createCheckoutInFlight.get(key);
+      if (running) return running;
+      const run = this.createCheckoutGuarded(userId, body).finally(() => this.createCheckoutInFlight.delete(key!));
+      this.createCheckoutInFlight.set(key, run);
+      return run;
+    }
+    return this.createCheckoutGuarded(userId, body);
+  }
+
+  private async createCheckoutGuarded(userId: string, body: any = {}) {
     try {
       return await this.createCheckoutInner(userId, body);
     } catch (err: any) {

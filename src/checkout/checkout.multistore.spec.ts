@@ -390,13 +390,17 @@ describe('createCheckout — free checkout is offered only when the total is exa
 });
 
 describe('createCheckout — concurrency', () => {
-  it('two simultaneous calls make two independent checkouts and place no order; the carts are untouched', async () => {
+  it('two simultaneous identical calls share ONE checkout and place no order; the carts are untouched', async () => {
     const w = world([
       { storeId: 'A', productId: 'pa' },
       { storeId: 'B', productId: 'pb' },
     ]);
     const [first, second] = await Promise.all([create(w), create(w)]);
-    expect(first.data.checkout._id).not.toBe(second.data.checkout._id);
+    expect(first.data.checkout._id).toBe(second.data.checkout._id);
+    expect(w.created).toHaveLength(1);
+    // a later call (after the first finished) starts a fresh one
+    const third = await create(w);
+    expect(third.data.checkout._id).not.toBe(first.data.checkout._id);
     expect(w.created).toHaveLength(2);
     expect(w.carts.every((c) => c.items.length === 1)).toBe(true);
     for (const fn of ['updateOne', 'findOneAndUpdate', 'updateMany'])

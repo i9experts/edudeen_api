@@ -1413,7 +1413,44 @@ export class PaymentService {
    * bookkeeping as every other path runs: coupon / voucher usage, gift-card redemption, stock, cart cleanup.
    * Guarded by an atomic per-checkout claim (a replay or double-tap places one order set) and a per-user daily cap.
    */
+  // Free orders of ONE buyer run one after another (per process), so two parallel requests - a double click, two tabs,
+  // two checkouts for the same product - cannot both pass the "already owned" check below before either order exists.
+  private readonly freeCheckoutTails = new Map<string, Promise<unknown>>();
+
   async freeCheckout(userId: string, body: any) {
+    const prev = this.freeCheckoutTails.get(userId) ?? Promise.resolve();
+    const run = prev.catch(() => undefined).then(() => this.freeCheckoutInner(userId, body));
+    const tail = run.catch(() => undefined);
+    this.freeCheckoutTails.set(userId, tail);
+    void tail.then(() => { if (this.freeCheckoutTails.get(userId) === tail) this.freeCheckoutTails.delete(userId); });
+    return run;
+  }
+
+  /** A free order may not hand a buyer something they already have, or their own listing. Digital/course lines only
+   *  (a physical item can be bought again). Cancelled orders do not count. */
+  private async assertFreeLinesAllowed(userId: string, checkout: any) {
+    const digital = (checkout.items as any[]).filter((i: any) => i.type === 'digital');
+    if (!digital.length) return;
+    if (digital.some((i: any) => i.sellerId && String(i.sellerId) === String(userId))) {
+      throw new BadRequestException('This is your own product - you cannot order it.');
+    }
+    const ids = [...new Set(digital.map((i: any) => String(i.productId)))];
+    const owned: any[] = await this.databaseService.repositories.orderModel
+      .find({
+        userId, isDelete: false,
+        orderStatus: { $nin: ['cancelled', 'canceled'] },
+        $or: [{ isPaid: true }, { isFreeClaim: true }],
+        'sellerOrders.items.productId': { $in: ids },
+      })
+      .select('sellerOrders.items.productId')
+      .lean();
+    const have = new Set<string>();
+    for (const o of owned) for (const so of o.sellerOrders ?? []) for (const it of so.items ?? []) have.add(String(it.productId));
+    const dup = digital.find((i: any) => have.has(String(i.productId)));
+    if (dup) throw new BadRequestException(`You already have "${dup.name}" - find it in your Library.`);
+  }
+
+  private async freeCheckoutInner(userId: string, body: any) {
     const { checkoutId } = body ?? {};
     if (!checkoutId) throw new BadRequestException('checkoutId is required');
 
@@ -1436,6 +1473,7 @@ export class PaymentService {
     }
 
     await this.assertStoresStillActive(checkout);
+    await this.assertFreeLinesAllowed(userId, checkout);
 
     // Re-price against the live catalogue: a seller who raised a price after this checkout was created
     // must not hand the buyer the item at the old (free) price.

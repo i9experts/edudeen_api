@@ -25,6 +25,8 @@ interface Opts {
   storeActive?: boolean;
   placedToday?: number;
   cap?: string;
+  /** Orders the buyer already has (for the "already owned" check). */
+  ownedOrders?: any[];
 }
 
 function makeService(o: Opts = {}) {
@@ -81,7 +83,10 @@ function makeService(o: Opts = {}) {
       create: jest.fn().mockResolvedValue({}),
       countDocuments: jest.fn(async () => o.placedToday ?? 0),
     },
-    orderModel: { updateMany: jest.fn().mockResolvedValue({}) },
+    orderModel: {
+      updateMany: jest.fn().mockResolvedValue({}),
+      find: jest.fn(() => ({ select: () => ({ lean: async () => o.ownedOrders ?? [] }) })),
+    },
     addressModel: {},
     cartModel: {},
   };
@@ -132,6 +137,31 @@ describe('free checkout — a 0 grand total needs no payment', () => {
       status: 'completed',
     });
     expect(svc.removeCheckedOutItemsFromCart).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a digital product the buyer already has, and places no order', async () => {
+    const item = freeItem();
+    const { svc } = makeService({ items: [item], ownedOrders: [{ sellerOrders: [{ items: [{ productId: item.productId }] }] }] });
+    await expect(free(svc)).rejects.toThrow(/already have/i);
+    expect(svc.createOrder).not.toHaveBeenCalled();
+  });
+
+  it('refuses a seller ordering their own listing', async () => {
+    const { svc } = makeService({ items: [{ ...freeItem(), sellerId: 'u1' }] });
+    await expect(free(svc)).rejects.toThrow(/your own product/i);
+    expect(svc.createOrder).not.toHaveBeenCalled();
+  });
+
+  it('two parallel free orders for the same product: only one is placed', async () => {
+    const item = freeItem();
+    const placed: any[] = [];
+    const { svc, repos } = makeService({ items: [item] });
+    // the order "exists" for the lookup only once the first placement has finished
+    repos.orderModel.find = jest.fn(() => ({ select: () => ({ lean: async () => placed.slice() }) }));
+    svc.createOrder = jest.fn(async () => { await new Promise((r) => setTimeout(r, 5)); placed.push({ sellerOrders: [{ items: [{ productId: item.productId }] }] }); return [{ _id: 'o1' }]; });
+    const results = await Promise.allSettled([free(svc), free(svc)]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(svc.createOrder).toHaveBeenCalledTimes(1);
   });
 
   it('the server decides: a stored total above 0 is refused, whatever the client says', async () => {

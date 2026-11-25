@@ -10,7 +10,7 @@ import { UploadService } from '../upload/upload.service';
 import { UploadedAssetsService } from '../upload/uploaded-assets.service';
 import { verifyStoreOwnershipStrict } from '../common/store-ownership.util';
 import { CourseProgress, CourseProgressDocument } from './schemas/course.schema';
-import { accessDaysAt, accessExpiry, nextAccessDaysLog,certificateCode, cleanCertificateConfig, cleanCertificateDetails, cleanCourseInput, EMPTY_CERT_CONFIG, courseTotals, lessonIds, paidSeatFilter, scoreQuiz } from './course.util';
+import { creditPlayed, playedEnough, accessDaysAt, accessExpiry, nextAccessDaysLog,certificateCode, cleanCertificateConfig, cleanCertificateDetails, cleanCourseInput, EMPTY_CERT_CONFIG, courseTotals, lessonIds, paidSeatFilter, scoreQuiz } from './course.util';
 
 import { buildRosterView, maskRosterEmail, parseRosterQuery, rosterCsvRows, ROSTER_CSV_HEADER, ROSTER_EXPORT_CAP, ROSTER_GROUP_CAP, type RosterRow } from './students-roster.util';
 import { toExportCsv } from '../common/csv-export.util';
@@ -312,7 +312,39 @@ export class CoursesService {
     await this.assertLearner(userId, product);
     const lesson = await this.findLesson(String(product._id), lessonId);
     if (lesson.type === 'quiz') throw new BadRequestException('Pass the quiz to complete this lesson');
+    // Audio / video: the server must have credited >= 90% played time (PDF and text keep their existing rule). A lesson with no
+    // media yet, an already-completed lesson (old progress keeps working) and the course's own seller are not checked.
+    if ((lesson.type === 'video' || lesson.type === 'audio') && (lesson.file || lesson.videoUrl) && String(product.sellerId) !== userId) {
+      const progress: any = await this.progressModel.findOne({ userId, productId: String(product._id) }).select('completedLessonIds lessonPlayed').lean();
+      const already = (progress?.completedLessonIds ?? []).includes(lessonId);
+      if (!already && !playedEnough(progress?.lessonPlayed?.[lessonId], lesson.durationMinutes)) {
+        throw new BadRequestException(lesson.type === 'audio'
+          ? 'Listen to at least 90% of this recording to complete the lesson.'
+          : 'Watch at least 90% of this video to complete the lesson.');
+      }
+    }
     return { success: true, data: await this.complete(userId, product, lessonId) };
+  }
+
+  /** The player reports how many seconds were really played since its last report (<= 30). Credit is capped by the real time
+   *  elapsed on the server, so a script cannot fast-forward. `durationSeconds` is the media length the player knows. */
+  async recordPlayed(userId: string, idOrSlug: string, lessonId: string, body: any) {
+    const product = await this.findLearnerProduct(idOrSlug);
+    await this.assertLearner(userId, product);
+    const lesson = await this.findLesson(String(product._id), lessonId);
+    if (lesson.type !== 'video' && lesson.type !== 'audio') throw new BadRequestException('Only audio and video lessons track playing time');
+    const productId = String(product._id);
+    const progress: any = await this.progressModel.findOne({ userId, productId }).select('lessonPlayed').lean();
+    const prev = progress?.lessonPlayed?.[lessonId];
+    const now = Date.now();
+    const dur = Number(body?.durationSeconds);
+    const entry = {
+      seconds: Math.round(creditPlayed(prev, Number(body?.seconds), now) * 10) / 10,
+      durationSeconds: Number.isFinite(dur) && dur >= 10 && dur <= 86_400 ? Math.round(dur) : (prev?.durationSeconds ?? null),
+      lastAt: new Date(now),
+    };
+    await this.progressModel.updateOne({ userId, productId }, { $set: { [`lessonPlayed.${lessonId}`]: entry } }, { upsert: true });
+    return { success: true, data: { seconds: entry.seconds, enough: playedEnough(entry, lesson.durationMinutes) } };
   }
 
   async submitQuiz(userId: string, idOrSlug: string, lessonId: string, answers: unknown) {
