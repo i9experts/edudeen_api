@@ -2421,13 +2421,15 @@ export class PaymentService {
     // Buyer confirmation + emailed receipt, one per order (a mixed cart
     // becomes a physical and a digital order).
     for (const createdOrder of createdOrders) {
+      // A free digital claim is "availed" (it goes straight to My Library), not a paid/placed order.
+      const freeClaim = createdOrder.paymentType === 'free' && (createdOrder.sellerOrders ?? []).every((so: any) => (so.items ?? []).every((i: any) => i.type === 'digital'));
       this.notificationsService
         .notify({
           recipientId: userId,
           recipientRole: 'user',
           type: NOTIFICATION_TYPES.ORDER_PLACED,
-          title: 'Order confirmed',
-          body: `Your order #${createdOrder.orderNumber} has been placed.`,
+          title: freeClaim ? 'Availed' : 'Order confirmed',
+          body: freeClaim ? `Your free resource (order #${createdOrder.orderNumber}) is now in My Library.` : `Your order #${createdOrder.orderNumber} has been placed.`,
           data: { orderId: createdOrder._id.toString(), link: `/account/orders/${createdOrder._id.toString()}` },
           email: orderPlacedEmail(createdOrder),
           channelEvent: {

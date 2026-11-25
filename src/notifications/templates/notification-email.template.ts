@@ -49,7 +49,7 @@ export function orderPlacedEmail(order: {
       ${order.shippingFee ? `<div class="row"><span class="label">Shipping</span><span class="value">${money(order.shippingFee, order.currency)}</span></div>` : ''}
       <div class="row"><span class="label"><strong>Total</strong></span><span class="value">${money(order.totalAmount, order.currency)}</span></div>
     </div>
-    ${hasDigital && order.isPaid ? '<p>Your digital downloads are ready in My Orders.</p>' : ''}`;
+    ${hasDigital && order.isPaid ? '<p>Your digital downloads are ready in My Library.</p>' : ''}`;
   return {
     subject: `Order confirmed — #${order.orderNumber}`,
     html: notificationEmailShell('Order confirmed', body, { label: 'View my orders', url: `${WEB_APP_URL}/account/orders` }),
