@@ -247,7 +247,7 @@ export class OrdersService {
           seen.set(it.productId, {
             orderId: String(o._id), orderNumber: o.orderNumber, itemId: String(it._id), productId: it.productId,
             name: it.name, image: it.image ?? null, licenseType: it.licenseType ?? null, storeId: so.storeId,
-            isPaid: !!o.isPaid, purchasedAt: o.createdAt, paidAt: o.paidAt ?? null, downloadCount: it.downloadCount ?? 0,
+            isPaid: !!o.isPaid, isFree: !!o.isFreeClaim || Number(it.totalPrice ?? 1) === 0, purchasedAt: o.createdAt, paidAt: o.paidAt ?? null, downloadCount: it.downloadCount ?? 0,
             reviewable: !!o.isPaid && (['delivered', 'completed'].includes(it.status) || ['delivered', 'completed'].includes(so.status) || o.orderStatus === 'completed'),
           });
         }

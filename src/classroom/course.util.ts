@@ -31,7 +31,7 @@ export function cleanSubtitles(raw: unknown, lessonTitle: string): LessonSubtitl
   const out: LessonSubtitle[] = [];
   for (const s of raw as any[]) {
     const lang = s?.lang;
-    if (!(SUBTITLE_LANGS as readonly string[]).includes(lang)) throw new BadRequestException(`"${lessonTitle}": subtitles can be in Urdu or English`);
+    if (!(SUBTITLE_LANGS as readonly string[]).includes(lang)) throw new BadRequestException(`"${lessonTitle}": subtitles can be in Urdu, Roman Urdu or English`);
     if (seen.has(lang)) throw new BadRequestException(`"${lessonTitle}": add only one subtitle per language`);
     seen.add(lang);
     const content = typeof s?.content === 'string' ? s.content.replace(/^﻿/, '').replace(/\r\n?/g, '\n').trim() : '';
@@ -258,7 +258,7 @@ export function cleanCourseInput(body: any): { sections: { _id: string; title: s
       const dur = l?.durationMinutes == null || l.durationMinutes === '' ? null : Number(l.durationMinutes);
       return {
         _id: keepId(l?._id), title: lTitle, type, file, videoUrl, subtitles, text: type === 'text' ? text : str(l?.text, 2000), quiz,
-        durationMinutes: dur != null && Number.isFinite(dur) && dur > 0 ? Math.min(Math.round(dur), 1000) : null,
+        durationMinutes: dur != null && Number.isFinite(dur) && dur > 0 ? Math.min(Math.max(Math.round(dur * 100) / 100, 0.01), 1000) : null,
         isPreview: l?.isPreview === true && type !== 'quiz',
       };
     });

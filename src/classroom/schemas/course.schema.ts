@@ -8,7 +8,7 @@ export type CourseProgressDocument = CourseProgress & Document;
 export const LESSON_TYPES = ['video', 'audio', 'pdf', 'text', 'quiz'] as const;
 export type LessonType = (typeof LESSON_TYPES)[number];
 /** Subtitles on a video / voice lesson: Urdu and/or English. `timed` = WebVTT cues, `text` = a plain transcript. */
-export const SUBTITLE_LANGS = ['ur', 'en'] as const;
+export const SUBTITLE_LANGS = ['ur', 'en', 'roman_ur'] as const;
 export type SubtitleLang = (typeof SUBTITLE_LANGS)[number];
 export interface LessonSubtitle { lang: SubtitleLang; kind: 'timed' | 'text'; content: string }
 /** Caps keep one course document well under Mongo's 16 MB limit (a 1.5 h lecture's captions are ~80 KB). */
