@@ -196,6 +196,51 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
+  static readonly MANAGE_SESSION_TTL_SECONDS = 30 * 60;
+
+  /** Admin "manage as seller": a seller-role access token locked to ONE store, 30 minutes, NO refresh token.
+   *  It carries the seller's tokenVersion, so a seller password change / suspension ends it at once, and it is kept in
+   *  Redis like every access token so logout revokes it. Guarded by admin-stores/act-as.middleware. */
+  async issueManageSession(seller: any, storeId: string, adminId: string) {
+    const accessToken = this.jwtService.sign(
+      {
+        sub: seller._id,
+        email: seller.email,
+        role: 'seller',
+        tokenVersion: seller.tokenVersion ?? 0,
+        typ: 'access',
+        actAs: 'admin',
+        actAsAdminId: String(adminId),
+        storeId: String(storeId),
+      },
+      { expiresIn: AuthService.MANAGE_SESSION_TTL_SECONDS },
+    );
+    await this.redisService.set(accessToken, String(seller._id), AuthService.MANAGE_SESSION_TTL_SECONDS);
+    return { accessToken, expiresInSeconds: AuthService.MANAGE_SESSION_TTL_SECONDS };
+  }
+
+  static readonly MEMBER_SESSION_TTL_SECONDS = 2 * 60 * 60;
+
+  /** Store team member: same kind of store-locked seller token (claims `actAs:'collaborator'`, `memberId`), 2 hours, no
+   *  refresh token (the member switches in again). Enforced per request by store-team/member-access.middleware. */
+  async issueMemberSession(seller: any, storeId: string, memberId: string) {
+    const accessToken = this.jwtService.sign(
+      {
+        sub: seller._id,
+        email: seller.email,
+        role: 'seller',
+        tokenVersion: seller.tokenVersion ?? 0,
+        typ: 'access',
+        actAs: 'collaborator',
+        memberId: String(memberId),
+        storeId: String(storeId),
+      },
+      { expiresIn: AuthService.MEMBER_SESSION_TTL_SECONDS },
+    );
+    await this.redisService.set(accessToken, String(seller._id), AuthService.MEMBER_SESSION_TTL_SECONDS);
+    return { accessToken, expiresInSeconds: AuthService.MEMBER_SESSION_TTL_SECONDS };
+  }
+
   /** Exchanges a refresh token for a new session. Rejects anything that is
    *  not a refresh token, and any token issued before a suspend/reset
    *  (tokenVersion mismatch). Admin refresh tokens are single-use: the old one is burnt, and presenting one that

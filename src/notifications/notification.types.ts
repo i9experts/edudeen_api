@@ -69,6 +69,8 @@ export const NOTIFICATION_TYPES = {
   STORE_HOLIDAY_ENDED: 'store_holiday_ended',
   CATEGORY_REQUEST_APPROVED: 'category_request_approved',
   CATEGORY_REQUEST_REJECTED: 'category_request_rejected',
+  STORE_MEMBER_JOINED: 'store_member_joined',
+  STORE_MEMBER_REMOVED: 'store_member_removed',
 } as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[keyof typeof NOTIFICATION_TYPES];

@@ -30,6 +30,10 @@ async validate(payload: any) {
     // Carried through so JwtAuthGuard can compare it against the account's
     // current DB value and reject a token issued before a suspend/deactivate.
     tokenVersion: payload.tokenVersion ?? 0,
+    // Admin "manage as seller" session: seller-role token locked to one store (see admin-stores/act-as.util.ts).
+    ...(payload.actAs === 'admin' ? { actAs: 'admin', storeId: payload.storeId, actAsAdminId: payload.actAsAdminId } : {}),
+    // Store team member session (see store-team/member-access.middleware.ts).
+    ...(payload.actAs === 'collaborator' ? { actAs: 'collaborator', storeId: payload.storeId, memberId: payload.memberId } : {}),
   };
 }
 }

@@ -81,6 +81,8 @@ import { RetentionModule } from './retention/retention.module';
 import { ChildrenModule } from './children/children.module';
 import { PremiumModule } from './premium/premium.module';
 import { StaffModule } from './staff/staff.module';
+import { AdminStoresModule } from './admin-stores/admin-stores.module';
+import { StoreTeamModule } from './store-team/store-team.module';
 import { PhoneVerificationModule } from './phone-verification/phone-verification.module';
 
 @Module({
@@ -170,6 +172,8 @@ import { PhoneVerificationModule } from './phone-verification/phone-verification
     ChildrenModule,
     PremiumModule,
     StaffModule,
+    AdminStoresModule,
+    StoreTeamModule,
     PhoneVerificationModule,
   ],
   controllers: [AppController],

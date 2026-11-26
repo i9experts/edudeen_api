@@ -4,6 +4,10 @@ import { AdminConfigService } from './admin-config/admin-config.service';
 import { StaffService } from './staff/staff.service';
 import { StaffExtrasService } from './staff/staff-extras.service';
 import { createStaffAccessMiddleware } from './staff/staff-access.middleware';
+import { createActAsMiddleware } from './admin-stores/act-as.util';
+import { createMemberAccessMiddleware } from './store-team/member-access.middleware';
+import { StoreTeamService } from './store-team/store-team.service';
+import { ActivityLogService } from './activity-log/activity-log.service';
 import { normalizeRequestPath } from './common/request-path.util';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
@@ -163,6 +167,14 @@ async function bootstrap() {
   // Maintenance mode: block only the area an admin marked as down (see admin-config/maintenance.util.ts).
   // Staff permissions: every request made with a STAFF token is checked against their role (owner accounts pass).
   app.use(createStaffAccessMiddleware(app.get(StaffService), app.get(StaffExtrasService)));
+  // Admin "manage as seller" tokens: one store only, no money-out / account routes, every write audited first.
+  app.use(createActAsMiddleware({ verify: (t: string) => app.get(StaffService).verifyToken(t), log: (e: any) => app.get(ActivityLogService).log(e) }));
+  // Store team members: live access check, owner-only areas refused, writes need a permission and are audited first.
+  app.use(createMemberAccessMiddleware({
+    verify: (t: string) => app.get(StaffService).verifyToken(t),
+    access: (memberId: string, storeId: string, sellerId: string) => app.get(StoreTeamService).accessFor(memberId, storeId, sellerId),
+    log: (e: any) => app.get(ActivityLogService).log(e),
+  }));
 
   const adminConfig = app.get(AdminConfigService);
   app.use(async (req: any, res: any, next: any) => {

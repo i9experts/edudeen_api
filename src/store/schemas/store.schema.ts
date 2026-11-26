@@ -482,6 +482,10 @@ export class Store {
   @Prop({ type: Number, default: null })
   featuredRank: number | null;
 
+  /** Set when an admin created this store on behalf of a seller (the seller still owns it). */
+  @Prop({ type: Object, default: null })
+  createdByAdmin?: { adminId: string; at: Date } | null;
+
   // Persisted rollup from Rating docs (storeId-scoped) — recalculated by
   // RatingService.recalcStoreRating(), same pattern as Product.averageRating.
   @Prop({ type: Number, default: 0 })
