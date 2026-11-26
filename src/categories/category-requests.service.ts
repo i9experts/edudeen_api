@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, ConflictException, Logger, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model } from 'mongoose';
 import { DatabaseService } from '../database/databaseservice';
@@ -7,6 +7,7 @@ import { ActivityLogService } from '../activity-log/activity-log.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NOTIFICATION_TYPES } from '../notifications/notification.types';
 import { getAncestorChain } from './category-tree.util';
+import { CategoriesService } from './categories.service';
 import { CATEGORY_REQUEST_TYPES, CategoryRequest, CategoryRequestDocument } from './category-request.schema';
 
 export const MAX_PENDING_REQUESTS_PER_STORE = 3;
@@ -35,7 +36,10 @@ export class CategoryRequestsService {
     private readonly databaseService: DatabaseService,
     private readonly activityLog: ActivityLogService,
     private readonly notifications: NotificationsService,
+    @Optional() private readonly categories?: CategoriesService,
   ) {}
+
+  private readonly logger = new Logger(CategoryRequestsService.name);
 
   /** The seller must own the store: anyone else gets 403 (read AND create). Returns the store. */
   private async ownedStore(sellerId: string, storeId: string) {
@@ -110,7 +114,8 @@ export class CategoryRequestsService {
 
   /**
    * Approve / reject. Status-guarded (only `pending` can change) so two admins cannot both decide.
-   * Approving does NOT create the category: the admin adds it with the normal tools, then marks this approved.
+   * Approving a `subcategory` request creates it under the store's main category (reusing one with the same name),
+   * so the seller can use it straight away. A `main_change` is still applied by the admin by hand.
    */
   async decide(id: string, status: 'approved' | 'rejected', note: unknown, meta: { adminId: string; ip?: string; userAgent?: string }) {
     if (!isValidObjectId(id)) throw new BadRequestException('Invalid request id');
@@ -138,17 +143,26 @@ export class CategoryRequestsService {
       await this.requests.updateOne({ _id: id, status, reviewedBy: meta.adminId }, { $set: { status: 'pending', adminNote: null, reviewedBy: null, reviewedAt: null } });
       throw new ConflictException('Could not record the decision in the activity log. Nothing was changed; try again.');
     }
+    let createdCategoryId: string | null = null;
+    if (status === 'approved' && row.type === 'subcategory' && row.mainCategoryId && this.categories) {
+      try {
+        createdCategoryId = (await this.categories.createApprovedSubcategory(meta.adminId, String(row.mainCategoryId), String(row.name))).id;
+      } catch (e: any) {
+        // The decision stands; the admin can still add it by hand (the notification then says so).
+        this.logger.warn(`Approved category request ${String(row._id)} but could not create "${row.name}": ${e?.message ?? e}`);
+      }
+    }
     const kind = row.type === 'main_change' ? 'main category change' : 'subcategory';
     const title = status === 'approved' ? `Your ${kind} request was approved` : `Your ${kind} request was not approved`;
     const bodyText = status === 'approved'
-      ? `"${row.name}" was approved.${adminNote ? ` Note from Edudeen: ${adminNote}` : ''} It will appear in your category list once the Edudeen team has added it.`
+      ? `"${row.name}" was approved.${adminNote ? ` Note from Edudeen: ${adminNote}` : ''} ${createdCategoryId ? 'You can now choose it for your products.' : 'It will appear in your category list once the Edudeen team has added it.'}`
       : `"${row.name}" was not approved. Reason: ${adminNote}`;
     void this.notifications.notify({
       recipientId: String(row.sellerId), recipientRole: 'seller',
       type: status === 'approved' ? NOTIFICATION_TYPES.CATEGORY_REQUEST_APPROVED : NOTIFICATION_TYPES.CATEGORY_REQUEST_REJECTED,
       title, body: bodyText, data: { storeId: row.storeId, link: `/store/${row.storeId}/categories` },
     });
-    return { success: true, data: this.view(row) };
+    return { success: true, data: { ...this.view(row), createdCategoryId } };
   }
 
   // ── Seller: product counts per category (same filter as the Products page) ─────────────

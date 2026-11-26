@@ -1,4 +1,5 @@
 import { CURRICULA } from './schemas/product.schema';
+import { isAudience } from '../common/edu-filters.const';
 import { CLASS_VALUES } from './class-levels';
 import { clampInt, queryString } from './product-public-view.util';
 import {
@@ -103,6 +104,7 @@ export class productController implements OnModuleInit, OnModuleDestroy {
     @Query('attributes') attributesQuery?: string,
     @Query('q') searchQuery?: string,
     @Query('curriculum') curriculumQuery?: string,
+    @Query('audience') audienceQuery?: string,
     @Query('age') ageQuery?: string,
     @Query('featured') featuredQuery?: string,
     @Query('class') classQuery?: string,
@@ -169,6 +171,7 @@ export class productController implements OnModuleInit, OnModuleDestroy {
       term,
       {
         curriculum: CURRICULA.includes(curriculumQuery as any) ? curriculumQuery : undefined,
+        audience: isAudience(queryString(audienceQuery)) ? (queryString(audienceQuery) as string) : undefined,
         age: ageQuery !== undefined && /^\d{1,2}$/.test(String(ageQuery)) ? Number(ageQuery) : undefined,
         featured: featuredQuery === '1' || featuredQuery === 'true',
         classValue: CLASS_VALUES.includes(queryString(classQuery) as string) ? (queryString(classQuery) as string) : undefined,
@@ -179,7 +182,7 @@ export class productController implements OnModuleInit, OnModuleDestroy {
     const userId = req.user?.userId ?? null;
     return this.cachedBrowse(
       !userId && !searchQuery,
-      { id, page, limit, productType, campaignId, minPriceQuery, maxPriceQuery, minRatingQuery, sortBy, attributesQuery, curriculumQuery, ageQuery, featuredQuery, classQuery, formatQuery },
+      { id, page, limit, productType, campaignId, minPriceQuery, maxPriceQuery, minRatingQuery, sortBy, attributesQuery, curriculumQuery, audienceQuery, ageQuery, featuredQuery, classQuery, formatQuery },
       () => this.ProductsService.withSpellFix(searchQuery, exactQuery === '1' || exactQuery === 'true', run),
     );
   }

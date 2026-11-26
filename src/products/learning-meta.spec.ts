@@ -26,7 +26,7 @@ describe('product language', () => {
     expect(cleanLearningMeta({})).toEqual({});
   });
   it('rejects anything else with 400', () => {
-    expect(() => cleanLearningMeta({ language: 'fr' })).toThrow(BadRequestException);
+    expect(() => cleanLearningMeta({ language: 'klingon' })).toThrow(BadRequestException);
     expect(() => cleanLearningMeta({ language: 5 })).toThrow(/language/);
   });
 });

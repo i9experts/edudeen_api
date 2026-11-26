@@ -173,14 +173,39 @@ describe('CategoriesService — admin management', () => {
       categoryModel.findOne.mockImplementation(async (q: any) => (q._id ? chain[q._id] ?? null : null));
     });
 
-    it('allows nesting under levels 1, 2 and 3', async () => {
-      for (const p of ['L1', 'L2', 'L3']) {
+    it('allows new categories under levels 1 and 2 (main > sub > sub-sub)', async () => {
+      for (const p of ['L1', 'L2']) {
         await expect(service.addCategory('admin-1', 'admin', { name: 'New', parentId: p } as any)).resolves.toMatchObject({ success: true });
       }
     });
 
-    it('refuses a 5th level with a clear message', async () => {
-      await expect(service.addCategory('admin-1', 'admin', { name: 'Too deep', parentId: 'L4' } as any)).rejects.toThrow(/at most 4 levels/);
+    it('refuses a new 4th level (legacy deeper nodes still load) with a clear message', async () => {
+      for (const p of ['L3', 'L4']) {
+        await expect(service.addCategory('admin-1', 'admin', { name: 'Too deep', parentId: p } as any)).rejects.toThrow(/at most 3 levels/);
+      }
+      expect(categoryModel.create).not.toHaveBeenCalled();
+    });
+
+    it('sellers can no longer create categories directly (they send a request instead)', async () => {
+      (service as any).databaseService.repositories.sellerModel = { findOne: jest.fn().mockResolvedValue({ _id: 'seller-1' }) };
+      await expect(service.addCategory('seller-1', 'seller', { name: 'Mine', parentId: 'L1' } as any)).rejects.toThrow(/subcategory request/);
+      expect(categoryModel.create).not.toHaveBeenCalled();
+    });
+
+    it('stores the admin settings (icon, colour, translations, allowed types, review) on create', async () => {
+      await service.addCategory('admin-1', 'admin', {
+        name: 'Quran Kids', parentId: 'L1', icon: '📖', color: '#1e7f5c', nameTranslations: { ar: 'قرآن', ur: '' },
+        allowedProductTypes: ['course', 'digital'], requiresListingReview: true,
+      } as any);
+      expect(categoryModel.create).toHaveBeenCalledWith(expect.objectContaining({
+        icon: '📖', color: '#1E7F5C', nameTranslations: { ar: 'قرآن' }, allowedProductTypes: ['digital', 'course'], requiresListingReview: true,
+      }));
+    });
+
+    it('rejects a bad setting before writing anything', async () => {
+      await expect(service.addCategory('admin-1', 'admin', { name: 'X', parentId: 'L1', color: 'green' } as any)).rejects.toThrow(/hex colour/);
+      await expect(service.addCategory('admin-1', 'admin', { name: 'X', parentId: 'L1', allowedProductTypes: ['toys'] } as any)).rejects.toThrow(/allowedProductTypes/);
+      await expect(service.addCategory('admin-1', 'admin', { name: 'X', parentId: 'L1', nameTranslations: { xx: 'y' } } as any)).rejects.toThrow(/nameTranslations keys/);
       expect(categoryModel.create).not.toHaveBeenCalled();
     });
   });

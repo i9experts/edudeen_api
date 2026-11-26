@@ -10,7 +10,7 @@ import { allocateSkus } from './sku.util';
 /** Content fields a copy inherits. Everything else (sales counters, ratings, offers, flags, review/plan markers, slugs) starts fresh. */
 export const DUPLICATE_COPY_FIELDS = [
   'description', 'productType', 'type', 'categoryId', 'subCategoryId', 'educationLevel', 'customLevel', 'normalizedCustomLevel',
-  'curricula', 'ageMin', 'ageMax', 'classFrom', 'classTo', 'language', 'author', 'publisher', 'edition', 'pages', 'isbn', 'binding', 'coverStyle', 'parcelType', 'dispatchDaysOverride',
+  'curricula', 'audiences', 'ageMin', 'ageMax', 'classFrom', 'classTo', 'language', 'author', 'publisher', 'edition', 'pages', 'isbn', 'binding', 'coverStyle', 'parcelType', 'dispatchDaysOverride',
   'packageCm', 'deliveryFormat', 'images', 'tags', 'digital', 'isListedOnEdudeen', 'nameUr', 'descriptionUr',
 ] as const;
 export const VARIANT_COPY_FIELDS = ['price', 'compareAtPrice', 'currency', 'options', 'stock', 'unlimitedStock', 'shippingWeight', 'images', 'isDefault', 'status'] as const;
@@ -69,7 +69,7 @@ export class ProductLifecycleService {
     const doc: any = { sellerId: src.sellerId, storeId: src.storeId, name, slug, status: 'draft', isTest: false };
     for (const f of DUPLICATE_COPY_FIELDS) if (src[f] !== undefined) doc[f] = src[f];
     // Cloned arrays/objects must not share references with the source document.
-    for (const k of ['images', 'tags', 'curricula', 'digital', 'packageCm']) if (doc[k] != null) doc[k] = JSON.parse(JSON.stringify(doc[k]));
+    for (const k of ['images', 'tags', 'curricula', 'audiences', 'digital', 'packageCm']) if (doc[k] != null) doc[k] = JSON.parse(JSON.stringify(doc[k]));
 
     const created: any = await productModel.create(doc);
     try {
