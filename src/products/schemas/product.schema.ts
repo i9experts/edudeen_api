@@ -2,6 +2,11 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 import { SeoMeta, SeoMetaSchema } from 'src/seo/schemas/seo-meta.schema';
+import { AUDIENCES, CURRICULA, PRODUCT_LANGUAGES, type Audience, type ProductLanguage } from 'src/common/edu-filters.const';
+
+// The lists now live in common/edu-filters.const.ts (grouped by region for a global marketplace); re-exported so existing imports keep working.
+export { CURRICULA, AUDIENCES } from 'src/common/edu-filters.const';
+export type { Curriculum, Audience } from 'src/common/edu-filters.const';
 
 export type ProductDocument = Product & Document;
 
@@ -121,12 +126,6 @@ export class DigitalConfig {
 }
 export const DigitalConfigSchema = SchemaFactory.createForClass(DigitalConfig);
 
-/** Exam boards / syllabi a resource follows — the filter general marketplaces don't have. */
-export const CURRICULA = [
-  'federal', 'punjab', 'sindh', 'kpk', 'balochistan', 'ajk_gb',
-  'cambridge_o', 'cambridge_a', 'igcse', 'ib', 'aku_eb', 'madrasa',
-] as const;
-export type Curriculum = (typeof CURRICULA)[number];
 
 /** License a buyer can choose when the seller offers more than one (stored as a variant option). */
 export const LICENSE_OPTION_NAME = 'License';
@@ -190,6 +189,11 @@ export class Product {
   @Prop({ type: [String], enum: CURRICULA, default: [] })
   curricula: string[];
 
+  // Who the resource is for (kids, parents, teachers, schools, ...). A buyer filter that sits beside the category
+  // tree instead of inside it, so one product is not filed in several places. [] = not stated (old products).
+  @Prop({ type: [String], enum: AUDIENCES, default: [] })
+  audiences: Audience[];
+
   // Suitable ages, e.g. 6–8. Either end may be open.
   @Prop({ type: Number, default: null })
   ageMin: number | null;
@@ -206,8 +210,8 @@ export class Product {
   classTo: string | null;
 
   // Optional language of the content (shown in the product-page facts row). null = not stated (all old products).
-  @Prop({ type: String, enum: ['ur', 'en', 'ar', 'mixed'], default: null })
-  language: 'ur' | 'en' | 'ar' | 'mixed' | null;
+  @Prop({ type: String, enum: PRODUCT_LANGUAGES, default: null })
+  language: ProductLanguage | null;
 
   // Optional book details (Details tab / facts row). null = not stated; never required.
   @Prop({ type: String, maxlength: 120, default: null })
@@ -470,6 +474,7 @@ export class Product {
 export const ProductSchema = SchemaFactory.createForClass(Product);
 
 ProductSchema.index({ curricula: 1 });
+ProductSchema.index({ audiences: 1 });
 ProductSchema.index({ sellerId: 1 });
 ProductSchema.index({ storeId: 1, campaignIds: 1 });
 ProductSchema.index({ storeId: 1 });

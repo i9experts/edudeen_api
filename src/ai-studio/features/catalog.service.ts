@@ -2,16 +2,19 @@
 import { Injectable } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { DatabaseService } from 'src/database/databaseservice';
+import { AUDIENCES, CURRICULA } from 'src/common/edu-filters.const';
 
 export const EDUCATION_LEVELS = ['preschool', 'primary_school', 'middle_school', 'secondary_school', 'college', 'university', 'professional_courses', 'islamic_education', 'other'];
 export const PRODUCT_TYPES = ['physical', 'digital'];
-export const CURRICULA_KEYS = ['federal', 'punjab', 'sindh', 'kpk', 'balochistan', 'ajk_gb', 'cambridge_o', 'cambridge_a', 'igcse', 'ib', 'aku_eb', 'madrasa'];
+export const CURRICULA_KEYS: string[] = [...CURRICULA];
+export const AUDIENCE_KEYS: string[] = [...AUDIENCES];
 
 export interface SearchFilters {
   keywords: string[];
   educationLevel?: string;
   productType?: string;
   curricula?: string[];
+  audiences?: string[];
   age?: number;
   minPrice?: number;
   maxPrice?: number;
@@ -30,6 +33,10 @@ export function normalizeFilters(raw: any): SearchFilters {
   if (Array.isArray(raw?.curricula)) {
     const c = raw.curricula.filter((x: any) => CURRICULA_KEYS.includes(x));
     if (c.length) f.curricula = c;
+  }
+  if (Array.isArray(raw?.audiences)) {
+    const a = [...new Set(raw.audiences.filter((x: any) => AUDIENCE_KEYS.includes(x)))] as string[];
+    if (a.length) f.audiences = a;
   }
   const age = Number(raw?.age);
   if (Number.isFinite(age) && age >= 2 && age <= 25) f.age = Math.round(age);
@@ -59,6 +66,7 @@ export function buildProductFilter(f: SearchFilters, activeStoreIds: string[], c
   if (f.educationLevel) q.educationLevel = f.educationLevel;
   if (f.productType) q.productType = f.productType;
   if (f.curricula?.length) q.curricula = { $in: f.curricula };
+  if (f.audiences?.length) q.audiences = { $in: f.audiences };
   if (f.age != null) {
     q.$and = [
       { $or: [{ ageMin: null }, { ageMin: { $lte: f.age } }] },

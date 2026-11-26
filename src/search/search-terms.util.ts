@@ -96,8 +96,11 @@ export function searchWords(term: string): string[] {
   return Array.from(new Set(words.map((w) => w.toLowerCase()))).slice(0, 8);
 }
 
-/** Language words a buyer may type -> the stored language code (the field holds 'ur' | 'en' | 'ar' | 'mixed'). */
-const LANGUAGE_WORDS: Record<string, string> = { urdu: 'ur', english: 'en', arabic: 'ar' };
+/** Language words a buyer may type -> the stored language code (see PRODUCT_LANGUAGES in common/edu-filters.const). */
+const LANGUAGE_WORDS: Record<string, string> = {
+  urdu: 'ur', english: 'en', arabic: 'ar', french: 'fr', malay: 'ms', indonesian: 'id', turkish: 'tr',
+  bengali: 'bn', bangla: 'bn', somali: 'so', persian: 'fa', farsi: 'fa', hindi: 'hi', swahili: 'sw', hausa: 'ha', german: 'de', spanish: 'es',
+};
 
 /** Mongo filter: EVERY word must match name, tags, description, author or publisher (any order); a language word also matches the language. A word also matches its synonym variants. */
 export function buildAllWordsFilter(term: string): Record<string, any> {

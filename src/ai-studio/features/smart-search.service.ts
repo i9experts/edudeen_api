@@ -4,7 +4,7 @@ import { AiService } from '../core/ai.service';
 import { AiFlagsService } from '../core/ai-flags.service';
 import { SemanticIndexService } from '../embeddings/semantic-index.service';
 import { reciprocalRankFusion } from '../embeddings/embedding.util';
-import { AiCatalogService, CURRICULA_KEYS, EDUCATION_LEVELS, PRODUCT_TYPES, SearchFilters, normalizeFilters } from './catalog.service';
+import { AiCatalogService, AUDIENCE_KEYS, CURRICULA_KEYS, EDUCATION_LEVELS, PRODUCT_TYPES, SearchFilters, normalizeFilters } from './catalog.service';
 
 export const SEARCH_REWRITE_SCHEMA = {
   type: 'object',
@@ -13,6 +13,7 @@ export const SEARCH_REWRITE_SCHEMA = {
     educationLevel: { type: 'string', enum: EDUCATION_LEVELS },
     productType: { type: 'string', enum: PRODUCT_TYPES },
     curricula: { type: 'array', items: { type: 'string', enum: CURRICULA_KEYS } },
+    audiences: { type: 'array', items: { type: 'string', enum: AUDIENCE_KEYS }, description: 'Who the buyer is shopping for, only when the query says so (e.g. "for my class" -> teachers, "for toddlers" -> kids).' },
     age: { type: 'integer' },
     minPrice: { type: 'number' },
     maxPrice: { type: 'number' },
@@ -83,7 +84,7 @@ export class SmartSearchService {
     let products = await this.catalog.search(filters);
     let relaxed = false;
     // Too strict (nothing found)? retry with keywords only so the buyer still sees something relevant.
-    if (!products.length && (filters.educationLevel || filters.curricula || filters.age != null || filters.maxPrice || filters.minPrice || filters.productType)) {
+    if (!products.length && (filters.educationLevel || filters.curricula || filters.audiences || filters.age != null || filters.maxPrice || filters.minPrice || filters.productType)) {
       products = await this.catalog.search({ keywords: filters.keywords });
       relaxed = products.length > 0;
     }

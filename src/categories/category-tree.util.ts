@@ -1,6 +1,8 @@
 /* eslint-disable prettier/prettier */
 /** Shared helpers for the (up to 4 level) category tree: main > sub > sub-sub > sub-sub-sub. */
 export const MAX_CATEGORY_DEPTH = 4;
+/** How deep an admin may CREATE new categories (main > sub > sub-sub). Deeper legacy nodes still work, up to MAX_CATEGORY_DEPTH. */
+export const MAX_CREATE_DEPTH = 3;
 
 /** Minimal shape of the mongoose category model these helpers need. */
 interface CategoryModelLike {

@@ -5,6 +5,7 @@ function makeSvc(created: any[] = []) {
   svc.entitlementsService = { assertCanCreateProduct: jest.fn() };
   svc.marketingService = { resolveProductCampaignIds: jest.fn().mockResolvedValue([]) };
   svc.resolveSubCategoryId = jest.fn().mockResolvedValue(null);
+  svc.categoryRulesFor = jest.fn().mockResolvedValue({ allowedProductTypes: [], requiresListingReview: false, ruleFrom: null });
   svc.databaseService = {
     repositories: {
       sellerModel: { findOne: jest.fn().mockResolvedValue({ _id: 's1' }) },
@@ -42,6 +43,23 @@ describe('ProductsService.addPhysicalProduct response', () => {
     expect(res.data.defaultVariant.isDefault).toBe(true);
     expect(res.data.variants).toHaveLength(1);
     expect(created[0].shippingWeight).toBe('0.6 kg'); // normalized to kilograms
+  });
+});
+
+describe('ProductsService.addPhysicalProduct category settings', () => {
+  it('refuses a physical product in a category that only takes courses, before writing anything', async () => {
+    const svc = makeSvc();
+    svc.categoryRulesFor = jest.fn().mockResolvedValue({ allowedProductTypes: ['course'], requiresListingReview: false, ruleFrom: 'Courses & Tutoring' });
+    await expect(svc.addPhysicalProduct('s1', body({}))).rejects.toThrow(/Courses & Tutoring" does not take physical products/);
+    expect(svc.databaseService.repositories.productModel.create).not.toHaveBeenCalled();
+  });
+  it('holds a first publish for review when the category requires it', async () => {
+    const created: any[] = [];
+    const svc = makeSvc(created);
+    svc.categoryRulesFor = jest.fn().mockResolvedValue({ allowedProductTypes: [], requiresListingReview: true, ruleFrom: null });
+    svc.paidPlanSkipsReview = jest.fn().mockResolvedValue(true);
+    await svc.addPhysicalProduct('s1', body({}, { status: 'active', coverStyle: 'flat', images: ['https://img.example/a.jpg'] }));
+    expect(svc.databaseService.repositories.productModel.create.mock.calls[0][0].status).toBe('pending_review');
   });
 });
 
