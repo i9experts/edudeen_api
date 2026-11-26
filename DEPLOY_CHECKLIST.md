@@ -145,6 +145,8 @@ database yet**, so run each dry run on a staging copy and read its plan before `
 2. `npm run migrate:global-categories` then `npm run migrate:global-categories:apply`:
    - renames "Social Studies & Pakistan Studies" to "Social Studies & Geography" (the slug stays the same);
    - moves Urdu and English under Languages, and re-points their products and stores;
+   - merges "Islamic & Educational Resources" into Islamic Studies (subcategories, products, stores and pending
+     requests move across; its old `/marketplace/<slug>` page stops working);
    - groups the Pakistan exam subcategories under "Pakistan Boards & Tests";
    - fills empty category settings;
    - puts the Islamic groups first.

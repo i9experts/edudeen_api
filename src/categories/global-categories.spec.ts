@@ -1,6 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { BadRequestException } from '@nestjs/common';
-import { GLOBAL_TAXONOMY, TAXONOMY_MOVES, TaxonomyNode } from './global-taxonomy.data';
+import { GLOBAL_TAXONOMY, TAXONOMY_MERGES, TAXONOMY_MOVES, TaxonomyNode } from './global-taxonomy.data';
+import { planCategoryMerge } from './category-merge.plan';
 import { MAX_CREATE_DEPTH } from './category-tree.util';
 import { assertKindAllowed, cleanCategorySettings, effectiveCategoryRules, productKind } from './category-settings.util';
 import {
@@ -129,5 +130,44 @@ describe('category settings', () => {
     expect(resolveSellerPublishStatus('draft', null, true, true)).toBe('draft');
     expect(resolveSellerPublishStatus('active', { status: 'inactive', approvedAt: new Date() }, false, true)).toBe('active');
     expect(resolveSellerPublishStatus('active', null, true, false)).toBe('active'); // unchanged behaviour
+  });
+});
+
+describe('merging a main category into another (planCategoryMerge)', () => {
+  // from: "Islamic & Educational Resources" (F) with subs "Seerah Kits" and "hadith" (twin of Islamic Studies > Hadith)
+  const rows = [
+    { _id: 'F', name: 'Islamic & Educational Resources', parentId: null },
+    { _id: 'F1', name: 'Seerah Kits', parentId: 'F' },
+    { _id: 'F2', name: 'hadith', parentId: 'F' },
+    { _id: 'F2a', name: '40 Hadith Cards', parentId: 'F2' },
+    { _id: 'I', name: 'Islamic Studies', parentId: null },
+    { _id: 'I1', name: 'Hadith', parentId: 'I' },
+  ];
+
+  it('moves new subcategories, merges same-named ones, and retires the old main category', () => {
+    const plan = planCategoryMerge(rows, 'F', 'I');
+    expect(plan.moves).toEqual([
+      { id: 'F1', name: 'Seerah Kits', newParentId: 'I' },
+      { id: 'F2a', name: '40 Hadith Cards', newParentId: 'I1' },
+    ]);
+    expect(plan.remaps).toEqual([
+      { from: 'F', to: 'I', name: 'Islamic & Educational Resources' },
+      { from: 'F2', to: 'I1', name: 'hadith' },
+    ]);
+    expect(plan.deletes).toEqual(['F', 'F2']);
+  });
+
+  it('does nothing for an unknown id, a self-merge, or a merge into its own descendant', () => {
+    const empty = { moves: [], remaps: [], deletes: [] };
+    expect(planCategoryMerge(rows, 'X', 'I')).toEqual(empty);
+    expect(planCategoryMerge(rows, 'I', 'I')).toEqual(empty);
+    expect(planCategoryMerge(rows, 'F', 'F2')).toEqual(empty);
+  });
+
+  it('the configured merge targets a main category in the taxonomy', () => {
+    for (const mg of TAXONOMY_MERGES) {
+      expect(GLOBAL_TAXONOMY.some((n) => n.name === mg.into)).toBe(true);
+      expect(GLOBAL_TAXONOMY.some((n) => n.name === mg.from)).toBe(false);
+    }
   });
 });

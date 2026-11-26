@@ -12,6 +12,10 @@
  *        product { categoryId: Urdu, subCategoryId: null }  -> { categoryId: Languages, subCategoryId: Urdu }
  *        product { categoryId: Urdu, subCategoryId: X }     -> { categoryId: Languages, subCategoryId: X }
  *        store   { categoryId: Urdu }                       -> { categoryId: Languages }
+ *   2b. Merges the main categories listed in TAXONOMY_MERGES into another main category (e.g. "Islamic & Educational
+ *      Resources" -> "Islamic Studies"): its subcategories move across (a same-named one is merged into the existing one),
+ *      its products, stores and pending requests are re-pointed, and the emptied category is soft-deleted. Its old
+ *      /marketplace/<slug> page stops resolving.
  *   3. --settings: fills each main category's admin settings (icon, colour, translations, allowed product types,
  *      review rule) from the taxonomy, ONLY where the admin has not set them yet.
  *   4. --reorder: puts the main categories in the taxonomy's order (Islamic groups first); others go after.
@@ -35,7 +39,8 @@ async function run() {
   const doReorder = process.argv.includes('--reorder');
   const uri = process.env.MONGO_URI;
   if (!uri) { console.error('MONGO_URI is not set'); process.exit(1); }
-  const { GLOBAL_TAXONOMY, TAXONOMY_MOVES } = await import(pathToFileURL(path.join(process.cwd(), 'src/categories/global-taxonomy.data.ts')).href);
+  const { GLOBAL_TAXONOMY, TAXONOMY_MOVES, TAXONOMY_MERGES } = await import(pathToFileURL(path.join(process.cwd(), 'src/categories/global-taxonomy.data.ts')).href);
+  const { planCategoryMerge } = await import(pathToFileURL(path.join(process.cwd(), 'src/categories/category-merge.plan.ts')).href);
 
   await mongoose.connect(uri);
   const db = mongoose.connection.db;
@@ -110,6 +115,40 @@ async function run() {
       changes++;
       if (apply) await cats.updateOne({ _id: node._id }, { $set: { parentId: targetId, updatedAt: now } });
     }
+  }
+  if (apply) rows = await load();
+
+  // 2b. Merges (main category into main category)
+  say('\n2b. Merges');
+  for (const mg of TAXONOMY_MERGES) {
+    const from = rootNamed(mg.from);
+    const into = rootNamed(mg.into);
+    if (!from) { say(`   = "${mg.from}": not found (already merged?)`); continue; }
+    if (!into) { say(`   ! "${mg.from}": target main category "${mg.into}" does not exist, skipped`); continue; }
+    const fromId = String(from._id); const intoId = String(into._id);
+    const plan = planCategoryMerge(rows, fromId, intoId);
+    const [pRoot, st, rq] = await Promise.all([
+      products.countDocuments({ categoryId: fromId }),
+      stores.countDocuments({ categoryId: fromId }),
+      requests.countDocuments({ mainCategoryId: fromId, status: 'pending' }),
+    ]);
+    say(`   > "${from.name}" -> "${into.name}": ${pRoot} product(s), ${st} store(s), ${rq} pending request(s) re-pointed; slug "${from.slug}" retired`);
+    for (const m of plan.moves) say(`       move  ${m.name}`);
+    for (const r of plan.remaps.slice(1)) {
+      const n = await products.countDocuments({ subCategoryId: r.from });
+      say(`       merge ${r.name} into the existing one (${n} product(s))`);
+    }
+    changes++;
+    if (!apply) continue;
+    for (const m of plan.moves) await cats.updateOne({ _id: rows.find((r) => String(r._id) === m.id)._id }, { $set: { parentId: m.newParentId, updatedAt: now } });
+    for (const r of plan.remaps.slice(1)) await products.updateMany({ subCategoryId: r.from }, { $set: { subCategoryId: r.to } });
+    // A product filed directly on the old main category keeps "no subcategory" under the new one.
+    await products.updateMany({ subCategoryId: fromId }, { $set: { subCategoryId: null } });
+    await products.updateMany({ categoryId: fromId }, { $set: { categoryId: intoId } });
+    await stores.updateMany({ categoryId: fromId }, { $set: { categoryId: intoId } });
+    await requests.updateMany({ mainCategoryId: fromId, status: 'pending' }, { $set: { mainCategoryId: intoId } });
+    const delIds = rows.filter((r) => plan.deletes.includes(String(r._id))).map((r) => r._id);
+    await cats.updateMany({ _id: { $in: delIds } }, { $set: { isDelete: true, status: 'inactive', updatedAt: now } });
   }
   if (apply) rows = await load();
 

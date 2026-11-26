@@ -171,3 +171,11 @@ export const TAXONOMY_MOVES: { name: string; from: string | null; to: string[] }
   { name: 'Scholarship Tests', from: 'Exam Prep & Past Papers', to: ['Exam Prep & Past Papers', 'Pakistan Boards & Tests'] },
   { name: 'O Level & A Level', from: 'Exam Prep & Past Papers', to: ['Exam Prep & Past Papers', 'Cambridge & IB'] },
 ];
+
+/**
+ * Main categories folded into another main category by the migration (see category-merge.plan.ts): subcategories
+ * move across (same names are merged), products / stores / pending requests are re-pointed, the old one is soft-deleted.
+ */
+export const TAXONOMY_MERGES: { from: string; into: string }[] = [
+  { from: 'Islamic & Educational Resources', into: 'Islamic Studies' },
+];
