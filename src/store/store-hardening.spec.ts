@@ -20,6 +20,7 @@ function make(over: { store?: any; repos?: any; entitled?: boolean } = {}) {
         return r;
       }),
       exists: jest.fn().mockResolvedValue(true),
+      countDocuments: jest.fn().mockResolvedValue(0),
       findByIdAndUpdate: jest.fn().mockResolvedValue({}),
     },
     productModel: {
@@ -247,13 +248,33 @@ describe('updateStore', () => {
     ).rejects.toThrow(/cannot be changed once/);
   });
 
-  it('a seller who already has a store cannot create a second one', async () => {
-    const { svc, repos } = make({ store: liveStore() });
-    repos.storeModel.exists.mockResolvedValue({ _id: OID });
+  it('a seller can create up to MAX_STORES_PER_SELLER stores', async () => {
+    // store: undefined → the slug-uniqueness findOne resolves undefined (no conflict); sellerModel is
+    // needed for the post-insert "mark onboarded" step, which createStore awaits outside the setup
+    // steps' error-swallowing try/catch.
+    const { svc, repos } = make({
+      store: undefined,
+      repos: {
+        storeModel: {
+          findOne: jest.fn().mockResolvedValue(undefined),
+          countDocuments: jest.fn().mockResolvedValue(4),
+          create: jest.fn().mockResolvedValue({ _id: { toString: () => OID } }),
+        },
+        sellerModel: { findByIdAndUpdate: jest.fn().mockResolvedValue({}) },
+      },
+    });
     await expect(
-      svc.createStore('seller1', { name: 'Second Store', baseCurrency: 'PKR' }),
-    ).rejects.toThrow(/already have a store/);
-    expect(repos.storeModel.exists).toHaveBeenCalledWith({ sellerId: 'seller1', isDelete: false });
+      svc.createStore('seller1', { name: 'Fifth Store', baseCurrency: 'PKR' }),
+    ).resolves.toBeDefined();
+    expect(repos.storeModel.countDocuments).toHaveBeenCalledWith({ sellerId: 'seller1', isDelete: false });
+  });
+
+  it('a seller already at MAX_STORES_PER_SELLER cannot create another one', async () => {
+    const { svc, repos } = make({ store: liveStore() });
+    repos.storeModel.countDocuments.mockResolvedValue(5);
+    await expect(
+      svc.createStore('seller1', { name: 'Sixth Store', baseCurrency: 'PKR' }),
+    ).rejects.toThrow(/You already have 5 stores/);
   });
 
   describe('fulfillmentMode (who ships physical orders)', () => {

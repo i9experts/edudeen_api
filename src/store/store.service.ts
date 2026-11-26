@@ -17,7 +17,7 @@ import {
 import { promises as dns } from 'dns';
 import { DatabaseService } from 'src/database/databaseservice';
 import { cleanStorePremiumDiscount } from 'src/premium/premium.util';
-import { SellerType, resolveTools, SELECTABLE_STORE_PRODUCT_TYPES, STORE_ANNOUNCEMENT_TYPES, MAX_STORE_CATEGORIES } from './schemas/store.schema';
+import { SellerType, resolveTools, SELECTABLE_STORE_PRODUCT_TYPES, STORE_ANNOUNCEMENT_TYPES, MAX_STORE_CATEGORIES, MAX_STORES_PER_SELLER } from './schemas/store.schema';
 import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
 import { UploadService } from 'src/upload/upload.service';
 import { SUPPORTED_CURRENCIES } from 'src/exchange-rate/schemas/exchange-rate.schema';
@@ -158,10 +158,9 @@ export class StoreService {
       }
     }
 
-    // One seller = one store. A second store is refused — the seller manages
-    // everything from that single store's workspace.
-    const existingStore = await this.databaseService.repositories.storeModel.exists({ sellerId, isDelete: false });
-    if (existingStore) throw new ConflictException('You already have a store — each seller account can run one store');
+    // Up to MAX_STORES_PER_SELLER stores per seller — each one its own independent workspace.
+    const storeCount = await this.databaseService.repositories.storeModel.countDocuments({ sellerId, isDelete: false });
+    if (storeCount >= MAX_STORES_PER_SELLER) throw new ConflictException(`You already have ${MAX_STORES_PER_SELLER} stores — that's the most one seller account can run`);
 
     const baseSlug = this.generateSlug(name);
     let slug = baseSlug;

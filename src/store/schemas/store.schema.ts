@@ -5,6 +5,7 @@ import { Document } from 'mongoose';
 export type StoreDocument = Store & Document;
 
 export const MAX_STORE_CATEGORIES = 3;
+export const MAX_STORES_PER_SELLER = 5;
 
 export enum SellerType {
   CREATOR = 'creator',
