@@ -12,11 +12,12 @@ import { CATEGORY_REQUEST_TYPES, CategoryRequest, CategoryRequestDocument } from
 
 export const MAX_PENDING_REQUESTS_PER_STORE = 3;
 
-export interface RequestInput { type?: unknown; name?: unknown; reason?: unknown; exampleProduct?: unknown }
+export interface RequestInput { type?: unknown; name?: unknown; reason?: unknown; exampleProduct?: unknown; categoryId?: unknown }
 
 const str = (v: unknown) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '');
 
-/** Pure validation of the seller's form. */
+/** Pure validation of the seller's form. `categoryId` (which of the store's own categories a new
+ *  subcategory nests under) is checked against the store's actual list in `create()`, not here. */
 export function cleanRequestInput(body: RequestInput) {
   const type = String(body?.type ?? 'subcategory');
   if (!(CATEGORY_REQUEST_TYPES as readonly string[]).includes(type)) throw new BadRequestException('type must be subcategory or main_change');
@@ -26,7 +27,8 @@ export function cleanRequestInput(body: RequestInput) {
   if (reason.length < 10 || reason.length > 500) throw new BadRequestException('Reason must be 10 to 500 characters.');
   const exampleProduct = str(body?.exampleProduct);
   if (exampleProduct.length < 2 || exampleProduct.length > 120) throw new BadRequestException('Add one example product (2 to 120 characters).');
-  return { type, name, reason, exampleProduct };
+  const categoryId = body?.categoryId ? str(body.categoryId) : null;
+  return { type, name, reason, exampleProduct, categoryId };
 }
 
 @Injectable()
@@ -45,7 +47,7 @@ export class CategoryRequestsService {
   private async ownedStore(sellerId: string, storeId: string) {
     if (!isValidObjectId(storeId)) throw new BadRequestException('Invalid store id');
     const store: any = await this.databaseService.repositories.storeModel
-      .findOne({ _id: storeId, sellerId, isDelete: false }).select('_id categoryId name').lean();
+      .findOne({ _id: storeId, sellerId, isDelete: false }).select('_id categoryId categoryIds name').lean();
     if (!store) throw new ForbiddenException('Store not found or unauthorized');
     return store;
   }
@@ -53,13 +55,24 @@ export class CategoryRequestsService {
   async create(sellerId: string, storeId: string, body: RequestInput) {
     const store = await this.ownedStore(sellerId, storeId);
     const input = cleanRequestInput(body);
+    const storeCategoryIds: string[] = store.categoryIds?.length ? store.categoryIds : (store.categoryId ? [String(store.categoryId)] : []);
+    // A 'subcategory' request nests under one of the store's own main categories. With just one, it's
+    // implied (today's behaviour, unchanged); with more than one the seller must say which.
+    let mainCategoryId: string | null = storeCategoryIds[0] ?? null;
+    if (input.type === 'subcategory' && storeCategoryIds.length > 1) {
+      if (!input.categoryId || !storeCategoryIds.includes(input.categoryId)) {
+        throw new BadRequestException('Pick which of your store\'s categories this subcategory belongs under');
+      }
+      mainCategoryId = input.categoryId;
+    }
     const pendingFilter = { storeId, status: 'pending' };
     const pending = await this.requests.countDocuments(pendingFilter);
     const limitMsg = `You already have ${MAX_PENDING_REQUESTS_PER_STORE} requests waiting for review. Wait for Edudeen to answer one before sending another.`;
     if (pending >= MAX_PENDING_REQUESTS_PER_STORE) throw new BadRequestException(limitMsg);
     const dup = await this.requests.exists({ ...pendingFilter, type: input.type, name: new RegExp(`^${input.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
     if (dup) throw new BadRequestException('You already have a pending request with this name.');
-    const doc = await this.requests.create({ storeId, sellerId, ...input, mainCategoryId: store.categoryId ? String(store.categoryId) : null });
+    const { type, name, reason, exampleProduct } = input;
+    const doc = await this.requests.create({ storeId, sellerId, type, name, reason, exampleProduct, mainCategoryId });
     // Two quick clicks can both pass the count above; re-check after insert and withdraw the extra one.
     // Only withdraw THIS one if it is not among the oldest N pending (ordered by _id): parallel requests then
     // keep exactly N instead of all deleting themselves.

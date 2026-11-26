@@ -5,7 +5,7 @@ import { CategoryRequestsService, MAX_PENDING_REQUESTS_PER_STORE, buildStoreUsag
 const OID = (n: number) => `64b0000000000000000000${String(n).padStart(2, '0')}`;
 const SELLER = OID(1), OTHER = OID(2), STORE = OID(10);
 
-function setup(opts: { logOk?: boolean } = {}) {
+function setup(opts: { logOk?: boolean; store?: Record<string, unknown> } = {}) {
   const docs: any[] = [];
   const model: any = {
     docs,
@@ -26,7 +26,7 @@ function setup(opts: { logOk?: boolean } = {}) {
     }),
     findOneAndUpdate: jest.fn((q: any, u: any) => ({ lean: async () => { const d = docs.find((x) => String(x._id) === String(q._id) && x.status === q.status); if (!d) return null; Object.assign(d, u.$set); return { ...d }; } })),
   };
-  const storeModel = { findOne: jest.fn((q: any) => ({ select: () => ({ lean: async () => (q.sellerId === SELLER && q._id === STORE ? { _id: STORE, categoryId: OID(5) } : null) }) })) };
+  const storeModel = { findOne: jest.fn((q: any) => ({ select: () => ({ lean: async () => (q.sellerId === SELLER && q._id === STORE ? { _id: STORE, categoryId: OID(5), ...opts.store } : null) }) })) };
   const activityLog = { log: jest.fn(async () => opts.logOk !== false) };
   const notifications = { notify: jest.fn(async () => undefined) };
   const svc = new CategoryRequestsService(model, { repositories: { storeModel } } as any, activityLog as any, notifications as any);
@@ -67,6 +67,28 @@ describe('category requests: limit + ownership', () => {
     await expect(svc.create(OTHER, STORE, body('Nazra'))).rejects.toThrow(ForbiddenException);
     await expect(svc.listForStore(OTHER, STORE)).rejects.toThrow(ForbiddenException);
     await expect(svc.storeUsage(OTHER, STORE)).rejects.toThrow(ForbiddenException);
+  });
+});
+
+describe('category requests: a store with more than one category', () => {
+  const CAT_A = OID(6), CAT_B = OID(7);
+  it('requires the seller to say which of the store\'s categories a subcategory nests under', async () => {
+    const { svc } = setup({ store: { categoryIds: [CAT_A, CAT_B] } });
+    await expect(svc.create(SELLER, STORE, body('Nazra'))).rejects.toThrow(/Pick which of your store's categories/);
+  });
+  it('rejects a categoryId that is not one of the store\'s own', async () => {
+    const { svc } = setup({ store: { categoryIds: [CAT_A, CAT_B] } });
+    await expect(svc.create(SELLER, STORE, { ...body('Nazra'), categoryId: OID(99) })).rejects.toThrow(/Pick which of your store's categories/);
+  });
+  it('accepts a categoryId that is one of the store\'s own', async () => {
+    const { svc, model } = setup({ store: { categoryIds: [CAT_A, CAT_B] } });
+    await svc.create(SELLER, STORE, { ...body('Nazra'), categoryId: CAT_B });
+    expect(model.docs[0].mainCategoryId).toBe(CAT_B);
+  });
+  it('still implies the single category when the store has only one (unchanged behaviour)', async () => {
+    const { svc, model } = setup({ store: { categoryIds: [CAT_A] } });
+    await svc.create(SELLER, STORE, body('Nazra'));
+    expect(model.docs[0].mainCategoryId).toBe(CAT_A);
   });
 });
 

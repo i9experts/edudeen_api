@@ -258,7 +258,8 @@ export class SeoContentService {
     const store = await this.db.repositories.storeModel.findById(storeId).lean();
     if (!store) throw new NotFoundException('Store not found.');
     const categoryIds = new Set<string>();
-    if ((store as any).categoryId) categoryIds.add((store as any).categoryId);
+    const storeCategoryIds: string[] = (store as any).categoryIds?.length ? (store as any).categoryIds : ((store as any).categoryId ? [(store as any).categoryId] : []);
+    for (const id of storeCategoryIds) categoryIds.add(id);
 
     const products = await this.db.repositories.productModel.find({ storeId, isDelete: false }).select('subCategoryId').lean();
     for (const p of products as any[]) if (p.subCategoryId) categoryIds.add(p.subCategoryId);

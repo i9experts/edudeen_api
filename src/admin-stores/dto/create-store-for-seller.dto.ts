@@ -10,7 +10,9 @@ export class NewSellerDto {
 
 export class StoreBasicsDto {
   @IsString() @MinLength(2) @MaxLength(60) name: string;
+  /** Deprecated — use `categoryIds`. Kept for an older admin build. */
   @IsOptional() @IsMongoId() categoryId?: string;
+  @IsOptional() @IsArray() @ArrayMaxSize(3) @IsMongoId({ each: true }) categoryIds?: string[];
   @IsString() @MaxLength(10) baseCurrency: string;
   @IsOptional() @IsString() @MaxLength(1000) description?: string;
   @IsOptional() @IsString() @MaxLength(40) sellerType?: string;

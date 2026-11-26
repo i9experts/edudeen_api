@@ -31,7 +31,7 @@ export interface FeaturedSignals {
   logo?: string | null;
   coverImage?: string | null;
   description?: string | null;
-  categoryId?: string | null;
+  categoryIds?: string[];
   featuredRank?: number | null;
   publishedProducts: number;
   /** Sum of purchaseCount over the store's published products. */
@@ -71,7 +71,13 @@ export function featuredScore(s: FeaturedSignals, now = Date.now()): number {
   return Math.round(total * 1000) / 10;
 }
 
-/** Pinned (featuredRank) first by rank, then by score; at most N same-category stores in a row. */
+/** Whether two stores share at least one category (a store can now have up to MAX_STORE_CATEGORIES). */
+function sharesCategory(a: FeaturedSignals, b: FeaturedSignals): boolean {
+  const bIds = b.categoryIds ?? [];
+  return !!bIds.length && (a.categoryIds ?? []).some((id) => bIds.includes(id));
+}
+
+/** Pinned (featuredRank) first by rank, then by score; at most N stores sharing a category in a row. */
 export function rankFeatured<T extends FeaturedSignals & { score: number }>(rows: T[], limit: number): T[] {
   const pinned = rows.filter((r) => typeof r.featuredRank === 'number').sort((a, b) => (a.featuredRank! - b.featuredRank!) || (b.score - a.score));
   const rest = rows.filter((r) => typeof r.featuredRank !== 'number').sort((a, b) => b.score - a.score);
@@ -79,10 +85,10 @@ export function rankFeatured<T extends FeaturedSignals & { score: number }>(rows
   const queue = [...rest];
   while (queue.length && out.length < limit) {
     const tail = out.slice(-FEATURED_MAX_PER_CATEGORY_RUN);
-    const sameRun = tail.length === FEATURED_MAX_PER_CATEGORY_RUN && tail.every((t) => t.categoryId && t.categoryId === tail[0].categoryId);
+    const sameRun = tail.length === FEATURED_MAX_PER_CATEGORY_RUN && tail.every((t) => sharesCategory(t, tail[0]));
     let idx = 0;
     if (sameRun) {
-      const alt = queue.findIndex((q) => q.categoryId !== tail[0].categoryId);
+      const alt = queue.findIndex((q) => !sharesCategory(q, tail[0]));
       if (alt >= 0) idx = alt;
     }
     out.push(queue.splice(idx, 1)[0]);

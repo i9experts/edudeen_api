@@ -17,7 +17,7 @@ import {
 import { promises as dns } from 'dns';
 import { DatabaseService } from 'src/database/databaseservice';
 import { cleanStorePremiumDiscount } from 'src/premium/premium.util';
-import { SellerType, resolveTools, SELECTABLE_STORE_PRODUCT_TYPES, STORE_ANNOUNCEMENT_TYPES } from './schemas/store.schema';
+import { SellerType, resolveTools, SELECTABLE_STORE_PRODUCT_TYPES, STORE_ANNOUNCEMENT_TYPES, MAX_STORE_CATEGORIES } from './schemas/store.schema';
 import { UploadedAssetsService } from 'src/upload/uploaded-assets.service';
 import { UploadService } from 'src/upload/upload.service';
 import { SUPPORTED_CURRENCIES } from 'src/exchange-rate/schemas/exchange-rate.schema';
@@ -101,8 +101,28 @@ export class StoreService {
     if (category.parentId) throw new BadRequestException('Store category must be a main category, not a subcategory');
   }
 
+  /** `store.categoryIds`, falling back to the legacy scalar `categoryId` for a store that predates the
+   *  array field (its own write path syncs `categoryId` from `categoryIds[0]`, so this only matters for
+   *  a row nothing has re-saved since — see migrate-backfill-store-category-ids.ts). */
+  private effectiveCategoryIds(store: { categoryIds?: string[] | null; categoryId?: string | null }): string[] {
+    return store.categoryIds?.length ? store.categoryIds : (store.categoryId ? [store.categoryId] : []);
+  }
+
+  /** Up to MAX_STORE_CATEGORIES main categories, each validated like assertValidRootCategory, no duplicates. */
+  private async assertValidRootCategories(categoryIds: string[]) {
+    if (!categoryIds.length) throw new BadRequestException('Select at least one category');
+    if (categoryIds.length > MAX_STORE_CATEGORIES) throw new BadRequestException(`You can pick up to ${MAX_STORE_CATEGORIES} categories`);
+    if (new Set(categoryIds).size !== categoryIds.length) throw new BadRequestException('Categories must be different from each other');
+    await Promise.all(categoryIds.map((id) => this.assertValidRootCategory(id)));
+  }
+
   async createStore(sellerId: string, body: any) {
-    const { name, logo, categoryId, description, sellerType, productTypes, baseCurrency } = body;
+    const { name, logo, description, sellerType, productTypes, baseCurrency } = body;
+    // `categoryIds` (up to MAX_STORE_CATEGORIES) is the source of truth; a lone `categoryId` (older
+    // caller) is still accepted and normalised into a one-item array.
+    const categoryIds: string[] = Array.isArray(body.categoryIds)
+      ? body.categoryIds
+      : body.categoryId ? [body.categoryId] : [];
 
     if (!name) throw new BadRequestException('Store name is required');
 
@@ -122,7 +142,7 @@ export class StoreService {
       );
     }
 
-    if (categoryId) await this.assertValidRootCategory(categoryId);
+    if (categoryIds.length) await this.assertValidRootCategories(categoryIds);
 
     if (sellerType && !Object.values(SellerType).includes(sellerType)) {
       throw new BadRequestException('Invalid sellerType');
@@ -179,7 +199,8 @@ export class StoreService {
       name,
       slug,
       logo: logo ?? null,
-      categoryId: categoryId ?? null,
+      categoryId: categoryIds[0] ?? null,
+      categoryIds,
       description: description ?? null,
       sellerType: sellerType ?? null,
       productTypes: finalProductTypes,
@@ -849,16 +870,30 @@ export class StoreService {
       updateData.enabledTools = resolveTools(productTypes);
     }
 
-    if (body.categoryId !== undefined && body.categoryId !== store.categoryId) {
-      if (typeof body.categoryId !== 'string' && body.categoryId !== null) throw new BadRequestException('categoryId must be a category id');
-      if (body.categoryId) await this.assertValidRootCategory(body.categoryId);
-      // Every product's categoryId is the store's root category (denormalised at creation). Changing the
-      // store's category under existing products would leave them listed in the OLD category.
-      const hasProducts = await this.databaseService.repositories.productModel.exists({ storeId, isDelete: false });
-      if (hasProducts) {
-        throw new BadRequestException('The store category cannot be changed once the store has products');
+    // `categoryIds` (up to MAX_STORE_CATEGORIES) is the field to send; a lone `categoryId` is still
+    // accepted from an older caller and normalised into a one-item array.
+    const nextCategoryIds: string[] | undefined = body.categoryIds !== undefined
+      ? body.categoryIds
+      : body.categoryId !== undefined ? (body.categoryId ? [body.categoryId] : []) : undefined;
+    if (nextCategoryIds !== undefined) {
+      const currentCategoryIds = this.effectiveCategoryIds(store);
+      const unchanged = nextCategoryIds.length === currentCategoryIds.length
+        && nextCategoryIds.every((id) => currentCategoryIds.includes(id));
+      if (!unchanged) {
+        if (!Array.isArray(nextCategoryIds) || nextCategoryIds.some((id) => typeof id !== 'string')) {
+          throw new BadRequestException('categoryIds must be a list of category ids');
+        }
+        if (nextCategoryIds.length) await this.assertValidRootCategories(nextCategoryIds);
+        // A product's default categoryId comes from the store's category at the moment it was added
+        // (see ProductsService.resolveRootCategoryId) — changing the store's categories under existing
+        // products would leave them pointing at a set the store no longer advertises.
+        const hasProducts = await this.databaseService.repositories.productModel.exists({ storeId, isDelete: false });
+        if (hasProducts) {
+          throw new BadRequestException('The store\'s categories cannot be changed once the store has products');
+        }
+        updateData.categoryIds = nextCategoryIds;
+        updateData.categoryId = nextCategoryIds[0] ?? null;
       }
-      updateData.categoryId = body.categoryId;
     }
 
     const updated = await this.databaseService.repositories.storeModel.findByIdAndUpdate(
@@ -1004,7 +1039,9 @@ export class StoreService {
         tagline: store.tagline ?? null,
         contactEmail: store.contactEmail ?? null,
         // contactPhone is private (owner settings + the buyer's own order invoice only): never in the public storefront shape.
+        // Deprecated — always categoryIds[0], kept for an older frontend build.
         categoryId: store.categoryId ?? null,
+        categoryIds: this.effectiveCategoryIds(store),
         // false = no live product yet: the storefront page sets noindex (the store is also left out of marketplace store search + sitemap).
         hasActiveProducts,
         followersCount: store.followersCount ?? 0,
@@ -1060,6 +1097,7 @@ export class StoreService {
       coverImage: store.coverImage ?? null,
       description: store.description ?? null,
       categoryId: store.categoryId ?? null,
+      categoryIds: this.effectiveCategoryIds(store),
       followersCount: store.followersCount ?? 0,
       averageRating: store.averageRating ?? 0,
       reviewCount: store.reviewCount ?? 0,
@@ -1090,7 +1128,11 @@ export class StoreService {
     const filter: any = { status: 'active', isDelete: false };
     // A store with no live product is 'Not visible yet': it stays out of marketplace store search.
     filter._id = { $in: await productModel.distinct('storeId', { isDelete: false, status: 'active', isTest: { $ne: true } }) };
-    if (query.categoryId && query.categoryId !== 'all') filter.categoryId = query.categoryId;
+    // $or matches a migrated store (categoryIds contains it) and a not-yet-migrated one (only the legacy
+    // scalar field is set) — see migrate-backfill-store-category-ids.ts.
+    if (query.categoryId && query.categoryId !== 'all') {
+      filter.$or = [{ categoryIds: query.categoryId }, { categoryId: query.categoryId }];
+    }
 
     const term = (query.q || '').trim();
     if (term) {
@@ -1149,7 +1191,7 @@ export class StoreService {
     const storeIds = stores.map((r) => r.storeId);
     const campaignsByStore = await this.marketingService.getActiveCampaignsForStores(storeIds);
 
-    const catIds = [...new Set(stores.map((r) => r.categoryId).filter((c): c is string => !!c))];
+    const catIds = [...new Set(stores.flatMap((r) => r.categoryIds ?? []))];
     const cats = catIds.length ? await categoryModel.find({ _id: { $in: catIds } }).select('name').lean() : [];
     const catName = new Map<string, string>(cats.map((c: any) => [String(c._id), c.name]));
 
@@ -1157,7 +1199,9 @@ export class StoreService {
       ...this.shapeStoreListItem(r.store, r.publishedProducts, pickPrimaryCampaignForBadge(campaignsByStore.get(r.storeId) ?? [])),
       topProducts: r.topProducts,
       soldCount: r.soldCount,
-      categoryName: r.categoryId ? catName.get(r.categoryId) ?? null : null,
+      // Deprecated — the first category's name, kept for an older frontend build.
+      categoryName: r.categoryIds[0] ? catName.get(r.categoryIds[0]) ?? null : null,
+      categoryNames: r.categoryIds.map((id: string) => catName.get(id)).filter(Boolean),
       featuredRank: r.featuredRank ?? null,
     }));
     await this.redisService.set(cacheKey, JSON.stringify(shaped), 600);
@@ -1191,7 +1235,7 @@ export class StoreService {
       const r = byStore.get(storeId);
       const signals = {
         averageRating: s.averageRating, reviewCount: s.reviewCount, followersCount: s.followersCount,
-        logo: s.logo, coverImage: s.coverImage, description: s.description, categoryId: s.categoryId ? String(s.categoryId) : null,
+        logo: s.logo, coverImage: s.coverImage, description: s.description, categoryIds: this.effectiveCategoryIds(s).map(String),
         featuredRank: typeof s.featuredRank === 'number' ? s.featuredRank : null,
         publishedProducts: r?.count ?? 0, soldCount: r?.sold ?? 0,
         lastActivityAt: r?.last ? new Date(r.last).getTime() : null,
@@ -1273,20 +1317,20 @@ export class StoreService {
     if (qKind === 'physical') filter.type = 'physical';
     else if (qKind === 'digital') { filter.type = 'digital'; filter.deliveryFormat = { $ne: 'course' }; }
     else if (qKind === 'course') filter.deliveryFormat = 'course';
-    // `Product.categoryId` is the store's single fixed root category — every
-    // product in a store shares the exact same value there, so filtering on
-    // it within one store's own listing is meaningless (matches either
-    // everything or nothing). The only real per-product distinction inside
-    // one store is `subCategoryId` — this param is still named `categoryId`
-    // everywhere it's set (section settings, nav links, this query string)
-    // since a seller only ever picks from their store's subcategories, but
-    // it must be matched against `subCategoryId` here to actually filter
-    // anything (a real, previously-silent no-op bug, not a new behavior).
+    // A store can sell across more than one main category (up to MAX_STORE_CATEGORIES), so a product's
+    // `categoryId` is no longer always the same single value across the whole store — matching only
+    // `subCategoryId` would silently miss anything filed directly at a root level. This param is still
+    // named `categoryId` everywhere it's set (section settings, nav links, this query string) since a
+    // seller only ever picks from the store's own categories/subcategories, but it must match a
+    // product's OWN categoryId OR subCategoryId to catch both cases.
     if (qCategory && qCategory !== 'all') {
-      // A category chip also covers everything filed under its deeper sub-categories.
-      filter.subCategoryId = isValidObjectId(qCategory)
-        ? { $in: await getDescendantIds(this.databaseService.repositories.categoryModel, qCategory) }
-        : qCategory;
+      if (isValidObjectId(qCategory)) {
+        // A category chip also covers everything filed under its deeper sub-categories.
+        const ids = await getDescendantIds(this.databaseService.repositories.categoryModel, qCategory);
+        filter.$or = [{ categoryId: { $in: ids } }, { subCategoryId: { $in: ids } }];
+      } else {
+        filter.subCategoryId = qCategory;
+      }
     }
     if (qTag && qTag !== 'all') filter.tags = qTag;
     // In-store search (`q`, or the older `search`): escaped, case-insensitive, any script (Urdu titles included).

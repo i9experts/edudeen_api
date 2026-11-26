@@ -647,7 +647,8 @@ export class AdminMarketplaceService {
     ]);
 
     const sellerIds = [...new Set(stores.map((s: any) => s.sellerId))];
-    const categoryIds = [...new Set(stores.map((s: any) => s.categoryId).filter(Boolean))];
+    const storeCategoryIds = (s: any): string[] => (s.categoryIds?.length ? s.categoryIds : (s.categoryId ? [s.categoryId] : []));
+    const categoryIds = [...new Set(stores.flatMap((s: any) => storeCategoryIds(s)))];
     const [sellers, categories] = await Promise.all([
       this.r.sellerModel.find({ _id: { $in: sellerIds } }, { name: 1, email: 1, phone: 1, address: 1 }).lean(),
       this.r.categoryModel.find({ _id: { $in: categoryIds } }, { name: 1 }).lean(),
@@ -657,13 +658,17 @@ export class AdminMarketplaceService {
 
     const items = stores.map((s: any) => {
       const seller = sellerById.get(s.sellerId);
+      const catIds = storeCategoryIds(s);
       return {
         id: s._id,
         storeName: s.name,
         logo: s.logo,
         description: s.description,
-        categoryId: s.categoryId,
-        categoryName: s.categoryId ? categoryNameById.get(s.categoryId) ?? null : null,
+        // Deprecated — the first category (id + name), kept for an older admin build.
+        categoryId: catIds[0] ?? null,
+        categoryName: catIds[0] ? categoryNameById.get(catIds[0]) ?? null : null,
+        categoryIds: catIds,
+        categoryNames: catIds.map((id) => categoryNameById.get(id)).filter(Boolean),
         sellerType: s.sellerType,
         productTypes: s.productTypes,
         baseCurrency: s.baseCurrency,
@@ -687,10 +692,13 @@ export class AdminMarketplaceService {
     const store = await this.r.storeModel.findOne({ _id: id, isDelete: false });
     if (!store) throw new NotFoundException('Lead not found');
 
-    const [seller, category] = await Promise.all([
+    const catIds: string[] = (store as any).categoryIds?.length ? (store as any).categoryIds : (store.categoryId ? [store.categoryId] : []);
+    const [seller, categories] = await Promise.all([
       this.r.sellerModel.findById(store.sellerId, { name: 1, email: 1, phone: 1, address: 1 }).lean(),
-      store.categoryId ? this.r.categoryModel.findById(store.categoryId, { name: 1 }).lean() : null,
+      catIds.length ? this.r.categoryModel.find({ _id: { $in: catIds } }, { name: 1 }).lean() : [],
     ]);
+    const catNameById = new Map((categories as any[]).map((c) => [String(c._id), c.name]));
+    const categoryNames = catIds.map((id) => catNameById.get(id)).filter(Boolean);
 
     return {
       success: true,
@@ -699,7 +707,9 @@ export class AdminMarketplaceService {
         storeName: store.name,
         logo: store.logo,
         description: store.description,
-        categoryName: (category as any)?.name ?? null,
+        // Deprecated — the first category's name, kept for an older admin build.
+        categoryName: categoryNames[0] ?? null,
+        categoryNames,
         sellerType: store.sellerType,
         productTypes: store.productTypes,
         storeStatus: store.status,

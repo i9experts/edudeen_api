@@ -16,7 +16,7 @@ describe('featured sellers rules', () => {
   });
 });
 
-const base: { logo: string | null; description: string; publishedProducts: number; soldCount: number; categoryId: string } = { logo: 'l', description: 'x'.repeat(40), publishedProducts: 5, soldCount: 0, categoryId: 'c1' };
+const base: { logo: string | null; description: string; publishedProducts: number; soldCount: number; categoryIds: string[] } = { logo: 'l', description: 'x'.repeat(40), publishedProducts: 5, soldCount: 0, categoryIds: ['c1'] };
 const row = (o: Partial<typeof base> & Record<string, any>) => { const s = { ...base, ...o }; return { ...s, score: featuredScore(s) }; };
 
 describe('featured ranking', () => {
@@ -39,9 +39,21 @@ describe('featured ranking', () => {
     expect(out.map((r) => r.id)).toEqual(['c', 'b', 'a']);
   });
   it('no more than 2 same-category stores in a row', () => {
-    const rows = [row({ id: '1', soldCount: 900 }), row({ id: '2', soldCount: 800 }), row({ id: '3', soldCount: 700 }), row({ id: '4', categoryId: 'c2', soldCount: 1 })];
+    const rows = [row({ id: '1', soldCount: 900 }), row({ id: '2', soldCount: 800 }), row({ id: '3', soldCount: 700 }), row({ id: '4', categoryIds: ['c2'], soldCount: 1 })];
     const out = selectFeatured(rows, 4) as any[];
     expect(out.map((r) => r.id)).toEqual(['1', '2', '4', '3']);
+  });
+  it('overlapping (not necessarily identical) category sets still count as the same run', () => {
+    // Impossible under the old single-category model: A and B share only c2, A and C share only c1 — no two
+    // stores here have an identical category id, yet A+B still forms a run relative to A.
+    const rows = [
+      row({ id: 'A', categoryIds: ['c1', 'c2'], soldCount: 900 }),
+      row({ id: 'B', categoryIds: ['c2'], soldCount: 800 }),
+      row({ id: 'C', categoryIds: ['c1'], soldCount: 700 }),
+      row({ id: 'D', categoryIds: ['c9'], soldCount: 1 }),
+    ];
+    const out = selectFeatured(rows, 4) as any[];
+    expect(out.map((r) => r.id)).toEqual(['A', 'B', 'D', 'C']);
   });
   it('never shows non-quality stores (no fallback), but keeps pinned ones', () => {
     expect(selectFeatured([row({ id: 'a', logo: null }), row({ id: 'b', publishedProducts: 1 })], 5)).toHaveLength(0);

@@ -4,6 +4,8 @@ import { Document } from 'mongoose';
 
 export type StoreDocument = Store & Document;
 
+export const MAX_STORE_CATEGORIES = 3;
+
 export enum SellerType {
   CREATOR = 'creator',
   EDUCATOR = 'educator',
@@ -395,8 +397,15 @@ export class Store {
   @Prop({ type: String, default: null })
   aboutBio: string | null;
 
+  // Deprecated — always `categoryIds[0]`, kept in sync for any reader not yet migrated to the array.
   @Prop({ type: String, default: null })
   categoryId!: string | null;
+
+  // Up to 3 main (root) categories this store sells across — picking one covers its whole subtree,
+  // so a seller isn't limited to a single subject/kind of product. Locked once the store has products
+  // (see StoreService.updateStore), same as the old single categoryId was.
+  @Prop({ type: [String], default: [] })
+  categoryIds!: string[];
 
   @Prop({ type: String, default: null })
   description!: string | null;

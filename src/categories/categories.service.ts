@@ -124,7 +124,9 @@ export class CategoriesService {
 
     const isRoot = !category.parentId;
     const productFilter = isRoot ? { categoryId: id } : { subCategoryId: { $in: subtree } };
-    const storeFilter = { categoryId: id, isDelete: false };
+    // $or matches a store whether it's migrated to `categoryIds` or (not yet re-saved since the array
+    // field shipped) still only carries the legacy scalar `categoryId`.
+    const storeFilter = { $or: [{ categoryIds: id }, { categoryId: id }], isDelete: false };
     const [productCount, storeCount] = await Promise.all([
       repos.productModel.countDocuments({ ...productFilter, isDelete: false }),
       isRoot ? repos.storeModel.countDocuments(storeFilter) : Promise.resolve(0),
@@ -161,10 +163,24 @@ export class CategoriesService {
         productSet = { subCategoryId: target.parentId ? reassignTo : null };
       }
       const p = await repos.productModel.updateMany({ ...productFilter, isDelete: false }, { $set: productSet });
-      const st = isRoot
-        ? await repos.storeModel.updateMany(storeFilter, { $set: { categoryId: reassignTo } })
-        : { modifiedCount: 0 };
-      reassigned = { products: p.modifiedCount, stores: st.modifiedCount };
+      if (isRoot) {
+        // Replace `id` with `reassignTo` WITHIN each matching store's `categoryIds` — never a blind
+        // overwrite, which would wipe out its other (up to MAX_STORE_CATEGORIES - 1) categories.
+        await repos.storeModel.updateMany(
+          { categoryIds: id, isDelete: false },
+          { $set: { 'categoryIds.$[elem]': reassignTo } },
+          { arrayFilters: [{ elem: id }] },
+        );
+        // A store that predates the array field (only the legacy scalar is set) is migrated here too.
+        await repos.storeModel.updateMany(
+          { categoryId: id, isDelete: false, $or: [{ categoryIds: { $exists: false } }, { categoryIds: { $size: 0 } }] },
+          { $set: { categoryIds: [reassignTo] } },
+        );
+        // Legacy scalar: kept in sync as `categoryIds[0]` for every store just touched above.
+        await repos.storeModel.updateMany({ categoryId: id, isDelete: false }, { $set: { categoryId: reassignTo } });
+      }
+      // `storeCount` (computed above, before any of this) already counted every store this touches.
+      reassigned = { products: p.modifiedCount, stores: isRoot ? storeCount : 0 };
     }
 
     if (descendantCount > 0) {

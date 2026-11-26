@@ -119,6 +119,17 @@ describe('CategoriesService — admin management', () => {
       storeModel.countDocuments.mockResolvedValue(1);
       const res: any = await service.deleteCategory(ID, OTHER, META);
       expect(productModel.updateMany).toHaveBeenCalledWith({ categoryId: ID, isDelete: false }, { $set: { categoryId: OTHER, subCategoryId: null } });
+      // Replaces ID with OTHER inside categoryIds (never a blind overwrite — a store can have up to 3),
+      // migrates a store that predates the array field, then keeps the legacy scalar in sync.
+      expect(storeModel.updateMany).toHaveBeenCalledWith(
+        { categoryIds: ID, isDelete: false },
+        { $set: { 'categoryIds.$[elem]': OTHER } },
+        { arrayFilters: [{ elem: ID }] },
+      );
+      expect(storeModel.updateMany).toHaveBeenCalledWith(
+        { categoryId: ID, isDelete: false, $or: [{ categoryIds: { $exists: false } }, { categoryIds: { $size: 0 } }] },
+        { $set: { categoryIds: [OTHER] } },
+      );
       expect(storeModel.updateMany).toHaveBeenCalledWith({ categoryId: ID, isDelete: false }, { $set: { categoryId: OTHER } });
       expect(res.data.reassigned).toEqual({ products: 3, stores: 1 });
       expect(categoryModel.updateOne).toHaveBeenCalled();
