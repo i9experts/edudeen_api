@@ -1,9 +1,57 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, MaxLength, IsOptional, IsUrl, IsNumber, IsIn, IsArray, IsBoolean, IsDateString, Min } from 'class-validator';
+import { IsString, MaxLength, IsOptional, IsUrl, IsNumber, IsIn, IsArray, IsBoolean, IsDateString, Min, ArrayMinSize, ArrayMaxSize } from 'class-validator';
 import { Type } from 'class-transformer';
 import { IsLinkTarget } from '../../common/link-target.util';
 import { PROMOTION_PLACEMENTS, PromotionPlacement } from '../../common/promotion-placements.const';
+import { BANNER_STYLES, BannerStyle } from '../schemas/banner.schema';
+
+export class CreateProductBannerDto {
+  @ApiProperty({ required: false, enum: PROMOTION_PLACEMENTS, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @IsIn(PROMOTION_PLACEMENTS, { each: true })
+  placements?: PromotionPlacement[];
+
+  @ApiProperty({ required: false, description: 'ISO date — leave empty to go live immediately' })
+  @IsOptional()
+  @IsDateString()
+  startAt?: string;
+
+  @ApiProperty({ required: false, description: 'ISO date — leave empty for no expiry. Also the countdown target for the "countdown" style.' })
+  @IsOptional()
+  @IsDateString()
+  endAt?: string;
+
+  @ApiProperty({ enum: BANNER_STYLES })
+  @IsIn(BANNER_STYLES)
+  style: BannerStyle;
+
+  @ApiProperty({ type: [String], description: 'Ordered product ids — order fills the style\'s slots.' })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(4)
+  @IsString({ each: true })
+  productIds: string[];
+
+  @ApiProperty({ required: false, example: 'Mathematics sale' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  title?: string;
+
+  @ApiProperty({ required: false, description: 'Save without publishing: the banner stays a draft (never shown) until published.' })
+  @IsOptional()
+  @IsBoolean()
+  saveAsDraft?: boolean;
+
+  @ApiProperty({ required: false, example: 0, description: 'Display order (0 = first)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  order?: number;
+}
 
 export class CreateBannerDto {
   @ApiProperty({ required: false, enum: PROMOTION_PLACEMENTS, default: 'marketplaceHero', description: 'Deprecated — use `placements` (array) instead. Kept for older callers.' })

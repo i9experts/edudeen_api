@@ -21,7 +21,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { BannersService } from './banner.service';
-import { CreateBannerDto } from './dto/create-banner.dto';
+import { CreateBannerDto, CreateProductBannerDto } from './dto/create-banner.dto';
 import { UpdateBannerDto } from './dto/update-banner.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -69,6 +69,17 @@ export class BannersController {
     return this.bannersService.getCount(placement);
   }
 
+  // GET live product data for the builder's preview pane — admin only. Resolves the SAME way the
+  // real banner will (getShapedProductsByIds), so the preview is never an approximation.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @ApiBearerAuth()
+  @Get('preview-products')
+  previewProducts(@Query('ids') ids?: string) {
+    const productIds = (ids ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    return this.bannersService.previewProducts(productIds);
+  }
+
   // POST via JSON URL — admin only
   @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
   @Roles('admin')
@@ -77,6 +88,16 @@ export class BannersController {
   @HttpCode(HttpStatus.CREATED)
   createFromUrl(@Body() dto: CreateBannerDto) {
     return this.bannersService.createFromUrl(dto);
+  }
+
+  // POST feature real catalog products — admin only
+  @UseGuards(JwtAuthGuard, RolesGuard, AdminReauthGuard)
+  @Roles('admin')
+  @ApiBearerAuth()
+  @Post('products')
+  @HttpCode(HttpStatus.CREATED)
+  createFromProducts(@Body() dto: CreateProductBannerDto) {
+    return this.bannersService.createFromProducts(dto);
   }
 
   // POST via file upload — admin only
