@@ -1,14 +1,23 @@
 /* eslint-disable prettier/prettier */
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { v2 as cloudinary } from 'cloudinary';
-import { CreateBannerDto } from './dto/create-banner.dto';
+import { CreateBannerDto, CreateProductBannerDto } from './dto/create-banner.dto';
 import { UpdateBannerDto } from './dto/update-banner.dto';
 import { DatabaseService } from 'src/database/databaseservice';
 import { AdminConfigService } from '../admin-config/admin-config.service';
 import { MediaLibraryService } from '../media-library/media-library.service';
+import { ProductsService } from '../products/products.service';
 import { validateCreativeDimensions } from '../common/validate-creative-dimensions.util';
-import { BannerStatus } from './schemas/banner.schema';
+import { BannerStatus, BannerStyle } from './schemas/banner.schema';
 import { PromotionPlacement, PROMOTION_PLACEMENTS } from '../common/promotion-placements.const';
+
+// How many product slots each built-in layout has (see BannerFormModal/ProductBannerSlide on the frontend).
+const MAX_PRODUCTS_BY_STYLE: Record<BannerStyle, number> = {
+  spotlight: 1,
+  countdown: 1,
+  lineup: 3,
+  collection: 4,
+};
 
 const DEFAULT_PLACEMENT: PromotionPlacement = 'marketplaceHero';
 
@@ -60,10 +69,30 @@ export class BannersService {
     private readonly databaseService: DatabaseService,
     private readonly adminConfigService: AdminConfigService,
     private readonly mediaLibraryService: MediaLibraryService,
+    private readonly productsService: ProductsService,
   ) {}
 
   private get bannerModel() {
     return this.databaseService.repositories.bannerModel;
+  }
+
+  /** Resolves each 'products' banner's `productIds` to LIVE product data (price, photo, stock — same
+   *  shaped object the storefront's own product cards use), in the order picked. A product that's since
+   *  been removed, deactivated, or whose store is no longer live is silently dropped rather than
+   *  breaking the slide. `dropEmpty` removes a 'products' banner entirely once nothing is left to show
+   *  (used for the public feed; the admin list keeps it so the admin can see/fix the selection). */
+  private async attachLiveProducts<T extends { kind?: string; productIds?: string[] }>(banners: T[], dropEmpty: boolean): Promise<(T & { products?: any[] })[]> {
+    const ids = [...new Set(banners.filter((b) => b.kind === 'products').flatMap((b) => b.productIds ?? []))];
+    const shaped = ids.length ? await this.productsService.getShapedProductsByIds(ids, null) : [];
+    const byId = new Map(shaped.map((p: any) => [String(p._id), p]));
+    const out: (T & { products?: any[] })[] = [];
+    for (const b of banners) {
+      if (b.kind !== 'products') { out.push(b); continue; }
+      const products = (b.productIds ?? []).map((id) => byId.get(id)).filter(Boolean);
+      if (dropEmpty && products.length === 0) continue;
+      out.push({ ...b, products });
+    }
+    return out;
   }
 
   // ── GET ALL (public) ───────────────────────────────────────────────────────
@@ -81,8 +110,9 @@ export class BannersService {
       query = query.limit(limit);
     }
     const banners = await query.lean();
+    const data = await this.attachLiveProducts(banners, true);
 
-    return { success: true, count: banners.length, data: banners };
+    return { success: true, count: data.length, data };
   }
 
   // ── GET ALL (admin) — every status (draft / scheduled / live / paused / expired), with a computed `live` flag ──
@@ -90,13 +120,22 @@ export class BannersService {
   async findAllForAdmin() {
     const now = Date.now();
     const banners = await this.bannerModel.find({}).sort({ order: 1, createdAt: 1 }).lean();
-    const data = banners.map((b: any) => {
+    const withLive = banners.map((b: any) => {
       const started = !b.startAt || new Date(b.startAt).getTime() <= now;
       const notEnded = !b.endAt || new Date(b.endAt).getTime() >= now;
       const live = (b.status === 'active' && notEnded) || (b.status === 'scheduled' && started && notEnded) || (b.status === undefined && b.isActive === true);
       return { ...b, live };
     });
+    const data = await this.attachLiveProducts(withLive, false);
     return { success: true, count: data.length, data };
+  }
+
+  // ── PREVIEW PRODUCTS (admin) — the builder's live-preview pane resolves the same way the real
+  // banner will, so what the admin sees while picking products is never an approximation. ──
+
+  async previewProducts(productIds: string[]) {
+    const data = productIds.length ? await this.productsService.getShapedProductsByIds(productIds, null) : [];
+    return { success: true, data };
   }
 
   // ── SCHEDULE TICK (cron, every minute) — scheduled -> active when the start time arrives; active/scheduled -> expired past endAt ──
@@ -177,6 +216,36 @@ export class BannersService {
     return { success: true, message: 'Banner created successfully', data: banner };
   }
 
+  // ── CREATE FROM PRODUCTS (admin) — feature real catalog products instead of an uploaded picture ──
+
+  async createFromProducts(dto: CreateProductBannerDto) {
+    const max = MAX_PRODUCTS_BY_STYLE[dto.style];
+    if (dto.productIds.length > max) {
+      throw new BadRequestException(`The "${dto.style}" style supports up to ${max} product${max === 1 ? '' : 's'} — ${dto.productIds.length} were selected`);
+    }
+
+    const placements = dto.placements?.length ? dto.placements : [DEFAULT_PLACEMENT];
+    const placement = placements[0];
+    const status: BannerStatus = dto.saveAsDraft ? 'draft' : computeInitialStatus(dto.startAt, dto.endAt);
+    const currentCount = await this.bannerModel.countDocuments({ $and: [placementMatch(placement)] });
+
+    const banner = await this.bannerModel.create({
+      kind: 'products',
+      style: dto.style,
+      productIds: dto.productIds,
+      title: dto.title?.trim() ?? '',
+      order: dto.order ?? currentCount,
+      placement,
+      placements,
+      status,
+      isActive: status === 'active',
+      startAt: dto.startAt ?? null,
+      endAt: dto.endAt ?? null,
+    });
+
+    return { success: true, message: 'Banner created successfully', data: banner };
+  }
+
   // ── UPLOAD FILE (admin) ─────────────────────────────────────────────────────
   // Routed through MediaLibraryService (-> the shared UploadService) instead of
   // the CloudinaryStorage-multer path this used to have — one upload code path,
@@ -221,6 +290,20 @@ export class BannersService {
   async updateBanner(bannerId: string, dto: UpdateBannerDto) {
     const banner = await this.bannerModel.findById(bannerId);
     if (!banner) throw new NotFoundException('Banner not found');
+
+    // Validate against the EFFECTIVE style/productIds (this request's value, else what's already stored) —
+    // an admin may PATCH just one of the two without resending the other.
+    const effectiveKind = dto.kind ?? banner.kind;
+    if (effectiveKind === 'products') {
+      const effectiveStyle = dto.style ?? banner.style;
+      const effectiveProductIds = dto.productIds ?? banner.productIds;
+      if (!effectiveStyle) throw new BadRequestException('A "products" banner needs a style');
+      const max = MAX_PRODUCTS_BY_STYLE[effectiveStyle];
+      if (!effectiveProductIds?.length) throw new BadRequestException('Select at least one product');
+      if (effectiveProductIds.length > max) {
+        throw new BadRequestException(`The "${effectiveStyle}" style supports up to ${max} product${max === 1 ? '' : 's'} — ${effectiveProductIds.length} were selected`);
+      }
+    }
 
     const { saveAsDraft, ...rest } = dto;
     const set: Record<string, unknown> = { ...rest };

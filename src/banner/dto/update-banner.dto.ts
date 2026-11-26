@@ -1,11 +1,31 @@
 /* eslint-disable prettier/prettier */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, MaxLength, IsOptional, IsUrl, IsBoolean, IsNumber, IsIn, IsArray, IsDateString, Min } from 'class-validator';
+import { IsString, MaxLength, IsOptional, IsUrl, IsBoolean, IsNumber, IsIn, IsArray, IsDateString, Min, ArrayMaxSize } from 'class-validator';
 import { Type } from 'class-transformer';
 import { IsLinkTarget } from '../../common/link-target.util';
 import { PROMOTION_PLACEMENTS, PromotionPlacement } from '../../common/promotion-placements.const';
+import { BANNER_STYLES, BannerStyle } from '../schemas/banner.schema';
 
 export class UpdateBannerDto {
+  // Only meaningful alongside `style`/`productIds` — switches a banner from an uploaded image to
+  // featured products or back. Omit to leave the banner's current kind as-is.
+  @ApiProperty({ required: false, enum: ['image', 'products'] })
+  @IsOptional()
+  @IsIn(['image', 'products'])
+  kind?: 'image' | 'products';
+
+  @ApiProperty({ required: false, enum: BANNER_STYLES })
+  @IsOptional()
+  @IsIn(BANNER_STYLES)
+  style?: BannerStyle;
+
+  @ApiProperty({ required: false, type: [String], description: 'Ordered product ids — order fills the style\'s slots.' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @IsString({ each: true })
+  productIds?: string[];
+
   @ApiProperty({ required: false, enum: PROMOTION_PLACEMENTS, description: 'Deprecated — use `placements` (array) instead. Kept for older callers.' })
   @IsOptional()
   @IsIn(PROMOTION_PLACEMENTS)

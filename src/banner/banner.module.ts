@@ -6,9 +6,17 @@ import { BannersService } from './banner.service';
 import { RedisModule } from 'src/redis/redis.module';
 import { AdminConfigModule } from '../admin-config/admin-config.module';
 import { MediaLibraryModule } from '../media-library/media-library.module';
+import { ProductsModule } from '../products/product.module';
 
 @Module({
-  imports: [AdminReauthModule, ConfigModule, RedisModule, AdminConfigModule, MediaLibraryModule],
+  imports: [
+    AdminReauthModule,
+    ConfigModule,
+    RedisModule,
+    AdminConfigModule,
+    MediaLibraryModule,
+    ProductsModule,
+  ],
   controllers: [BannersController],
   providers: [BannersService],
   exports: [BannersService],

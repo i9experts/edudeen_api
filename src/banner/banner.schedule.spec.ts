@@ -1,13 +1,20 @@
-﻿/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument -- mock-heavy test */
+﻿/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument -- mock-heavy test */
 import { BannersService } from './banner.service';
 
 function make(rows: any[]) {
   const updateMany = jest.fn().mockResolvedValue({ modifiedCount: 1 });
   const bannerModel = {
-    find: jest.fn(() => ({ sort: () => ({ lean: () => Promise.resolve(rows) }) })),
+    find: jest.fn(() => ({
+      sort: () => ({ lean: () => Promise.resolve(rows) }),
+    })),
     updateMany,
   };
-  const svc = new BannersService({ repositories: { bannerModel } } as any, {} as any, {} as any);
+  const svc = new BannersService(
+    { repositories: { bannerModel } } as any,
+    {} as any,
+    {} as any,
+    {} as any,
+  );
   return { svc, updateMany };
 }
 
@@ -23,7 +30,13 @@ describe('admin banner schedule', () => {
       { _id: 'e', status: 'active', endAt: past },
     ]);
     const res = await svc.findAllForAdmin();
-    expect(res.data.map((b: any) => [b._id, b.live])).toEqual([['a', true], ['b', false], ['c', true], ['d', false], ['e', false]]);
+    expect(res.data.map((b: any) => [b._id, b.live])).toEqual([
+      ['a', true],
+      ['b', false],
+      ['c', true],
+      ['d', false],
+      ['e', false],
+    ]);
   });
 
   it('the minute tick activates due scheduled banners and expires finished ones', async () => {
@@ -31,8 +44,15 @@ describe('admin banner schedule', () => {
     const now = new Date();
     const r = await svc.runScheduleTick(now);
     expect(r).toEqual({ activated: 1, expired: 1 });
-    expect(updateMany.mock.calls[0][0]).toMatchObject({ status: 'scheduled', startAt: { $lte: now } });
-    expect(updateMany.mock.calls[0][1]).toEqual({ $set: { status: 'active', isActive: true } });
-    expect(updateMany.mock.calls[1][1]).toEqual({ $set: { status: 'expired', isActive: false } });
+    expect(updateMany.mock.calls[0][0]).toMatchObject({
+      status: 'scheduled',
+      startAt: { $lte: now },
+    });
+    expect(updateMany.mock.calls[0][1]).toEqual({
+      $set: { status: 'active', isActive: true },
+    });
+    expect(updateMany.mock.calls[1][1]).toEqual({
+      $set: { status: 'expired', isActive: false },
+    });
   });
 });
