@@ -30,6 +30,26 @@ description: string | null;
   @Prop({ default: 0 })
   sortOrder: number;
 
+  // ── Admin settings (see category-settings.util.ts) ──
+  // Icon name or emoji, and a hex colour, for the category tile.
+  @Prop({ type: String, default: null })
+  icon: string | null;
+
+  @Prop({ type: String, default: null })
+  color: string | null;
+
+  // The name in other languages, e.g. { ar: 'القرآن والتجويد', ur: 'قرآن و تجوید' }. `name` stays the English default.
+  @Prop({ type: Object, default: () => ({}) })
+  nameTranslations: Record<string, string>;
+
+  // What may be listed here: 'physical' | 'digital' | 'course'. Empty = everything (or the parent's rule).
+  @Prop({ type: [String], enum: ['physical', 'digital', 'course'], default: [] })
+  allowedProductTypes: string[];
+
+  // A first publish into this category (or below it) always goes to admin review, even on plans that skip it.
+  @Prop({ type: Boolean, default: false })
+  requiresListingReview: boolean;
+
 
   @Prop({ enum: ['active', 'inactive'], default: 'active' })
   status: string;

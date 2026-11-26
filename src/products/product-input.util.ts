@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { parseDispatchDays } from '../common/dispatch.util';
 import { cleanClassRange } from './class-levels';
 import { cleanDimensions, ParcelType, PARCEL_TYPES } from '../checkout/shipping-rate.util';
+import { AUDIENCES, PRODUCT_LANGUAGES, type Audience, type ProductLanguage } from '../common/edu-filters.const';
 import { CURRICULA, DELIVERY_FORMATS, DeliveryFormat, DownloadLimit, LicenseType, LICENSE_OPTION_LABEL, LICENSE_OPTION_NAME } from './schemas/product.schema';
 
 /** 'single_classroom' etc. for a variant that carries a "License" option. */
@@ -36,7 +37,7 @@ export function cleanParcelMeta(body: Record<string, unknown>, forCreate: boolea
 
 /** Board/syllabus list and age range shared by every product type. Only keys
  *  present in the request are returned, so an edit leaves the rest alone. */
-export const PRODUCT_LANGUAGES = ['ur', 'en', 'ar', 'mixed'] as const;
+export { PRODUCT_LANGUAGES } from '../common/edu-filters.const';
 
 /** Optional book details shown in Details / the facts row. Max lengths of the saved text. */
 export const BOOK_DETAIL_LIMITS = { author: 120, publisher: 120, edition: 60 } as const;
@@ -81,7 +82,7 @@ export function cleanIsbn(v: unknown): string | null | undefined {
 
 export interface LearningMeta {
   curricula?: string[]; ageMin?: number | null; ageMax?: number | null; classFrom?: string | null; classTo?: string | null;
-  coverStyle?: 'book' | 'flat' | null; language?: 'ur' | 'en' | 'ar' | 'mixed' | null;
+  coverStyle?: 'book' | 'flat' | null; language?: ProductLanguage | null; audiences?: Audience[];
   author?: string | null; publisher?: string | null; edition?: string | null;
   pages?: number | null; isbn?: string | null; binding?: (typeof BOOK_BINDINGS)[number] | null;
   series?: string | null; seriesOrder?: number | null;
@@ -116,7 +117,7 @@ export function cleanLearningMeta(body: Record<string, unknown>): LearningMeta {
   }
   if (body.language !== undefined) {
     if (body.language === null || body.language === '') out.language = null;
-    else if ((PRODUCT_LANGUAGES as readonly unknown[]).includes(body.language)) out.language = body.language as 'ur' | 'en' | 'ar' | 'mixed';
+    else if ((PRODUCT_LANGUAGES as readonly unknown[]).includes(body.language)) out.language = body.language as ProductLanguage;
     else throw new BadRequestException(`language must be one of: ${PRODUCT_LANGUAGES.join(', ')}`);
   }
   if (body.curricula !== undefined) {
@@ -129,6 +130,22 @@ export function cleanLearningMeta(body: Record<string, unknown>): LearningMeta {
       }
     }
     out.curricula = [...new Set(body.curricula as string[])];
+  }
+  if (body.audiences !== undefined) {
+    if (body.audiences === null) out.audiences = [];
+    else {
+      if (!Array.isArray(body.audiences) || body.audiences.length > AUDIENCES.length) {
+        throw new BadRequestException('audiences must be a list');
+      }
+      for (const a of body.audiences) {
+        if (!(AUDIENCES as readonly unknown[]).includes(a)) {
+          throw new BadRequestException(`audiences items must be one of: ${AUDIENCES.join(', ')}`);
+        }
+      }
+      // Stored in the canonical order so equal sets compare equal (edit review, duplicates).
+      const picked = new Set(body.audiences as string[]);
+      out.audiences = AUDIENCES.filter((a) => picked.has(a));
+    }
   }
   const age = (v: unknown, field: string) => {
     if (v === null || v === '') return null;
@@ -217,10 +234,14 @@ export function resolveSellerPublishStatus(
   current?: { status?: string | null; approvedAt?: Date | null } | null,
   /** The store is on a paid platform plan: its listings go live without admin review (see sellerSkipsListingReview). */
   paidPlan = false,
+  /** The product's category requires review (Category.requiresListingReview): beats the paid plan and the global switch. */
+  categoryRequiresReview = false,
 ): string {
   const wantsLive = requested === 'active' || requested === 'scheduled';
-  if (!wantsLive || !listingApprovalRequired() || paidPlan) return requested;
+  if (!wantsLive) return requested;
   const approved = !!current?.approvedAt || current?.status === 'active' || current?.status === 'scheduled';
+  if (categoryRequiresReview) return approved ? requested : 'pending_review';
+  if (!listingApprovalRequired() || paidPlan) return requested;
   return approved ? requested : 'pending_review';
 }
 

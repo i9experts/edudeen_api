@@ -33,6 +33,12 @@ export class CategoriesController {
     return this.categoriesService.addCategory(userId, role, createCategoryDto);
   }
 
+  /** Public: audience, curriculum (grouped by region) and language options for browse filters. */
+  @Get('filters')
+  getFilters() {
+    return this.categoriesService.getFilterOptions();
+  }
+
   @Get('category-tree')
   async getCategoryTree(@Query('id') id?: string) {
     return this.categoriesService.getCategoryTreeNested(id);

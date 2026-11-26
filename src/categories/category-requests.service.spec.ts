@@ -81,6 +81,33 @@ describe('category requests: admin decision', () => {
     expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({ recipientId: SELLER, type: 'category_request_approved' }));
     await expect(svc.decide(data._id, 'rejected', 'Already covered by another category', meta)).rejects.toThrow(ConflictException);
   });
+  it('approving a subcategory request creates it under the store\'s main category and tells the seller', async () => {
+    const { svc, notifications } = setup();
+    const categories = { createApprovedSubcategory: jest.fn(async () => ({ id: OID(77), created: true })) };
+    (svc as any).categories = categories;
+    const { data } = await svc.create(SELLER, STORE, body('Nazra'));
+    const r: any = await svc.decide(data._id, 'approved', '', meta);
+    expect(categories.createApprovedSubcategory).toHaveBeenCalledWith(OID(99), OID(5), 'Nazra');
+    expect(r.data.createdCategoryId).toBe(OID(77));
+    expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({ body: expect.stringContaining('You can now choose it') }));
+  });
+  it('approval still stands when the category cannot be created (admin adds it by hand)', async () => {
+    const { svc, notifications } = setup();
+    (svc as any).categories = { createApprovedSubcategory: jest.fn(async () => { throw new Error('too deep'); }) };
+    const { data } = await svc.create(SELLER, STORE, body('Nazra'));
+    const r: any = await svc.decide(data._id, 'approved', '', meta);
+    expect(r.data.status).toBe('approved');
+    expect(r.data.createdCategoryId).toBeNull();
+    expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({ body: expect.stringContaining('once the Edudeen team has added it') }));
+  });
+  it('a rejected request creates nothing', async () => {
+    const { svc } = setup();
+    const categories = { createApprovedSubcategory: jest.fn() };
+    (svc as any).categories = categories;
+    const { data } = await svc.create(SELLER, STORE, body('Nazra'));
+    await svc.decide(data._id, 'rejected', 'Already covered by another category', meta);
+    expect(categories.createApprovedSubcategory).not.toHaveBeenCalled();
+  });
   it('reject needs a reason', async () => {
     const { svc } = setup();
     const { data } = await svc.create(SELLER, STORE, body('Nazra'));

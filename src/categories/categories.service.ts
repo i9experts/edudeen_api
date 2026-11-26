@@ -16,7 +16,7 @@ import { ReorderCategoriesDto } from './dto/reorder-categories.dto';
 import { generateUniqueSlug } from 'src/common/slug.util';
 import { ActivityLogService } from 'src/activity-log/activity-log.service';
 import {
-  MAX_CATEGORY_DEPTH,
+  MAX_CREATE_DEPTH,
   getAncestorChain,
   getDescendantIds,
   invalidateCategoryTreeCache,
@@ -24,6 +24,10 @@ import {
 } from './category-tree.util';
 
 import { TtlCache } from '../common/ttl-cache.util';
+import { cleanCategorySettings } from './category-settings.util';
+import {
+  AUDIENCES, AUDIENCE_LABELS, PRODUCT_LANGUAGES, PRODUCT_LANGUAGE_LABELS, curriculaByRegion,
+} from '../common/edu-filters.const';
 
 export interface AdminAuditMeta { adminId: string; ip?: string; userAgent?: string }
 
@@ -77,6 +81,7 @@ export class CategoriesService {
     if (dto.image !== undefined) set.image = dto.image;
     if (dto.sortOrder !== undefined) set.sortOrder = dto.sortOrder;
     if (dto.isActive !== undefined) set.status = dto.isActive ? 'active' : 'inactive';
+    Object.assign(set, cleanCategorySettings(dto));
     if (Object.keys(set).length === 0) throw new BadRequestException('Nothing to update');
 
     const updated = await categoryModel.findByIdAndUpdate(id, { $set: set }, { returnDocument: 'after' });
@@ -227,11 +232,16 @@ export class CategoriesService {
       const categoryModel = this.databaseService.repositories.categoryModel;
 
       // 🔒 Permission model:
-      // - Main categories (no parentId) → admin only. This is the curated
-      //   top-level taxonomy sellers pick from when creating a store.
-      // - Subcategories (parentId set) → admin OR seller, nested under any
-      //   active category as long as the whole chain stays within
-      //   MAX_CATEGORY_DEPTH levels (main > sub > sub-sub > sub-sub-sub).
+      // - The whole tree is admin-curated. Sellers ask for a new subcategory through a category request
+      //   (POST /api/categories/requests/...); approving it creates the subcategory (createApprovedSubcategory).
+      // - New categories can be nested at most MAX_CREATE_DEPTH levels (main > sub > sub-sub). Older, deeper
+      //   nodes still load and browse (MAX_CATEGORY_DEPTH), they just cannot get new children.
+      if (role !== 'admin') {
+        throw new ForbiddenException(
+          'Categories are managed by Edudeen. Send a subcategory request from your store\'s Categories page instead.',
+        );
+      }
+      const settings = cleanCategorySettings(createCategoryDto);
       let parent: any = null;
       if (!parentId) {
         if (role !== 'admin') {
@@ -251,13 +261,13 @@ export class CategoriesService {
         // Depth of the parent = number of nodes from it up to its root.
         let depth = 1;
         let cursor: any = parent;
-        while (cursor?.parentId && depth <= MAX_CATEGORY_DEPTH) {
+        while (cursor?.parentId && depth <= MAX_CREATE_DEPTH) {
           cursor = await categoryModel.findOne({ _id: cursor.parentId, isDelete: false });
           depth++;
         }
-        if (depth + 1 > MAX_CATEGORY_DEPTH) {
+        if (depth + 1 > MAX_CREATE_DEPTH) {
           throw new BadRequestException(
-            `Categories can be nested at most ${MAX_CATEGORY_DEPTH} levels deep — "${parent.name}" is already at level ${depth}, so it cannot have subcategories`,
+            `Categories can be nested at most ${MAX_CREATE_DEPTH} levels deep — "${parent.name}" is already at level ${depth}, so it cannot have subcategories`,
           );
         }
       }
@@ -286,6 +296,7 @@ export class CategoriesService {
         image: image,
         description: description,
         sortOrder: sortOrder || 0,
+        ...settings,
         createdBy: userId,
         createdByRole: role,
       });
@@ -309,6 +320,32 @@ export class CategoriesService {
         error.message || 'Failed to create category',
       );
     }
+  }
+
+  /**
+   * Creates the subcategory a seller asked for once an admin approves the request. Idempotent: an active
+   * category with the same name (case-insensitive) under the same parent is reused, never duplicated.
+   */
+  async createApprovedSubcategory(adminId: string, parentId: string, name: string): Promise<{ id: string; created: boolean }> {
+    if (!isValidObjectId(parentId)) throw new BadRequestException('The store has no valid main category to add this under');
+    const categoryModel = this.databaseService.repositories.categoryModel;
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const existing: any = await categoryModel.findOne({ parentId, isDelete: false, name: { $regex: `^${escaped}$`, $options: 'i' } }).select('_id').lean();
+    if (existing) return { id: String(existing._id), created: false };
+    const res: any = await this.addCategory(adminId, 'admin', { name, parentId } as CreateCategoryDto);
+    return { id: String(res.data._id), created: true };
+  }
+
+  /** Public: the buyer filters that sit beside the category tree (audience, curriculum by region, language). */
+  getFilterOptions() {
+    return {
+      success: true,
+      data: {
+        audiences: AUDIENCES.map((key) => ({ key, label: AUDIENCE_LABELS[key] })),
+        curricula: curriculaByRegion(),
+        languages: PRODUCT_LANGUAGES.map((key) => ({ key, label: PRODUCT_LANGUAGE_LABELS[key] })),
+      },
+    };
   }
 
   /** Public tree: every ACTIVE category nested to any depth. One query (not one per node), so it stays fast

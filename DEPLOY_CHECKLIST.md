@@ -136,6 +136,27 @@ Requests that still send `storeId` to `create-checkout` (store-subdomain checkou
 8. CI: add a Mongo **replica set** service and set `TEST_MONGO_REPLSET_URI` / `TEST_MONGO_URI` so the money integration specs (COD ledger, shipping credit, gift-card restore, payout/refund concurrency) actually run — in a normal `npm test` they are skipped.
 9. Full suite: `npm test` (jest is capped at 2 workers) and the replica-set suites.
 
+### Global categories and audience filter (run after the API is deployed, dry run first, backup taken)
+All new fields are additive (`Product.audiences`, category `icon` / `color` / `nameTranslations` / `allowedProductTypes` /
+`requiresListingReview`). The scripts below were only unit-tested on their data and logic; **none has been run against a
+database yet**, so run each dry run on a staging copy and read its plan before `:apply`.
+1. `npm run seed:categories` then `npm run seed:categories:apply`: adds the missing categories of the global tree
+   (`src/categories/global-taxonomy.data.ts`). It never edits, moves or deletes.
+2. `npm run migrate:global-categories` then `npm run migrate:global-categories:apply`:
+   - renames "Social Studies & Pakistan Studies" to "Social Studies & Geography" (the slug stays the same);
+   - moves Urdu and English under Languages, and re-points their products and stores;
+   - groups the Pakistan exam subcategories under "Pakistan Boards & Tests";
+   - fills empty category settings;
+   - puts the Islamic groups first.
+3. `npm run backfill:audiences` then `npm run backfill:audiences:apply`: guesses `audiences` for existing products from
+   category, age, licence and level. Products with no clear signal stay empty for the seller to fill in.
+4. Frontend must be updated, as the API changed behaviour:
+   - Sellers can no longer `POST /api/categories/add-category`. They now get 403 with a message pointing to the request
+     flow, and approving a subcategory request creates the subcategory.
+   - Admins can create at most 3 levels.
+   - New buyer filter `?audience=` on `products-by-category`.
+   - New `GET /api/categories/filters` lists audiences, curricula by region and languages.
+
 ---
 
 ## 4. Deploy order

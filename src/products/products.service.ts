@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
-import { MAX_CATEGORY_DEPTH, getDescendantIds } from 'src/categories/category-tree.util';
+import { MAX_CATEGORY_DEPTH, getAncestorChain, getDescendantIds } from 'src/categories/category-tree.util';
+import { assertKindAllowed, effectiveCategoryRules, productKind } from 'src/categories/category-settings.util';
 import { isBadgeLive, couponScope, lineMatchesCoupon } from 'src/marketing/coupon-rules.util';
 import {
   Injectable,
@@ -211,6 +212,17 @@ export class ProductsService {
     }
     if (!node || !reachedRoot) throw new BadRequestException('subCategoryId must be an active subcategory of the selected category');
     return subCategoryId;
+  }
+
+  /** Admin category settings that apply to a product filed at `subCategoryId ?? categoryId` (see category-settings.util). */
+  private async categoryRulesFor(categoryId: string, subCategoryId: string | null) {
+    const categoryModel = this.databaseService.repositories.categoryModel;
+    const leaf = String(subCategoryId ?? categoryId);
+    let ids = await getAncestorChain(categoryModel as any, leaf);
+    if (!ids.length) ids = [leaf, String(categoryId)].filter((v, i, a) => a.indexOf(v) === i);
+    const rows: any[] = await categoryModel.find({ _id: { $in: ids } }).select('name allowedProductTypes requiresListingReview').lean();
+    const byId = new Map(rows.map((r) => [String(r._id), r]));
+    return effectiveCategoryRules(ids.map((id) => byId.get(id)).filter(Boolean));
   }
 
   /** Builds the digital config from untrusted input: every file must be one THIS seller uploaded (or already be
@@ -593,7 +605,7 @@ export class ProductsService {
     sortBy?: 'newest' | 'price_asc' | 'price_desc' | 'rating' | 'popularity',
     attributesFilter?: Record<string, string[]>,
     search?: string,
-    learning?: { curriculum?: string; age?: number; featured?: boolean; classValue?: string; format?: string },
+    learning?: { curriculum?: string; audience?: string; age?: number; featured?: boolean; classValue?: string; format?: string },
   ): Promise<any> {
     const productModel = this.databaseService.repositories.productModel;
     const productVariantModel =
@@ -611,6 +623,8 @@ export class ProductsService {
     // page can page and filter on the server (the plain search endpoint can't).
     // Exam board, and "suitable for age N" (an open end counts as a match).
     if (learning?.curriculum) query.curricula = learning.curriculum;
+    // Who it is for (kids / parents / teachers / schools ...): a filter beside the category tree.
+    if (learning?.audience) query.audiences = learning.audience;
     // Listings an admin has featured (Admin → Listings). This is the home "Featured by Edudeen" rail: a listing waiting
     // for a quality review stays out of it (it stays in normal browse and search).
     if (learning?.featured) { query.isFeatured = true; Object.assign(query, RAIL_QUERY_EXCLUDE); }
@@ -1756,6 +1770,9 @@ export class ProductsService {
     const cleanImages = images === undefined ? [] : assertStringArray(images, 'images', { maxItems: 20, maxLength: 2048 });
 
     const categoryId = await this.resolveRootCategoryId(store.categoryId, body.categoryId);
+    const physicalSubCategoryId = await this.resolveSubCategoryId(categoryId, subCategoryId);
+    const catRules = await this.categoryRulesFor(categoryId, physicalSubCategoryId);
+    assertKindAllowed(catRules, 'physical');
 
     // Owner rule R3: the normal sale must stay below the Premium discount by the admin's minimum gap.
     await assertPremiumGap(this.premiumService, store as any, premiumFieldsFromBody(body).premiumDiscountPercent, variants.map((v: any) => ({ price: v.price, compareAtPrice: v.compareAtPrice ?? null })), premiumFieldsFromBody(body).premiumOptOut === true);
@@ -1768,7 +1785,7 @@ export class ProductsService {
     const dupPrice = (variants.find((v: any) => v.isDefault) ?? variants[0])?.price;
     const duplicateOf = await this.findDuplicateListing(String(store._id), title, typeof dupPrice === 'number' ? dupPrice : Number(dupPrice));
     const quality = this.checkListing({ title, type: 'physical', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, requestedStatus: status, imageCount: cleanImages.length, duplicateOf });
-    const requestedStatus = status ? resolveSellerPublishStatus(status, null, await this.paidPlanSkipsReview(String(store._id))) : 'draft';
+    const requestedStatus = status ? resolveSellerPublishStatus(status, null, await this.paidPlanSkipsReview(String(store._id)), catRules.requiresListingReview) : 'draft';
     // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
     const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
 
@@ -1784,7 +1801,7 @@ export class ProductsService {
       productType: 'physical',
       type: 'physical',
       categoryId,
-      subCategoryId: await this.resolveSubCategoryId(categoryId, subCategoryId),
+      subCategoryId: physicalSubCategoryId,
       images: cleanImages,
       descriptionImages: body.descriptionImages === undefined ? [] : assertStringArray(body.descriptionImages, 'descriptionImages', { maxItems: 6, maxLength: 2048 }),
       samplePages: body.samplePages === undefined ? [] : assertStringArray(body.samplePages, 'samplePages', { maxItems: 6, maxLength: 2048 }),
@@ -1920,8 +1937,10 @@ export class ProductsService {
     const validSubCategoryId = await this.resolveSubCategoryId(categoryId, subCategoryId);
     const digitalConfig = digital ? await this.buildDigitalConfig(sellerId, digital, null) : null;
     const delivery = cleanDeliveryFormat(body, null);
+    const catRules = await this.categoryRulesFor(categoryId, validSubCategoryId);
+    assertKindAllowed(catRules, productKind('digital', delivery.deliveryFormat));
     const paidPlan = await this.paidPlanSkipsReview(String(store._id));
-    await this.assertCourseReady(null, delivery.deliveryFormat, status ? resolveSellerPublishStatus(status, null, paidPlan) : 'draft');
+    await this.assertCourseReady(null, delivery.deliveryFormat, status ? resolveSellerPublishStatus(status, null, paidPlan, catRules.requiresListingReview) : 'draft');
 
     // Owner rule R3 (normal sale vs Premium discount), on the base price and every license tier.
     await assertPremiumGap(this.premiumService, store as any, premiumFieldsFromBody(body).premiumDiscountPercent, [
@@ -1936,7 +1955,7 @@ export class ProductsService {
     const learnMeta = cleanLearningMeta(body);
     const duplicateOf = await this.findDuplicateListing(String(store._id), title, Number(price));
     const quality = this.checkListing({ title, type: 'digital', description, classFrom: learnMeta.classFrom, classTo: learnMeta.classTo, coverStyle: learnMeta.coverStyle, deliveryFormat: delivery.deliveryFormat ?? 'download', requestedStatus: status, imageCount: cleanImages.length, duplicateOf });
-    const requestedStatus = status ? resolveSellerPublishStatus(status, null, paidPlan) : 'draft';
+    const requestedStatus = status ? resolveSellerPublishStatus(status, null, paidPlan, catRules.requiresListingReview) : 'draft';
     // Contact details in the text: saved, but held for admin review (never rejected, never published unseen).
     const finalStatus = quality.scan.flagged && requestedStatus !== 'draft' && requestedStatus !== 'inactive' ? 'pending_review' : requestedStatus;
 
@@ -2273,6 +2292,21 @@ export class ProductsService {
     if (product.type === 'digital') {
       Object.assign(productUpdate, cleanDeliveryFormat(body, product as any));
       await this.assertCourseReady(productId, productUpdate.deliveryFormat ?? (product as any).deliveryFormat, productUpdate.status ?? (productUpdate.deliveryFormat ? product.status : null));
+    }
+    // Admin category settings: what the category accepts, and whether a first publish there always needs review.
+    {
+      const categoryTouched = productUpdate.categoryId !== undefined || productUpdate.subCategoryId !== undefined;
+      const formatTouched = productUpdate.deliveryFormat !== undefined;
+      if (categoryTouched || formatTouched || status !== undefined) {
+        const effSub = productUpdate.subCategoryId !== undefined ? productUpdate.subCategoryId : (product as any).subCategoryId ?? null;
+        const rules = await this.categoryRulesFor(String(effectiveCategoryId), effSub ? String(effSub) : null);
+        if (categoryTouched || formatTouched) {
+          assertKindAllowed(rules, productKind(product.type, productUpdate.deliveryFormat ?? (product as any).deliveryFormat));
+        }
+        if (status !== undefined && rules.requiresListingReview) {
+          productUpdate.status = resolveSellerPublishStatus(status, product, false, true);
+        }
+      }
     }
     {
       const nextMin = productUpdate.ageMin !== undefined ? productUpdate.ageMin : product.ageMin;
