@@ -145,7 +145,8 @@ export const GLOBAL_TAXONOMY: TaxonomyNode[] = [
     subs: leaves('School Uniforms', 'Classroom Furniture', 'Lab & Science Equipment', 'Sports & PE Equipment', 'Library Supplies', 'School Management Software', 'Madrasa Supplies (Rehal, Mushaf Sets)', 'Bulk & Wholesale Orders'),
   },
   {
-    name: 'Courses & Tutoring', icon: 'video', color: '#0077B6', allowedProductTypes: ['course', 'digital'], requiresListingReview: true,
+    // Kept the live name so the seed reuses the existing category instead of adding a second one.
+    name: 'Courses & Live Classes', icon: 'video', color: '#0077B6', allowedProductTypes: ['course', 'digital'], requiresListingReview: true,
     nameTranslations: { ar: 'الدورات والدروس', ur: 'کورسز و ٹیوشن' },
     description: 'Online Quran and Arabic classes, recorded courses, tutoring and teacher training.',
     subs: leaves('Online Quran Classes', 'Arabic Classes', 'School Subject Courses', 'Recorded Courses', 'Teacher Training & CPD', 'Workshops & Events'),
