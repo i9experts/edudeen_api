@@ -27,6 +27,19 @@ export class AcceptInviteDto {
   @IsString() @MinLength(20) @MaxLength(200) token: string;
 }
 
+/** Invitee has no account yet: sets a password and joins in one step. */
+export class AcceptNewAccountDto {
+  @IsString() @MinLength(20) @MaxLength(200) token: string;
+  @IsString() @MinLength(8) @MaxLength(72) password: string;
+  @IsOptional() @IsString() @MaxLength(80) name?: string;
+}
+
+/** Invitee already has an Edudeen account: signs in with the existing password and joins in one step. */
+export class AcceptExistingAccountDto {
+  @IsString() @MinLength(20) @MaxLength(200) token: string;
+  @IsString() @MinLength(1) @MaxLength(72) password: string;
+}
+
 export class SwitchStoreDto {
   @IsMongoId() storeId: string;
 }

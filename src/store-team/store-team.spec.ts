@@ -2,6 +2,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { createMemberAccessMiddleware } from './member-access.middleware';
 import { effectiveStorePermissions, memberRequirement } from './permissions';
+import { createHash } from 'crypto';
 import { StoreTeamService } from './store-team.service';
 
 describe('member permissions', () => {
@@ -102,11 +103,22 @@ function mkSvc(o: any = {}) {
   members.deleteOne = jest.fn();
   members.findOneAndUpdate = jest.fn(async (f: any, u: any) => { const r = rows.find(x => x._id === f._id && st(f.status, x.status)); if (!r) return null; Object.assign(r, u.$set); return { ...r, toObject: () => ({ ...r }) }; });
   members.updateOne = jest.fn();
+  const users: any[] = o.users ?? [];
+  const byEmail = (list: any[]) => (f: any) => Promise.resolve(list.find(u => f.email instanceof RegExp ? f.email.test(u.email) : u.email === f.email) ?? null);
+  const userModel: any = function (this: any, d: any) { Object.assign(this, d); this._id = 'u-new'; this.save = async () => { if (users.some(u => u.email === this.email)) throw Object.assign(new Error('dup'), { code: 11000 }); users.push(this); }; };
+  userModel.findOne = byEmail(users);
+  userModel.deleteOne = jest.fn(async () => { users.pop(); });
+  const sellers: any[] = o.sellers ?? [];
   const db: any = { repositories: {
     storeModel: { findOne: () => q(o.noStore ? null : store), findById: () => q(store), find: () => q([store]) },
-    sellerModel: { findById: () => q({ _id: 'own1', email: 'owner@x.com', tokenVersion: 4, status: 'active', ...o.seller }) },
+    sellerModel: { findById: () => q({ _id: 'own1', email: 'owner@x.com', tokenVersion: 4, status: 'active', ...o.seller }), findOne: byEmail(sellers) },
+    userModel,
   } };
-  const auth: any = { issueMemberSession: jest.fn().mockResolvedValue({ accessToken: 'tok', expiresInSeconds: 7200 }) };
+  const auth: any = {
+    issueMemberSession: jest.fn().mockResolvedValue({ accessToken: 'tok', expiresInSeconds: 7200 }),
+    issueSession: jest.fn().mockResolvedValue({ accessToken: 'acc', refreshToken: 'ref' }),
+    login: jest.fn(async () => { if (o.wrongPassword) throw new Error('Invalid email or password'); return { data: { user: { id: 'u1', name: 'Ali', email: 'ali@x.com', role: 'user', image: null }, token: { accessToken: 'acc', refreshToken: 'ref' } } }; }),
+  };
   const activity: any = { log: jest.fn().mockResolvedValue(o.logOk ?? true) };
   const notifications: any = { notify: jest.fn() };
   const email: any = { sendMail: jest.fn().mockResolvedValue(true) };
@@ -152,6 +164,65 @@ describe('StoreTeamService', () => {
     expect(t.rows[0]).toMatchObject({ status: 'active', userId: 'u1', inviteTokenHash: null });
     expect(t.notifications.notify).toHaveBeenCalledWith(expect.objectContaining({ recipientId: 'own1', type: 'store_member_joined' }));
     await expect(t.svc.accept({ userId: 'u1', email: 'ali@x.com', role: 'user' }, token)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  describe('joining straight from the invitation page', () => {
+    const TOKEN = 'T'.repeat(40);
+    const invited = () => [{ _id: 'm1', storeId: 'st1', email: 'ali@x.com', name: 'Ali', roleKey: 'manager', permissionsAdd: [], permissionsRemove: [], status: 'invited', inviteTokenHash: createHash('sha256').update(TOKEN).digest('hex'), inviteExpiresAt: new Date(Date.now() + 1e6) }];
+
+    it('inviteInfo tells the page which form to show (no account / account with password / social-only)', async () => {
+      expect(await mkSvc({ rows: invited() }).svc.inviteInfo(TOKEN)).toMatchObject({ hasAccount: false, hasPassword: false });
+      expect(await mkSvc({ rows: invited(), users: [{ _id: 'u1', email: 'ALI@x.com', password: 'hash', isVerified: true }] }).svc.inviteInfo(TOKEN)).toMatchObject({ hasAccount: true, hasPassword: true, accountVerified: true });
+      expect(await mkSvc({ rows: invited(), users: [{ _id: 'u1', email: 'ali@x.com', password: undefined, isVerified: true }] }).svc.inviteInfo(TOKEN)).toMatchObject({ hasAccount: true, hasPassword: false });
+    });
+
+    it('no account: creates a verified buyer account with a hashed password, joins the team and signs in', async () => {
+      const t = mkSvc({ rows: invited() });
+      const r: any = await t.svc.acceptWithNewPassword(TOKEN, 'Str0ng-pass', 'Ali Khan');
+      expect(r.token).toEqual({ accessToken: 'acc', refreshToken: 'ref' });
+      expect(r.user).toMatchObject({ email: 'ali@x.com', role: 'user' });
+      expect(t.rows[0]).toMatchObject({ status: 'active', inviteTokenHash: null });
+      expect(t.auth.issueSession).toHaveBeenCalledWith(expect.objectContaining({ email: 'ali@x.com', isVerified: true }));
+      const saved = t.auth.issueSession.mock.calls[0][0];
+      expect(saved.password).not.toBe('Str0ng-pass'); expect(saved.password).toMatch(/^\$2[aby]\$/);
+      expect(t.notifications.notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'store_member_joined' }));
+    });
+
+    it('new password must be 8-72 characters; an e-mail that already has an account is sent to the existing-password path; a bad token creates nothing', async () => {
+      const t = mkSvc({ rows: invited() });
+      await expect(t.svc.acceptWithNewPassword(TOKEN, 'short')).rejects.toBeInstanceOf(BadRequestException);
+      await expect(t.svc.acceptWithNewPassword(TOKEN, 'x'.repeat(73))).rejects.toBeInstanceOf(BadRequestException);
+      const dup = mkSvc({ rows: invited(), users: [{ _id: 'u1', email: 'ali@x.com', password: 'h', isVerified: true }] });
+      await expect(dup.svc.acceptWithNewPassword(TOKEN, 'Str0ng-pass')).rejects.toBeInstanceOf(ConflictException);
+      const bad = mkSvc({ rows: invited() });
+      await expect(bad.svc.acceptWithNewPassword('Z'.repeat(40), 'Str0ng-pass')).rejects.toBeInstanceOf(NotFoundException);
+      expect(bad.auth.issueSession).not.toHaveBeenCalled();
+    });
+
+    it('existing account: the usual password (no separate team password) joins and signs in through the normal login', async () => {
+      const t = mkSvc({ rows: invited(), users: [{ _id: 'u1', email: 'ali@x.com', role: 'user', password: 'hash', isVerified: true }] });
+      const r: any = await t.svc.acceptWithExistingPassword(TOKEN, 'MyUsualPass1', '1.2.3.4', 'UA');
+      expect(t.auth.login).toHaveBeenCalledWith(expect.objectContaining({ email: 'ali@x.com', password: 'MyUsualPass1', role: 'user' }), '1.2.3.4', 'UA');
+      expect(r.token.accessToken).toBe('acc'); expect(t.rows[0].status).toBe('active'); expect(t.rows[0].userId).toBe('u1');
+    });
+
+    it('existing account, wrong password: not joined, token stays valid, and 5 wrong tries lock that invitation (429)', async () => {
+      const kv = new Map<string, number>();
+      const redis: any = { isConnected: true, get: async (k: string) => (kv.has(k) ? String(kv.get(k)) : null), set: async () => {}, incrWithTtl: async (k: string) => { kv.set(k, (kv.get(k) ?? 0) + 1); return kv.get(k); } };
+      const t = mkSvc({ rows: invited(), users: [{ _id: 'u1', email: 'ali@x.com', role: 'user', password: 'hash', isVerified: true }], wrongPassword: true, redis });
+      for (let i = 0; i < 5; i++) await expect(t.svc.acceptWithExistingPassword(TOKEN, 'nope')).rejects.toThrow('Invalid email or password');
+      expect(t.rows[0].status).toBe('invited');
+      await expect(t.svc.acceptWithExistingPassword(TOKEN, 'nope')).rejects.toMatchObject({ status: 429 });
+      expect(t.auth.login).toHaveBeenCalledTimes(5);
+    });
+
+    it('existing account that has no password (Google), no account at all, or the store owner is refused', async () => {
+      const social = mkSvc({ rows: invited(), users: [{ _id: 'u1', email: 'ali@x.com', role: 'user', password: undefined, isVerified: true }] });
+      await expect(social.svc.acceptWithExistingPassword(TOKEN, 'x')).rejects.toBeInstanceOf(BadRequestException);
+      await expect(mkSvc({ rows: invited() }).svc.acceptWithExistingPassword(TOKEN, 'x')).rejects.toBeInstanceOf(NotFoundException);
+      const ownerAcc = mkSvc({ rows: invited(), store: { sellerId: 'u1' }, users: [{ _id: 'u1', email: 'ali@x.com', role: 'user', password: 'h', isVerified: true }] });
+      await expect(ownerAcc.svc.acceptWithExistingPassword(TOKEN, 'x')).rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 
   it('switchTo: active member gets a store token; no audit entry = no token; suspended / expired / not a member refused', async () => {

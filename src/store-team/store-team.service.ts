@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, Optional, ServiceUnavailableException } from '@nestjs/common';
+import * as bcrypt from 'bcrypt';
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, Logger, NotFoundException, Optional, ServiceUnavailableException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { createHash, randomBytes } from 'crypto';
@@ -196,22 +197,102 @@ export class StoreTeamService {
     if (!row) throw new NotFoundException('This invitation is not valid any more');
     const store: any = await this.db.repositories.storeModel.findOne({ _id: row.storeId, isDelete: false }).select('name').lean();
     if (!store) throw new NotFoundException('This invitation is not valid any more');
-    return { storeName: store.name, roleName: roleTemplate(row.roleKey)?.name ?? row.roleKey, emailHint: maskEmail(row.email), expiresAt: row.inviteExpiresAt };
+    // The page needs to know which form to show: set a password (no account yet) or use the existing password. Only the
+    // holder of the e-mailed token can ask, and only these two booleans are revealed.
+    const acc = await this.findAccountByEmail(row.email);
+    return {
+      storeName: store.name, roleName: roleTemplate(row.roleKey)?.name ?? row.roleKey, emailHint: maskEmail(row.email), expiresAt: row.inviteExpiresAt,
+      hasAccount: !!acc, hasPassword: !!acc?.password, accountVerified: acc ? acc.isVerified === true : null,
+    };
+  }
+
+  /** Existing Edudeen account with this e-mail (buyer first, then seller), matched case-insensitively. */
+  private async findAccountByEmail(email: string): Promise<any | null> {
+    const re = new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+    const { userModel, sellerModel } = this.db.repositories;
+    const buyer: any = await userModel.findOne({ email: re, isDelete: { $ne: true } });
+    if (buyer) return buyer;
+    return (await sellerModel.findOne({ email: re, isDelete: { $ne: true } })) ?? null;
+  }
+
+  private async loadInvite(token: string) {
+    const hash = sha(String(token));
+    const row: any = await this.members.findOne({ inviteTokenHash: hash, status: 'invited', inviteExpiresAt: { $gt: new Date() } }).lean();
+    if (!row) throw new NotFoundException('This invitation is not valid any more');
+    const store: any = await this.db.repositories.storeModel.findOne({ _id: row.storeId, isDelete: false }).select('name sellerId status').lean();
+    if (!store || store.status === 'suspended' || store.status === 'rejected') throw new NotFoundException('This invitation is not valid any more');
+    return { row, store, hash };
   }
 
   /** Single use: the signed-in account must have the SAME e-mail the invitation was sent to. */
   async accept(caller: Caller, token: string) {
     if (caller.actAs) throw new ForbiddenException('Not available in this session');
-    const hash = sha(String(token));
-    const row: any = await this.members.findOne({ inviteTokenHash: hash, status: 'invited', inviteExpiresAt: { $gt: new Date() } }).lean();
-    if (!row) throw new NotFoundException('This invitation is not valid any more');
+    const { row, store, hash } = await this.loadInvite(token);
     if (lower(caller.email) !== row.email) throw new ForbiddenException(`This invitation was sent to ${maskEmail(row.email)}. Sign in with that e-mail address.`);
-    const store: any = await this.db.repositories.storeModel.findOne({ _id: row.storeId, isDelete: false }).select('name sellerId status').lean();
-    if (!store || store.status === 'suspended' || store.status === 'rejected') throw new NotFoundException('This invitation is not valid any more');
-    if (String(store.sellerId) === caller.userId) throw new BadRequestException('You already own this store');
+    return this.finalizeAccept(row, store, hash, caller.userId);
+  }
+
+  private static readonly INVITE_FAIL_LIMIT = 5;
+  private static readonly INVITE_FAIL_TTL = 15 * 60;
+
+  /**
+   * No account yet: the invitation e-mail proves the mailbox, so the person just chooses a password here. Creates a normal
+   * buyer account (verified, same e-mail), joins the team in the same step and signs them in.
+   */
+  async acceptWithNewPassword(token: string, password: string, nameInput?: string) {
+    if (typeof password !== 'string' || password.length < 8 || password.length > 72) throw new BadRequestException('Password must be between 8 and 72 characters');
+    const { row, store, hash } = await this.loadInvite(token);
+    if (await this.findAccountByEmail(row.email)) throw new ConflictException('An account with this e-mail already exists. Sign in with your existing password instead.');
+    const name = (nameInput ?? row.name ?? '').trim().slice(0, 80) || row.email.split('@')[0];
+    const { userModel } = this.db.repositories;
+    let user: any;
+    try {
+      user = new userModel({ email: row.email, role: 'user' });
+      Object.assign(user, { name, password: await bcrypt.hash(password, 10), isVerified: true, status: 'active' });
+      await user.save();
+    } catch (e: any) {
+      if (e?.code === 11000) throw new ConflictException('An account with this e-mail already exists. Sign in with your existing password instead.');
+      throw e;
+    }
+    let joined;
+    try { joined = await this.finalizeAccept(row, store, hash, String(user._id)); }
+    catch (e) { await userModel.deleteOne({ _id: user._id }).catch(() => undefined); throw e; }
+    const { accessToken, refreshToken } = await this.auth.issueSession(user);
+    return { ...joined, user: { id: user._id, name: user.name, email: user.email, role: 'user', image: null }, token: { accessToken, refreshToken } };
+  }
+
+  /**
+   * The e-mail already has an Edudeen account: the person signs in HERE with their existing password (no separate password for
+   * the team). Uses the normal login (verified / suspended / deleted checks), plus a per-invitation cap on wrong passwords.
+   */
+  async acceptWithExistingPassword(token: string, password: string, ip?: string, userAgent?: string) {
+    if (typeof password !== 'string' || !password || password.length > 72) throw new BadRequestException('Enter your password');
+    const { row, store, hash } = await this.loadInvite(token);
+    const acc = await this.findAccountByEmail(row.email);
+    if (!acc) throw new NotFoundException('No account found for this invitation. Create your password instead.');
+    if (!acc.password) throw new BadRequestException('This account signs in with Google or another method. Use Sign in below.');
+    if (String(store.sellerId) === String(acc._id)) throw new BadRequestException('You already own this store');
+    const failKey = `store-invite-fail:${hash}`;
+    if (this.redis?.isConnected) {
+      const n = Number((await this.redis.get(failKey).catch(() => null)) ?? 0);
+      if (n >= StoreTeamService.INVITE_FAIL_LIMIT) throw new HttpException('Too many wrong passwords for this invitation. Try again in 15 minutes.', 429);
+    }
+    let login: any;
+    try {
+      login = await this.auth.login({ email: acc.email, password, role: acc.role === 'seller' ? 'seller' : 'user' } as any, ip, userAgent);
+    } catch (e) {
+      if (this.redis?.isConnected) { try { await this.redis.incrWithTtl(failKey, StoreTeamService.INVITE_FAIL_TTL); } catch { /* ignore */ } }
+      throw e;
+    }
+    const joined = await this.finalizeAccept(row, store, hash, String(acc._id));
+    return { ...joined, user: login.data.user, token: login.data.token };
+  }
+
+  private async finalizeAccept(row: any, store: any, hash: string, userId: string) {
+    if (String(store.sellerId) === userId) throw new BadRequestException('You already own this store');
     const done: any = await this.members.findOneAndUpdate(
       { _id: row._id, status: 'invited', inviteTokenHash: hash },
-      { $set: { status: 'active', userId: caller.userId, acceptedAt: new Date(), inviteTokenHash: null, inviteExpiresAt: null } },
+      { $set: { status: 'active', userId, acceptedAt: new Date(), inviteTokenHash: null, inviteExpiresAt: null } },
       { new: true },
     );
     if (!done) throw new NotFoundException('This invitation was already used');

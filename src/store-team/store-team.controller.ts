@@ -7,7 +7,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { ParseObjectIdPipe } from '../common/parse-object-id.pipe';
 import { StoreTeamService } from './store-team.service';
-import { AcceptInviteDto, InviteMemberDto, SwitchStoreDto, UpdateMemberDto } from './dto/store-team.dto';
+import { AcceptExistingAccountDto, AcceptInviteDto, AcceptNewAccountDto, InviteMemberDto, SwitchStoreDto, UpdateMemberDto } from './dto/store-team.dto';
 
 @ApiTags('Store team')
 @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
@@ -25,6 +25,20 @@ export class StoreTeamController {
   @Get('invite/:token')
   async inviteInfo(@Param('token') token: string) {
     return { success: true, data: await this.team.inviteInfo(token) };
+  }
+
+  /** Public (the e-mailed token is the proof): no account yet -> choose a password, join and sign in. */
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('accept-new')
+  async acceptNew(@Body() dto: AcceptNewAccountDto) {
+    return { success: true, data: await this.team.acceptWithNewPassword(dto.token, dto.password, dto.name) };
+  }
+
+  /** Public: the e-mail already has an account -> sign in with the EXISTING password, join and sign in. */
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('accept-existing')
+  async acceptExisting(@Req() req: any, @Body() dto: AcceptExistingAccountDto) {
+    return { success: true, data: await this.team.acceptWithExistingPassword(dto.token, dto.password, req.ip, req.headers?.['user-agent']) };
   }
 
   @ApiBearerAuth()
