@@ -12,15 +12,23 @@ import { CATEGORY_REQUEST_TYPES, CategoryRequest, CategoryRequestDocument } from
 
 export const MAX_PENDING_REQUESTS_PER_STORE = 3;
 
-export interface RequestInput { type?: unknown; name?: unknown; reason?: unknown; exampleProduct?: unknown; categoryId?: unknown }
+export interface RequestInput {
+  type?: unknown; name?: unknown; reason?: unknown; exampleProduct?: unknown; categoryId?: unknown;
+  requestedCategoryId?: unknown;
+}
 
 const str = (v: unknown) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '');
 
+const requestKindLabel = (type: string) =>
+  type === 'main_change' ? 'a main category change' : type === 'extra_category' ? 'an additional category' : 'a subcategory';
+
 /** Pure validation of the seller's form. `categoryId` (which of the store's own categories a new
- *  subcategory nests under) is checked against the store's actual list in `create()`, not here. */
+ *  subcategory nests under) and `requestedCategoryId` (the real category an `extra_category` request
+ *  names) are both checked against real data in `create()`, not here. For `extra_category` the client
+ *  sends the picked category's own name as `name`, so the length check below still applies as-is. */
 export function cleanRequestInput(body: RequestInput) {
   const type = String(body?.type ?? 'subcategory');
-  if (!(CATEGORY_REQUEST_TYPES as readonly string[]).includes(type)) throw new BadRequestException('type must be subcategory or main_change');
+  if (!(CATEGORY_REQUEST_TYPES as readonly string[]).includes(type)) throw new BadRequestException('type must be subcategory, main_change or extra_category');
   const name = str(body?.name);
   if (name.length < 2 || name.length > 50) throw new BadRequestException('Name must be 2 to 50 characters.');
   const reason = str(body?.reason);
@@ -28,7 +36,8 @@ export function cleanRequestInput(body: RequestInput) {
   const exampleProduct = str(body?.exampleProduct);
   if (exampleProduct.length < 2 || exampleProduct.length > 120) throw new BadRequestException('Add one example product (2 to 120 characters).');
   const categoryId = body?.categoryId ? str(body.categoryId) : null;
-  return { type, name, reason, exampleProduct, categoryId };
+  const requestedCategoryId = body?.requestedCategoryId ? str(body.requestedCategoryId) : null;
+  return { type, name, reason, exampleProduct, categoryId, requestedCategoryId };
 }
 
 @Injectable()
@@ -65,14 +74,33 @@ export class CategoryRequestsService {
       }
       mainCategoryId = input.categoryId;
     }
+    // Asking for a category the store doesn't already have — the only way past MAX_STORE_CATEGORIES.
+    // `name` is overwritten with the real category's own name (never seller-typed) so the rest of the
+    // pipeline — dup check, activity log, admin/seller display — needs no special casing.
+    let name = input.name;
+    let requestedCategoryId: string | null = null;
+    if (input.type === 'extra_category') {
+      if (!input.requestedCategoryId || !isValidObjectId(input.requestedCategoryId)) {
+        throw new BadRequestException('Pick which category you want to add');
+      }
+      if (storeCategoryIds.includes(input.requestedCategoryId)) {
+        throw new BadRequestException('Your store already sells in this category');
+      }
+      const category: any = await this.databaseService.repositories.categoryModel
+        .findOne({ _id: input.requestedCategoryId, status: 'active', isDelete: false }).select('_id parentId name').lean();
+      if (!category) throw new BadRequestException('Selected category not found');
+      if (category.parentId) throw new BadRequestException('You can only request a main category, not a subcategory');
+      requestedCategoryId = input.requestedCategoryId;
+      name = category.name;
+    }
     const pendingFilter = { storeId, status: 'pending' };
     const pending = await this.requests.countDocuments(pendingFilter);
     const limitMsg = `You already have ${MAX_PENDING_REQUESTS_PER_STORE} requests waiting for review. Wait for Edudeen to answer one before sending another.`;
     if (pending >= MAX_PENDING_REQUESTS_PER_STORE) throw new BadRequestException(limitMsg);
-    const dup = await this.requests.exists({ ...pendingFilter, type: input.type, name: new RegExp(`^${input.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+    const dup = await this.requests.exists({ ...pendingFilter, type: input.type, name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
     if (dup) throw new BadRequestException('You already have a pending request with this name.');
-    const { type, name, reason, exampleProduct } = input;
-    const doc = await this.requests.create({ storeId, sellerId, type, name, reason, exampleProduct, mainCategoryId });
+    const { reason, exampleProduct } = input;
+    const doc = await this.requests.create({ storeId, sellerId, type: input.type, name, reason, exampleProduct, mainCategoryId, requestedCategoryId });
     // Two quick clicks can both pass the count above; re-check after insert and withdraw the extra one.
     // Only withdraw THIS one if it is not among the oldest N pending (ordered by _id): parallel requests then
     // keep exactly N instead of all deleting themselves.
@@ -82,7 +110,7 @@ export class CategoryRequestsService {
       throw new BadRequestException(limitMsg);
     }
     void this.activityLog.log({
-      storeId, category: 'settings', action: 'category_request_created', description: `Requested ${input.type === 'main_change' ? 'a main category change' : 'a subcategory'}: ${input.name}`,
+      storeId, category: 'settings', action: 'category_request_created', description: `Requested ${requestKindLabel(input.type)}: ${name}`,
       actorId: sellerId, actorRole: 'seller', targetId: String(doc._id), targetType: 'category_request',
     });
     return { success: true, data: this.view(doc.toObject()) };
@@ -98,6 +126,7 @@ export class CategoryRequestsService {
     return {
       _id: String(r._id), storeId: r.storeId, type: r.type, name: r.name, reason: r.reason, exampleProduct: r.exampleProduct,
       status: r.status, adminNote: r.adminNote ?? null, reviewedAt: r.reviewedAt ?? null, createdAt: r.createdAt,
+      requestedCategoryId: r.requestedCategoryId ?? null,
     };
   }
 
@@ -128,7 +157,9 @@ export class CategoryRequestsService {
   /**
    * Approve / reject. Status-guarded (only `pending` can change) so two admins cannot both decide.
    * Approving a `subcategory` request creates it under the store's main category (reusing one with the same name),
-   * so the seller can use it straight away. A `main_change` is still applied by the admin by hand.
+   * so the seller can use it straight away. Approving an `extra_category` request pushes that category straight
+   * onto the store's `categoryIds`, past MAX_STORE_CATEGORIES — that override is the whole point of asking.
+   * A `main_change` is still applied by the admin by hand.
    */
   async decide(id: string, status: 'approved' | 'rejected', note: unknown, meta: { adminId: string; ip?: string; userAgent?: string }) {
     if (!isValidObjectId(id)) throw new BadRequestException('Invalid request id');
@@ -165,17 +196,31 @@ export class CategoryRequestsService {
         this.logger.warn(`Approved category request ${String(row._id)} but could not create "${row.name}": ${e?.message ?? e}`);
       }
     }
-    const kind = row.type === 'main_change' ? 'main category change' : 'subcategory';
+    let appliedCategoryId: string | null = null;
+    if (status === 'approved' && row.type === 'extra_category' && row.requestedCategoryId) {
+      const store: any = await this.databaseService.repositories.storeModel.findOne({ _id: row.storeId }).select('categoryId categoryIds').lean();
+      const current: string[] = store?.categoryIds?.length ? store.categoryIds : (store?.categoryId ? [String(store.categoryId)] : []);
+      if (store && !current.includes(String(row.requestedCategoryId))) {
+        const next = [...current, String(row.requestedCategoryId)];
+        await this.databaseService.repositories.storeModel.updateOne({ _id: row.storeId }, { $set: { categoryIds: next, categoryId: next[0] } });
+      }
+      appliedCategoryId = String(row.requestedCategoryId);
+    }
+    const kind = requestKindLabel(row.type).replace(/^an? /, '');
     const title = status === 'approved' ? `Your ${kind} request was approved` : `Your ${kind} request was not approved`;
     const bodyText = status === 'approved'
-      ? `"${row.name}" was approved.${adminNote ? ` Note from Edudeen: ${adminNote}` : ''} ${createdCategoryId ? 'You can now choose it for your products.' : 'It will appear in your category list once the Edudeen team has added it.'}`
+      ? `"${row.name}" was approved.${adminNote ? ` Note from Edudeen: ${adminNote}` : ''} ${
+          appliedCategoryId ? 'It has been added to your store — you can now choose it for your products.'
+          : createdCategoryId ? 'You can now choose it for your products.'
+          : 'It will appear in your category list once the Edudeen team has added it.'
+        }`
       : `"${row.name}" was not approved. Reason: ${adminNote}`;
     void this.notifications.notify({
       recipientId: String(row.sellerId), recipientRole: 'seller',
       type: status === 'approved' ? NOTIFICATION_TYPES.CATEGORY_REQUEST_APPROVED : NOTIFICATION_TYPES.CATEGORY_REQUEST_REJECTED,
       title, body: bodyText, data: { storeId: row.storeId, link: `/store/${row.storeId}/categories` },
     });
-    return { success: true, data: { ...this.view(row), createdCategoryId } };
+    return { success: true, data: { ...this.view(row), createdCategoryId, appliedCategoryId } };
   }
 
   // ── Seller: product counts per category (same filter as the Products page) ─────────────

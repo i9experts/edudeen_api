@@ -5,7 +5,7 @@ import { CategoryRequestsService, MAX_PENDING_REQUESTS_PER_STORE, buildStoreUsag
 const OID = (n: number) => `64b0000000000000000000${String(n).padStart(2, '0')}`;
 const SELLER = OID(1), OTHER = OID(2), STORE = OID(10);
 
-function setup(opts: { logOk?: boolean; store?: Record<string, unknown> } = {}) {
+function setup(opts: { logOk?: boolean; store?: Record<string, unknown>; categories?: Record<string, Record<string, unknown>> } = {}) {
   const docs: any[] = [];
   const model: any = {
     docs,
@@ -26,11 +26,42 @@ function setup(opts: { logOk?: boolean; store?: Record<string, unknown> } = {}) 
     }),
     findOneAndUpdate: jest.fn((q: any, u: any) => ({ lean: async () => { const d = docs.find((x) => String(x._id) === String(q._id) && x.status === q.status); if (!d) return null; Object.assign(d, u.$set); return { ...d }; } })),
   };
-  const storeModel = { findOne: jest.fn((q: any) => ({ select: () => ({ lean: async () => (q.sellerId === SELLER && q._id === STORE ? { _id: STORE, categoryId: OID(5), ...opts.store } : null) }) })) };
+  // Mutable, so `decide()`'s approval write (storeModel.updateOne) is visible to a later findOne in the same test.
+  const storeState: any = { _id: STORE, categoryId: OID(5), ...opts.store };
+  const storeModel = {
+    findOne: jest.fn((q: any) => ({
+      select: () => ({
+        lean: async () => {
+          // ownedStore() filters by sellerId (seller-side); decide()'s own lookup doesn't (admin-side).
+          if ('sellerId' in q) return q.sellerId === SELLER && q._id === STORE ? { ...storeState } : null;
+          return q._id === STORE ? { ...storeState } : null;
+        },
+      }),
+    })),
+    updateOne: jest.fn(async (q: any, u: any) => { if (q._id === STORE && u.$set) Object.assign(storeState, u.$set); return {}; }),
+  };
+  const categoriesById: Record<string, any> = {
+    [OID(6)]: { _id: OID(6), name: 'Islamic Studies', parentId: null, status: 'active' },
+    [OID(7)]: { _id: OID(7), name: 'Computer Science', parentId: null, status: 'active' },
+    ...opts.categories,
+  };
+  const categoryModel = {
+    findOne: jest.fn((q: any) => ({
+      select: () => ({
+        lean: async () => {
+          const c = categoriesById[q._id];
+          if (!c) return null;
+          if (q.status && c.status !== q.status) return null;
+          if (q.isDelete === false && c.isDelete) return null;
+          return c;
+        },
+      }),
+    })),
+  };
   const activityLog = { log: jest.fn(async () => opts.logOk !== false) };
   const notifications = { notify: jest.fn(async () => undefined) };
-  const svc = new CategoryRequestsService(model, { repositories: { storeModel } } as any, activityLog as any, notifications as any);
-  return { svc, model, activityLog, notifications };
+  const svc = new CategoryRequestsService(model, { repositories: { storeModel, categoryModel } } as any, activityLog as any, notifications as any);
+  return { svc, model, activityLog, notifications, storeState };
 }
 const body = (name: string) => ({ storeId: STORE, type: 'subcategory', name, reason: 'Many buyers search for this topic', exampleProduct: 'Tajweed workbook' });
 
@@ -142,6 +173,66 @@ describe('category requests: admin decision', () => {
     const { data } = await svc.create(SELLER, STORE, body('Nazra'));
     await expect(svc.decide(data._id, 'approved', '', meta)).rejects.toThrow(ConflictException);
     expect(model.updateOne).toHaveBeenCalled();
+  });
+});
+
+describe('category requests: extra_category (an additional main category, past the cap)', () => {
+  const CAT_A = OID(6), CAT_B = OID(7); // 'Islamic Studies', 'Computer Science' in the default categoriesById
+  const extraBody = (requestedCategoryId: string) => ({
+    storeId: STORE, type: 'extra_category', name: 'placeholder',
+    reason: 'Expanding into a new subject our buyers keep asking for', exampleProduct: 'New course bundle',
+    requestedCategoryId,
+  });
+
+  it('requires a requestedCategoryId', async () => {
+    const { svc } = setup();
+    const noRequestedCategoryId = { storeId: STORE, type: 'extra_category', name: 'placeholder', reason: 'Expanding into a new subject our buyers keep asking for', exampleProduct: 'New course bundle' };
+    await expect(svc.create(SELLER, STORE, noRequestedCategoryId)).rejects.toThrow(/Pick which category/);
+  });
+  it('rejects a category the store already has', async () => {
+    const { svc } = setup({ store: { categoryIds: [CAT_A] } });
+    await expect(svc.create(SELLER, STORE, extraBody(CAT_A))).rejects.toThrow(/already sells in this category/);
+  });
+  it('rejects an unknown category id', async () => {
+    const { svc } = setup();
+    await expect(svc.create(SELLER, STORE, extraBody(OID(98)))).rejects.toThrow(/Selected category not found/);
+  });
+  it('rejects a subcategory (not a main category)', async () => {
+    const { svc } = setup({ categories: { [OID(8)]: { _id: OID(8), name: 'Tajweed', parentId: CAT_A, status: 'active' } } });
+    await expect(svc.create(SELLER, STORE, extraBody(OID(8)))).rejects.toThrow(/only request a main category/);
+  });
+  it('resolves the request name from the real category, ignoring whatever was typed', async () => {
+    const { svc, model } = setup();
+    await svc.create(SELLER, STORE, extraBody(CAT_A));
+    expect(model.docs[0].name).toBe('Islamic Studies');
+    expect(model.docs[0].requestedCategoryId).toBe(CAT_A);
+  });
+
+  describe('approval', () => {
+    const meta = { adminId: OID(99) };
+    it('pushes the category onto the store past MAX_STORE_CATEGORIES and keeps categoryId in sync', async () => {
+      const { svc, storeState, notifications } = setup({ store: { categoryIds: [OID(20), OID(21), OID(22)] } });
+      const { data } = await svc.create(SELLER, STORE, extraBody(CAT_A));
+      const r: any = await svc.decide(data._id, 'approved', '', meta);
+      expect(r.data.appliedCategoryId).toBe(CAT_A);
+      expect(storeState.categoryIds).toEqual([OID(20), OID(21), OID(22), CAT_A]);
+      expect(storeState.categoryId).toBe(OID(20));
+      expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({ body: expect.stringContaining('added to your store') }));
+    });
+    it('does not duplicate if the store already has the category by the time of approval', async () => {
+      const { svc, storeState } = setup({ store: { categoryIds: [CAT_B] } });
+      const { data } = await svc.create(SELLER, STORE, extraBody(CAT_A));
+      storeState.categoryIds = [CAT_B, CAT_A]; // e.g. an admin already added it by hand before deciding
+      const r: any = await svc.decide(data._id, 'approved', '', meta);
+      expect(r.data.appliedCategoryId).toBe(CAT_A);
+      expect(storeState.categoryIds).toEqual([CAT_B, CAT_A]);
+    });
+    it('a rejected request never touches the store', async () => {
+      const { svc, storeState } = setup({ store: { categoryIds: [CAT_B] } });
+      const { data } = await svc.create(SELLER, STORE, extraBody(CAT_A));
+      await svc.decide(data._id, 'rejected', 'Not enough demand for this yet', meta);
+      expect(storeState.categoryIds).toEqual([CAT_B]);
+    });
   });
 });
 
