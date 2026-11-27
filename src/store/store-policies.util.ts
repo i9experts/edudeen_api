@@ -42,7 +42,34 @@ export function cleanFaqs(v: unknown): Array<{ q: string; a: string }> {
   return out;
 }
 
-const YT_ID = /^[A-Za-z0-9_-]{11}$/;
+export const SERIES_MAX_ITEMS = 30;
+export const SERIES_NAME_MAX = 80;
+
+/**
+ * The seller's list of product series names (picked from a dropdown when adding a product).
+ * null / [] clears; blank rows are dropped; names are plain text, max 80, unique ignoring case, max 30.
+ */
+export function cleanProductSeries(v: unknown): string[] {
+  if (v === null) return [];
+  if (!Array.isArray(v)) throw new BadRequestException('productSeries must be a list');
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const row of v) {
+    if (typeof row !== 'string') throw new BadRequestException('Each series name must be text');
+    if (row.length > SERIES_NAME_MAX * 2) throw new BadRequestException(`A series name can be at most ${SERIES_NAME_MAX} characters`);
+    const name = cleanPlainText(row);
+    if (!name) continue;
+    if (name.length > SERIES_NAME_MAX) throw new BadRequestException(`A series name can be at most ${SERIES_NAME_MAX} characters`);
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+  }
+  if (out.length > SERIES_MAX_ITEMS) throw new BadRequestException(`You can add at most ${SERIES_MAX_ITEMS} series`);
+  return out;
+}
+
+const YT_ID =/^[A-Za-z0-9_-]{11}$/;
 const YT_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtube-nocookie.com', 'www.youtube-nocookie.com']);
 
 /**

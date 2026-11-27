@@ -37,7 +37,7 @@ import { CollectionsService } from '../collections/collections.service';
 import { featuredStoreFilter, featuredScore, selectFeatured } from './featured-stores.util';
 import { publicTrust, TRUST_MIN_SAMPLES } from '../messaging/response-stats.util';
 import { parseCatalogParams, classFacetCounts } from './store-catalog-query.util';
-import { cleanFaqs, cleanShippingNote } from './store-policies.util';
+import { cleanFaqs, cleanProductSeries, cleanShippingNote } from './store-policies.util';
 import { cleanHolidayInput, holidayActive, holidayDateLabel, publicHoliday } from './store-holiday.util';
 import { RealtimeService } from 'src/realtime/realtime.service';
 import { cleanEducatorProfile, cleanStoreContactEmail, cleanStoreContactPhone, cleanStoreProfileText } from './store-page.util';
@@ -771,6 +771,7 @@ export class StoreService {
     // Seller shipping note + FAQ for the public store page (plain text; platform rules are unaffected).
     if (body.shippingNote !== undefined) updateData.shippingNote = cleanShippingNote(body.shippingNote);
     if (body.faqs !== undefined) updateData.faqs = cleanFaqs(body.faqs);
+    if (body.productSeries !== undefined) updateData.productSeries = cleanProductSeries(body.productSeries);
 
     // Seller-stated return policy (advisory; shown on product pages).
     if (body.returnPolicy !== undefined) {

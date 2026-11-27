@@ -607,6 +607,10 @@ export class Store {
   @Prop({ type: String, default: null })
   shippingNote: string | null;
 
+  // Seller's own product series names (max 30). Offered as a dropdown in the product form; products keep their own `series` text.
+  @Prop({ type: [String], default: [] })
+  productSeries: string[];
+
   // Seller FAQ shown on the public store page (max 8, ordered).
   @Prop({ type: [Object], default: [] })
   faqs: Array<{ q: string; a: string }>;
