@@ -194,7 +194,7 @@ export class MessagingService {
         .sort({ createdAt: -1 }).limit(500).lean(),
       R.userModel.findById(buyerId).select('createdAt').lean(),
       conv.contextProductId
-        ? R.productModel.findOne({ _id: conv.contextProductId, storeId, isDelete: false }).select('name slug images status').lean()
+        ? R.productModel.findOne({ _id: conv.contextProductId, storeId, isDelete: false }).select('name slug images imageFit status').lean()
         : null,
     ]);
 

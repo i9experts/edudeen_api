@@ -242,7 +242,7 @@ export class CartService {
       const products = productIds.length
         ? await this.databaseService.repositories.productModel
             .find({ _id: { $in: productIds } })
-            .select('images sellerId status isDelete storeId type deliveryFormat premiumDiscountPercent premiumOptOut campaignIds')
+            .select('images imageFit sellerId status isDelete storeId type deliveryFormat premiumDiscountPercent premiumOptOut campaignIds')
             .lean()
         : [];
       const productById = new Map(
@@ -324,6 +324,7 @@ export class CartService {
           sellerVerified: seller ? !!seller.isVerified : false,
 
           image: images,
+          imageFit: product?.imageFit === 'contain' ? 'contain' : 'cover',
           options: (item as any).options ?? [],
 
           currency: (item as any).currency ?? null,

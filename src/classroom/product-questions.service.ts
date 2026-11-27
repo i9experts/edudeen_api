@@ -84,7 +84,7 @@ export class ProductQuestionsService {
     else if (status === 'hidden') filter.hidden = true;
     const rows = await this.questionModel.find(filter).sort({ createdAt: -1 }).limit(200).lean();
     const ids = [...new Set(rows.map(r => r.productId))].filter(id => isValidObjectId(id));
-    const products = await this.databaseService.repositories.productModel.find({ _id: { $in: ids } }).select('_id name slug images').lean();
+    const products = await this.databaseService.repositories.productModel.find({ _id: { $in: ids } }).select('_id name slug images imageFit').lean();
     const byId = new Map(products.map((p: any) => [String(p._id), p]));
     const unanswered = await this.questionModel.countDocuments({ storeId, answeredAt: null, hidden: false });
     return {

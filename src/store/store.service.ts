@@ -1223,7 +1223,7 @@ export class StoreService {
               count: { $sum: 1 },
               sold: { $sum: { $ifNull: ['$purchaseCount', 0] } },
               last: { $max: '$createdAt' },
-              tops: { $push: { $cond: [{ $gt: [{ $size: { $ifNull: ['$images', []] } }, 0] }, { id: { $toString: '$_id' }, name: '$name', image: { $arrayElemAt: ['$images', 0] }, coverStyle: '$coverStyle' }, '$$REMOVE'] } },
+              tops: { $push: { $cond: [{ $gt: [{ $size: { $ifNull: ['$images', []] } }, 0] }, { id: { $toString: '$_id' }, name: '$name', image: { $arrayElemAt: ['$images', 0] }, coverStyle: '$coverStyle', imageFit: '$imageFit' }, '$$REMOVE'] } },
             },
           },
           { $project: { count: 1, sold: 1, last: 1, tops: { $slice: ['$tops', 3] } } },
@@ -1242,7 +1242,7 @@ export class StoreService {
       };
       return {
         ...signals, store: s, storeId, score: featuredScore(signals),
-        topProducts: (r?.tops ?? []) as Array<{ id: string; name: string; image: string; coverStyle: string | null }>,
+        topProducts: (r?.tops ?? []) as Array<{ id: string; name: string; image: string; coverStyle: string | null; imageFit?: string | null }>,
       };
     });
   }

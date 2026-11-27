@@ -268,6 +268,11 @@ export class Product {
   @Prop({ type: [String], default: [] })
   images: string[];
 
+  // How photos sit in square tiles: 'cover' fills the tile (crops edges), 'contain' shows the whole photo
+  // (letterboxed), for landscape/square shots such as page spreads.
+  @Prop({ type: String, enum: ['cover', 'contain'], default: 'cover' })
+  imageFit: 'cover' | 'contain';
+
   // Optional product video: { url, posterUrl, frontFirst }. Cards always show a picture; the product page gallery plays it.
   @Prop({ type: Object, default: null })
   video: { url: string; posterUrl: string | null; frontFirst: boolean } | null;

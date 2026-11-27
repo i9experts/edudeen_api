@@ -86,6 +86,7 @@ export interface LearningMeta {
   author?: string | null; publisher?: string | null; edition?: string | null;
   pages?: number | null; isbn?: string | null; binding?: (typeof BOOK_BINDINGS)[number] | null;
   series?: string | null; seriesOrder?: number | null;
+  imageFit?: 'cover' | 'contain';
 }
 
 export function cleanLearningMeta(body: Record<string, unknown>): LearningMeta {
@@ -170,6 +171,12 @@ export function cleanLearningMeta(body: Record<string, unknown>): LearningMeta {
       throw new BadRequestException('coverStyle must be "book" or "flat"');
     }
     out.coverStyle = body.coverStyle as 'book' | 'flat' | null;
+  }
+  if (body.imageFit !== undefined) {
+    if (body.imageFit !== null && body.imageFit !== 'cover' && body.imageFit !== 'contain') {
+      throw new BadRequestException('imageFit must be "cover" or "contain"');
+    }
+    out.imageFit = body.imageFit === 'contain' ? 'contain' : 'cover';
   }
   return out;
 }

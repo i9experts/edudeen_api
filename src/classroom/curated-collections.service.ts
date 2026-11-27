@@ -126,7 +126,7 @@ export class CuratedCollectionsService {
     const c = await this.model.findById(id).lean();
     if (!c) throw new NotFoundException('Collection not found');
     const products = c.productIds.length
-      ? await this.databaseService.repositories.productModel.find({ _id: { $in: c.productIds } }).select('_id name slug images status').lean()
+      ? await this.databaseService.repositories.productModel.find({ _id: { $in: c.productIds } }).select('_id name slug images imageFit status').lean()
       : [];
     const byId = new Map(products.map((p: any) => [String(p._id), p]));
     return { success: true, data: { ...c, products: c.productIds.map(id => byId.get(id)).filter(Boolean) } };
@@ -167,7 +167,7 @@ export class CuratedCollectionsService {
     const term = str(q, 60);
     if (term.length < 2) return { success: true, data: [] };
     const rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    const rows = await this.databaseService.repositories.productModel.find({ status: 'active', isDelete: false, isTest: { $ne: true }, name: rx }).select('_id name slug images storeId').limit(20).lean();
+    const rows = await this.databaseService.repositories.productModel.find({ status: 'active', isDelete: false, isTest: { $ne: true }, name: rx }).select('_id name slug images imageFit storeId').limit(20).lean();
     return { success: true, data: rows.map((p: any) => ({ _id: String(p._id), name: p.name, slug: p.slug, image: p.images?.[0] ?? null })) };
   }
 }

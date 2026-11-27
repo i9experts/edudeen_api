@@ -39,7 +39,7 @@ export class BundlesService {
     await verifyStoreOwnershipStrict(this.r.storeModel, storeId, sellerId);
     const bundles = await this.r.bundleModel.find({ storeId, isDelete: false }).sort({ createdAt: -1 }).lean();
     const ids = [...new Set(bundles.flatMap(b => b.productIds))];
-    const products = await this.r.productModel.find({ _id: { $in: ids } }).select('_id name images status isDelete isTest').lean();
+    const products = await this.r.productModel.find({ _id: { $in: ids } }).select('_id name images imageFit status isDelete isTest').lean();
     const byId = new Map(products.map((p: any) => [String(p._id), { _id: String(p._id), name: p.name, image: p.images?.[0] ?? null, status: p.status, isDelete: !!p.isDelete, isTest: !!p.isTest }]));
     const variants: any[] = ids.length
       ? await this.r.productVariantModel.find({ productId: { $in: ids }, status: 'active', isDelete: false }).select('productId price currency isDefault').lean()
@@ -114,13 +114,13 @@ export class BundlesService {
       }
     };
     if (togetherIds.length) {
-      const docs: any[] = await this.r.productModel.find({ ...base, _id: { $in: togetherIds, $nin: picked } }).select('name images').lean();
+      const docs: any[] = await this.r.productModel.find({ ...base, _id: { $in: togetherIds, $nin: picked } }).select('name images imageFit').lean();
       const order = new Map(togetherIds.map((id, i) => [id, i]));
       docs.sort((a, b) => (order.get(String(a._id)) ?? 0) - (order.get(String(b._id)) ?? 0));
       push(docs, 'Bought together');
     }
     if (out.length < 6 && subs.length) {
-      push(await this.r.productModel.find({ ...base, subCategoryId: { $in: subs } }).select('name images').sort({ purchaseCount: -1, createdAt: -1 }).limit(12).lean(), 'Same subject');
+      push(await this.r.productModel.find({ ...base, subCategoryId: { $in: subs } }).select('name images imageFit').sort({ purchaseCount: -1, createdAt: -1 }).limit(12).lean(), 'Same subject');
     }
     return { success: true, data: out };
   }

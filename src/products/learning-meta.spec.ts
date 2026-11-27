@@ -58,3 +58,17 @@ describe('free sample in public views', () => {
     expect(JSON.stringify(out)).not.toContain('private/sample');
   });
 });
+
+describe('photo display (imageFit)', () => {
+  it('accepts cover/contain, treats null as the default, and leaves it out when not sent', () => {
+    expect(cleanLearningMeta({ imageFit: 'contain' })).toEqual({ imageFit: 'contain' });
+    expect(cleanLearningMeta({ imageFit: 'cover' })).toEqual({ imageFit: 'cover' });
+    expect(cleanLearningMeta({ imageFit: null })).toEqual({ imageFit: 'cover' });
+    expect(cleanLearningMeta({})).not.toHaveProperty('imageFit');
+  });
+
+  it('rejects anything else', () => {
+    expect(() => cleanLearningMeta({ imageFit: 'stretch' })).toThrow(/imageFit/);
+    expect(() => cleanLearningMeta({ imageFit: 1 })).toThrow(BadRequestException);
+  });
+});

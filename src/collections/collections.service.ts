@@ -152,7 +152,7 @@ export class CollectionsService {
     };
     const ids = await evaluateCollectionIds(this.r, storeId, col);
     const head = ids.slice(0, PREVIEW_THUMBS);
-    const docs: any[] = head.length ? await this.r.productModel.find({ _id: { $in: head }, storeId }).select('name images').lean() : [];
+    const docs: any[] = head.length ? await this.r.productModel.find({ _id: { $in: head }, storeId }).select('name images imageFit').lean() : [];
     const byId = new Map(docs.map((d) => [String(d._id), d]));
     const products = head.map((id) => byId.get(id)).filter(Boolean).map((d: any) => ({ _id: String(d._id), name: d.name, image: d.images?.[0] ?? null }));
     return { success: true, data: { count: ids.length, products } };

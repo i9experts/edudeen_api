@@ -437,7 +437,7 @@ export class CoursesService {
       }
     }
     const valid = [...ids].filter(id => isValidObjectId(id));
-    const products: any[] = await this.r.productModel.find({ _id: { $in: valid }, deliveryFormat: 'course', removedByAdmin: { $ne: true } }).select('_id name slug images deliveryFormat storeId status isTest isDelete').lean();
+    const products: any[] = await this.r.productModel.find({ _id: { $in: valid }, deliveryFormat: 'course', removedByAdmin: { $ne: true } }).select('_id name slug images imageFit deliveryFormat storeId status isTest isDelete').lean();
     const courseIds = products.filter(p => p.deliveryFormat === 'course').map(p => String(p._id));
     const [courses, progress] = await Promise.all([
       this.r.courseModel.find({ productId: { $in: courseIds } }).select('productId sections accessDays accessDaysLog').lean(),

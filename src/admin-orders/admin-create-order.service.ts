@@ -47,7 +47,7 @@ export class AdminCreateOrderService {
     const rx = new RegExp(escapeRegex(query), 'i');
     const products = await productModel
       .find({ status: 'active', isDelete: false, name: rx })
-      .select('name images type storeId')
+      .select('name images imageFit type storeId')
       .limit(20)
       .lean();
     if (!products.length) return { success: true, data: { items: [] } };

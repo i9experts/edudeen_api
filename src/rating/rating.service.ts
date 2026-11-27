@@ -290,7 +290,7 @@ export class RatingService {
       reviews.map(async (r: any) => {
         const product = await productModel
           .findById(r.productId)
-          .select('name images')
+          .select('name images imageFit')
           .lean();
         return {
           reviewId: r._id,
