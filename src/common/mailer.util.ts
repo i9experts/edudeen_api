@@ -1,4 +1,5 @@
 import * as nodemailer from 'nodemailer';
+import mongoose from 'mongoose';
 
 /**
  * One outbound-mail path for the whole app (OTP + every transactional email).
@@ -8,8 +9,11 @@ import * as nodemailer from 'nodemailer';
  *   can never connect no matter how correct the credentials are.
  * - otherwise → SMTP with SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASSWORD.
  *
- * The sender is SMTP_FROM (or SMTP_USER) with APP_NAME as the display name;
- * with Brevo that address must be a verified sender in the Brevo account.
+ * The sender is the admin's PlatformConfig.emailConfig (fromName/fromEmail/
+ * replyToEmail, set via Admin > Platform Config > Email), falling back to
+ * SMTP_FROM/SMTP_USER with APP_NAME as the display name for whichever of
+ * those the admin hasn't set. With Brevo, fromEmail must still be a verified
+ * sender in the Brevo account, or Brevo will reject/override it.
  */
 export interface OutgoingMail {
   to: string;
@@ -20,10 +24,38 @@ export interface OutgoingMail {
 
 let smtpTransport: nodemailer.Transporter | null = null;
 
-function sender() {
+/** The admin's configured sender identity. Read directly off the shared mongoose connection instead of
+ *  through Nest's DI (AdminConfigModule imports AuthModule, which imports OtpModule — injecting
+ *  AdminConfigService into OtpService/EmailService here would be circular), so this file has no module
+ *  wiring to keep in sync. Never throws: a lookup failure just falls back to env vars below — outbound
+ *  mail must never break because this soft read failed. */
+async function configuredSender(): Promise<{
+  name?: string;
+  email?: string;
+  replyTo?: string;
+}> {
+  try {
+    const PlatformConfig = mongoose.models.PlatformConfig;
+    if (!PlatformConfig) return {};
+    const config: any = await PlatformConfig.findOne({})
+      .select('emailConfig')
+      .lean();
+    const e = config?.emailConfig;
+    return {
+      name: e?.fromName || undefined,
+      email: e?.fromEmail || undefined,
+      replyTo: e?.replyToEmail || undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function sender(configured: { name?: string; email?: string }) {
   return {
-    name: process.env.APP_NAME || 'Edudeen',
-    email: process.env.SMTP_FROM || process.env.SMTP_USER || '',
+    name: configured.name || process.env.APP_NAME || 'Edudeen',
+    email:
+      configured.email || process.env.SMTP_FROM || process.env.SMTP_USER || '',
   };
 }
 
@@ -46,24 +78,37 @@ function getSmtpTransport() {
 
 /** Sends one email; throws with a descriptive message on failure. Returns the provider's message id. */
 export async function sendMail(mail: OutgoingMail): Promise<string> {
-  const from = sender();
-  if (!from.email) throw new Error('No sender address configured (set SMTP_FROM or SMTP_USER)');
+  const configured = await configuredSender();
+  const from = sender(configured);
+  if (!from.email)
+    throw new Error(
+      'No sender address configured (set SMTP_FROM or SMTP_USER, or Admin > Platform Config > Email)',
+    );
 
   const brevoKey = process.env.BREVO_API_KEY?.trim();
   if (brevoKey) {
     const res = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
-      headers: { 'api-key': brevoKey, 'content-type': 'application/json', accept: 'application/json' },
+      headers: {
+        'api-key': brevoKey,
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
       body: JSON.stringify({
         sender: from,
         to: [{ email: mail.to }],
         subject: mail.subject,
         htmlContent: mail.html,
         ...(mail.text ? { textContent: mail.text } : {}),
+        ...(configured.replyTo
+          ? { replyTo: { email: configured.replyTo } }
+          : {}),
       }),
     });
     if (!res.ok) {
-      throw new Error(`Brevo send failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+      throw new Error(
+        `Brevo send failed (${res.status}): ${(await res.text()).slice(0, 300)}`,
+      );
     }
     const body = (await res.json().catch(() => ({}))) as { messageId?: string };
     return body.messageId ?? 'brevo';
@@ -75,6 +120,7 @@ export async function sendMail(mail: OutgoingMail): Promise<string> {
     subject: mail.subject,
     html: mail.html,
     text: mail.text,
+    ...(configured.replyTo ? { replyTo: configured.replyTo } : {}),
   });
   return info.messageId;
 }
