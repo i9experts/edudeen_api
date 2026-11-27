@@ -88,7 +88,7 @@ describe('FinanceService', () => {
     scheduleModel = { findOne: jest.fn(), find: jest.fn().mockReturnValue(makeChainableFind([])), updateOne: jest.fn().mockResolvedValue({}) };
     const leanOf = (v: any) => ({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(v) }) });
     storeModel = { findById: jest.fn().mockResolvedValue({ _id: STORE_ID, sellerId: SELLER_ID, isDelete: false }), findOne: jest.fn().mockReturnValue(leanOf({ status: 'active', sellerId: SELLER_ID })) };
-    sellerModel = { findById: jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ name: 'Jane Seller' }) }) }), findOne: jest.fn().mockReturnValue(leanOf({ status: 'active' })) };
+    sellerModel = { findById: jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ name: 'Jane Seller' }) }) }), findOne: jest.fn().mockReturnValue(leanOf({ status: 'active', kycStatus: 'approved' })) };
     orderModel = { find: jest.fn().mockReturnValue(makeChainableFind([])) };
     jobModel = {
       findOneAndUpdate: jest.fn().mockResolvedValue({ _id: 'job-1', orderId: 'o', storeId: STORE_ID, status: 'pending', attempts: 0 }),
@@ -539,7 +539,7 @@ describe('FinanceService', () => {
 
   describe('adminApprovePayout', () => {
     it('only one approve wins; a reject-after-approve cannot refund money that was wired', async () => {
-      payoutModel.findOne = jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ payoutMethodId: 'admin-manual' }) }) });
+      payoutModel.findOne = jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ payoutMethodId: 'admin-manual', sellerId: SELLER_ID }) }) });
       payoutModel.findOneAndUpdate.mockResolvedValueOnce({ _id: 'p1', storeId: STORE_ID, sellerId: SELLER_ID, amount: 40, currency: 'PKR', status: 'completed' }).mockResolvedValueOnce(null);
       payoutModel.findById = jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ status: 'completed' }) }) });
       await service.adminApprovePayout('p1', 'admin-1');
@@ -869,14 +869,14 @@ describe('FinanceService', () => {
     });
 
     it('approve refuses when the payout method was edited back to pending_verification after the request', async () => {
-      payoutModel.findOne = jest.fn().mockReturnValue(selLean({ payoutMethodId: 'm1' }));
+      payoutModel.findOne = jest.fn().mockReturnValue(selLean({ payoutMethodId: 'm1', sellerId: SELLER_ID }));
       methodModel.findById.mockReturnValue(selLean({ status: 'pending_verification' }));
       await expect(service.adminApprovePayout('p1', 'admin-1')).rejects.toThrow(/no longer verified/);
       expect(payoutModel.findOneAndUpdate).not.toHaveBeenCalled();
     });
 
     it('approve refuses when the payout method was deleted', async () => {
-      payoutModel.findOne = jest.fn().mockReturnValue(selLean({ payoutMethodId: 'gone' }));
+      payoutModel.findOne = jest.fn().mockReturnValue(selLean({ payoutMethodId: 'gone', sellerId: SELLER_ID }));
       methodModel.findById.mockReturnValue(selLean(null));
       await expect(service.adminApprovePayout('p1', 'admin-1')).rejects.toThrow(/no longer verified/);
     });
@@ -1022,6 +1022,40 @@ describe('FinanceService', () => {
         const res = await service.processScheduledPayouts();
         expect(res.payoutsCreated).toBe(0);
         expect(res.skipped).toBe(1);
+      });
+    });
+
+    describe('KYC payout gate', () => {
+      const notApproved = ['not_started', 'pending', 'rejected', undefined];
+
+      it('refuses a seller withdrawal until KYC is approved, with the seller-facing message', async () => {
+        for (const kycStatus of notApproved) {
+          sellerModel.findOne.mockReturnValue(selLean({ status: 'active', kycStatus }));
+          await expect(service.requestPayout(SELLER_ID, STORE_ID, { amount: 40, payoutMethodId: 'm1' } as any))
+            .rejects.toThrow(/Complete identity verification \(KYC\) to withdraw your earnings/);
+        }
+        expect(payoutModel.findOneAndUpdate).not.toHaveBeenCalled();
+      });
+
+      it('refuses admin approval and admin manual payouts for an unverified seller', async () => {
+        sellerModel.findOne.mockReturnValue(selLean({ status: 'active', kycStatus: 'pending' }));
+        payoutModel.findOne = jest.fn().mockReturnValue(selLean({ payoutMethodId: 'm1', storeId: STORE_ID, sellerId: SELLER_ID }));
+        await expect(service.adminApprovePayout('p1', 'admin-1')).rejects.toThrow(/identity verification \(KYC\)/);
+        expect(payoutModel.findOneAndUpdate).not.toHaveBeenCalled();
+        await expect(service.adminCreateManualPayout(STORE_ID, 'admin-1', 25, undefined, undefined)).rejects.toThrow(/identity verification \(KYC\)/);
+      });
+
+      it('scheduled and monthly settlement runs skip an unverified seller (the balance stays put)', async () => {
+        sellerModel.findOne.mockReturnValue(selLean({ status: 'active', kycStatus: 'not_started' }));
+        scheduleModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: 's1', storeId: STORE_ID, sellerId: SELLER_ID, currency: 'USD', frequency: 'weekly', defaultPayoutMethodId: 'm1', minimumAmount: 0 }]) });
+        const res = await service.processScheduledPayouts();
+        expect(res.payoutsCreated).toBe(0);
+        expect(res.skipped).toBe(1);
+
+        balanceModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ storeId: STORE_ID, sellerId: SELLER_ID, currency: 'USD', availableBalance: 500 }]) });
+        const run: any = await service.adminRunMonthlySettlement('admin-1', {});
+        expect(run.created).toBe(0);
+        expect(run.details[0]).toEqual(expect.objectContaining({ result: 'skipped', reason: 'kyc_not_approved' }));
       });
     });
 

@@ -192,6 +192,8 @@ export class StoreService {
     // restore the previous "card on file ⇒ live immediately" behaviour.
     // Business verification was removed (15 Oct): every new store is live immediately. Admin suspension / rejection still applies.
     const selfServeActivation = true;
+    // A seller whose KYC is already approved gets the Verified badge on every new store too (KycService keeps it in sync after).
+    const kycOwner: any = await this.databaseService.repositories.sellerModel.findOne({ _id: sellerId }).select('kycStatus').lean();
 
     const store = await this.databaseService.repositories.storeModel.create({
       sellerId,
@@ -207,6 +209,7 @@ export class StoreService {
       baseCurrency,
       status: selfServeActivation ? 'active' : 'pending',
       ...(selfServeActivation ? { reviewedAt: new Date() } : {}),
+      ...(kycOwner?.kycStatus === 'approved' ? { badges: ['verified'] } : {}),
     });
 
     // Post-insert setup. If any step fails, roll the store back (soft
@@ -1055,6 +1058,8 @@ export class StoreService {
         baseCurrency: store.baseCurrency ?? 'PKR',
         sellerType: store.sellerType ?? null,
         badges: store.badges ?? [],
+        // Set by KycService when the owner's identity verification is approved.
+        sellerVerified: (store.badges ?? []).includes('verified'),
         educatorProfile: store.educatorProfile ?? null,
         gradesServed: store.gradesServed ?? [],
         subjects: store.subjects ?? [],

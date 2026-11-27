@@ -14,6 +14,7 @@ import { AdminConfigService } from 'src/admin-config/admin-config.service';
 import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NOTIFICATION_TYPES } from 'src/notifications/notification.types';
+import { KYC_PAYOUT_BLOCK_MESSAGE } from 'src/kyc/kyc.util';
 
 import { clampInt, csvCell, csvLine, parseDateParam } from 'src/common/query-safety.util';
 import { encryptSeoCredential, decryptSeoCredential } from 'src/common/seo-token-encryption.util';
@@ -183,6 +184,24 @@ export class FinanceService {
     if (!sid) return false;
     const seller: any = await this.sellerModel.findOne({ _id: sid }).select('status').lean();
     return seller?.status === 'suspended';
+  }
+
+  /** Payouts need an approved identity verification (KYC). Earnings still accrue; only withdrawals wait. */
+  private async isKycApproved(sellerId: string | null | undefined): Promise<boolean> {
+    if (!sellerId) return false;
+    try {
+      const seller: any = await this.sellerModel.findOne({ _id: sellerId }).select('kycStatus').lean();
+      return seller?.kycStatus === 'approved';
+    } catch {
+      return false; // e.g. a malformed id: never pay out on doubt
+    }
+  }
+
+  private async assertKycApproved(sellerId: string | null | undefined, adminFacing = false) {
+    if (await this.isKycApproved(sellerId)) return;
+    throw new BadRequestException(adminFacing
+      ? 'This seller has not completed identity verification (KYC). Approve their KYC first, then pay them.'
+      : KYC_PAYOUT_BLOCK_MESSAGE);
   }
 
   /** Admin-facing equivalent — admins may act on any store, so this only checks the store exists (not who owns it). */
@@ -603,6 +622,7 @@ export class FinanceService {
 
   async requestPayout(sellerId: string, storeId: string, dto: RequestPayoutDto) {
     await this.verifyStoreOwnership(sellerId, storeId);
+    await this.assertKycApproved(sellerId);
     const amount = this.normalizeAmount(dto.amount);
 
     const method = await this.methodModel.findById(dto.payoutMethodId);
@@ -659,6 +679,7 @@ export class FinanceService {
 
         if (!schedule.defaultPayoutMethodId) { skipped++; continue; }
         if (await this.isPayoutHold(schedule.storeId, schedule.sellerId)) { skipped++; continue; }
+        if (!(await this.isKycApproved(schedule.sellerId))) { skipped++; continue; }
 
         const currency = schedule.currency || 'USD';
         const [method, balance, hasPendingPayout] = await Promise.all([
@@ -1666,6 +1687,7 @@ export class FinanceService {
         if (!minimums.has(currency)) minimums.set(currency, await this.adminConfigService.getPayoutMinimum(currency));
         const amount = this.round(b.availableBalance ?? 0);
         if (amount < minimums.get(currency)! || amount <= 0) { skip('below_minimum'); continue; }
+        if (!(await this.isKycApproved(b.sellerId))) { skip('kyc_not_approved'); continue; }
 
         const [method, inFlight] = await Promise.all([
           this.methodModel.findOne({ storeId: b.storeId, currency, isDefault: true, status: 'active' }),
@@ -1859,6 +1881,9 @@ export class FinanceService {
     if (pending && await this.isPayoutHold(pending.storeId, pending.sellerId)) {
       throw new BadRequestException('This seller is suspended - the payout is on hold. Unsuspend the seller to pay it, or reject it to return the money to their balance');
     }
+    if (pending && !(await this.isKycApproved(pending.sellerId))) {
+      throw new BadRequestException('This seller has not completed identity verification (KYC). Approve their KYC first, or reject this payout to return the money to their balance');
+    }
     if (pending && pending.payoutMethodId !== 'admin-manual') {
       const method = await this.methodModel.findById(pending.payoutMethodId).select('status').lean<{ status: string }>();
       if (!method || method.status !== 'active') {
@@ -2048,6 +2073,7 @@ export class FinanceService {
     requestedCurrency?: string,
   ) {
     const store = await this.verifyStoreExistsForAdmin(storeId);
+    await this.assertKycApproved(store.sellerId, true);
     amount = this.normalizeAmount(amount);
     if (amount > MANUAL_PAYOUT_MAX) throw new BadRequestException(`A single manual payout cannot exceed ${MANUAL_PAYOUT_MAX.toLocaleString('en-US')}`);
     if (requestedCurrency !== undefined && !MANUAL_PAYOUT_CURRENCIES.includes(requestedCurrency)) {

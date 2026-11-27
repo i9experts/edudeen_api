@@ -112,6 +112,7 @@ const RULES: Rule[] = [
   { re: /^\/api\/rating\/(flag|unflag|admin|reply|edit-reply)/i, read: 'moderation.view', write: 'moderation.manage' },
   { re: /^\/api\/(admin\/chat|contact\/admin|messaging\/admin)(\/|$)/i, read: 'support.view', write: 'support.reply' },
   { re: /^\/api\/admin\/marketing(\/|$)/i, read: 'marketing.view', write: 'marketing.manage' },
+  { re: /^\/api\/admin\/academy(\/|$)/i, read: 'content.view', write: 'content.manage' },
   { re: /^\/api\/((banners|spotlight|home-cards)\/(admin|count)|onboarding-slides\/admin|testimonials\/admin|admin\/announcements)/i, read: 'content.view', write: 'content.manage' },
   { re: /^\/api\/(banners|spotlight|home-cards|onboarding-slides|testimonials|faqs|learning-paths|announcements)(\/|$)/i, write: 'content.manage' },
   { re: /^\/api\/categories\/admin/i, read: 'categories.manage', write: 'categories.manage' },

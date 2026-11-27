@@ -83,6 +83,10 @@ export class Seller {
     @Prop({ type: Boolean, default: false })
     hasPlatformPaymentMethod: boolean;
 
+    // Mirror of SellerKyc.status (written only by KycService) so payout checks don't need the KYC collection.
+    @Prop({ type: String, enum: ['not_started', 'pending', 'approved', 'rejected'], default: 'not_started' })
+    kycStatus: 'not_started' | 'pending' | 'approved' | 'rejected';
+
     // Set when this seller's free trial plan starts — the free trial can be used once only.
     @Prop({ type: Date, default: null })
     freeTrialUsedAt: Date | null;

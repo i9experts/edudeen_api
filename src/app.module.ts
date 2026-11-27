@@ -72,6 +72,7 @@ import { ClassroomModule } from './classroom/classroom.module';
 import { PromotionsModule } from './promotions/promotions.module';
 import { CommissionRulesModule } from './commission-rules/commission-rules.module';
 import { ManualPaymentsModule } from './manual-payments/manual-payments.module';
+import { KycModule } from './kyc/kyc.module';
 import { ExchangeRateModule } from './exchange-rate/exchange-rate.module';
 import { OnboardingSlidesModule } from './onboarding-slides/onboarding-slides.module';
 import { AttributesModule } from './attributes/attributes.module';
@@ -84,6 +85,7 @@ import { StaffModule } from './staff/staff.module';
 import { AdminStoresModule } from './admin-stores/admin-stores.module';
 import { StoreTeamModule } from './store-team/store-team.module';
 import { PhoneVerificationModule } from './phone-verification/phone-verification.module';
+import { AcademyModule } from './academy/academy.module';
 
 @Module({
   imports: [
@@ -131,6 +133,7 @@ import { PhoneVerificationModule } from './phone-verification/phone-verification
     MessagingModule,
     CommissionRulesModule,
     ManualPaymentsModule,
+    KycModule,
     FinanceModule,
     StripeBillingModule,
     PlatformPlansModule,
@@ -175,6 +178,7 @@ import { PhoneVerificationModule } from './phone-verification/phone-verification
     AdminStoresModule,
     StoreTeamModule,
     PhoneVerificationModule,
+    AcademyModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }, { provide: APP_INTERCEPTOR, useClass: NoOperatorKeysInterceptor }],

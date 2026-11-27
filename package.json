@@ -28,6 +28,8 @@
     "backfill:audiences:apply": "node --env-file=.env --experimental-strip-types src/scripts/backfill-product-audiences.ts --apply",
     "seed:premium-demo": "node --env-file=.env --experimental-strip-types src/scripts/seed-premium-demo-products.ts",
     "seed:premium-demo:apply": "node --env-file=.env --experimental-strip-types src/scripts/seed-premium-demo-products.ts --apply",
+    "seed:academy": "node --env-file=.env --experimental-strip-types src/scripts/seed-academy-courses.ts",
+    "seed:academy:apply": "node --env-file=.env --experimental-strip-types src/scripts/seed-academy-courses.ts --apply",
     "fix:premium-conflicts": "node --env-file=.env --experimental-strip-types src/scripts/fix-premium-offer-conflicts.ts",
     "fix:premium-conflicts:apply": "node --env-file=.env --experimental-strip-types src/scripts/fix-premium-offer-conflicts.ts --apply",
     "fix:skus": "node --env-file=.env --experimental-strip-types src/scripts/fix-variant-skus.ts",

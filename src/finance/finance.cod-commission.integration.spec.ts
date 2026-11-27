@@ -42,6 +42,7 @@ d('COD commission debit (seller-collected cash) — real replica set', () => {
         payoutModel: Payout,
         campaignModel: { findByIdAndUpdate: jest.fn() },
         storeModel: { findById: jest.fn().mockResolvedValue({ _id: 's1', sellerId: 'seller1', isDelete: false }) },
+        sellerModel: { findOne: () => ({ select: () => ({ lean: () => Promise.resolve({ kycStatus: 'approved' }) }) }) },
         payoutMethodModel: {
           findById: jest.fn().mockResolvedValue({ _id: 'm1', storeId: 's1', status: 'active', currency: 'USD', type: 'bank', bankName: 'Bank', accountLast4: '1234' }),
         },

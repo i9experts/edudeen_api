@@ -260,13 +260,18 @@ describe('updateStore', () => {
           countDocuments: jest.fn().mockResolvedValue(4),
           create: jest.fn().mockResolvedValue({ _id: { toString: () => OID } }),
         },
-        sellerModel: { findByIdAndUpdate: jest.fn().mockResolvedValue({}) },
+        sellerModel: {
+          findByIdAndUpdate: jest.fn().mockResolvedValue({}),
+          findOne: jest.fn().mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ kycStatus: 'approved' }) }) }),
+        },
       },
     });
     await expect(
       svc.createStore('seller1', { name: 'Fifth Store', baseCurrency: 'PKR' }),
     ).resolves.toBeDefined();
     expect(repos.storeModel.countDocuments).toHaveBeenCalledWith({ sellerId: 'seller1', isDelete: false });
+    // A KYC-approved seller's new store carries the Verified badge from the start.
+    expect(repos.storeModel.create).toHaveBeenCalledWith(expect.objectContaining({ badges: ['verified'] }));
   });
 
   it('a seller already at MAX_STORES_PER_SELLER cannot create another one', async () => {
