@@ -25,7 +25,7 @@ export function otpEmailHtml(opts: {
             <td align="center">
                 <table role="presentation" width="100%" style="max-width:520px; background:#FFFFFF; border-radius:12px; overflow:hidden;">
                     <tr>
-                        <td style="background:#174771; padding:24px 32px; text-align:center;">
+                        <td style="background:#FFFFFF; border-bottom:1px solid #E1E7EA; padding:24px 32px; text-align:center;">
                             <img src="https://edudeen.com/edudeen-logo-640.png" width="140" alt="${appName}" style="display:block; margin:0 auto; max-width:140px; height:auto;">
                         </td>
                     </tr>
