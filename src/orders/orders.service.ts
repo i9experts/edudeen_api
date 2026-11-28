@@ -1,4 +1,5 @@
 import { ExchangeRateService } from 'src/exchange-rate/exchange-rate.service';
+import { actingStaffId } from '../common/acting-staff.context';
 import {
   Injectable,
   BadRequestException,
@@ -989,7 +990,12 @@ export class OrdersService {
       updateData.orderStatus = 'processing';
     }
 
-    await orderModel.findByIdAndUpdate(orderId, { $set: updateData });
+    // Manage-as-seller session: remember which Edudeen team member moved this package (team KPIs).
+    const staffId = actingStaffId();
+    await orderModel.findByIdAndUpdate(orderId, {
+      $set: updateData,
+      ...(staffId ? { $push: { [`sellerOrders.${sellerOrderIndex}.staffActions`]: { action: `status:${status}`, staffId, at: new Date() } } } : {}),
+    });
 
     // Record sale in finance ledger when seller marks their order completed â€” only on the
     // transition into `completed`, never again if it was already completed (see guard above).
@@ -1527,7 +1533,15 @@ export class OrdersService {
       updateData.paymentStatus = 'refunded';
     }
 
-    await orderModel.findByIdAndUpdate(orderId, { $set: updateData });
+    // A team member cancelling as the seller (manage-as-seller session) is recorded on each package it touched.
+    const cancelStaffId = cancelledBy === 'seller' ? actingStaffId() : null;
+    const staffPush: Record<string, unknown> = {};
+    if (cancelStaffId) {
+      for (const soIndex of new Set(targetItems.map((t) => t.soIndex))) {
+        staffPush[`sellerOrders.${soIndex}.staffActions`] = { action: 'cancelled', staffId: cancelStaffId, at: now };
+      }
+    }
+    await orderModel.findByIdAndUpdate(orderId, { $set: updateData, ...(cancelStaffId ? { $push: staffPush } : {}) });
 
     // Items paid (partly) with a gift card: that part goes back on the card â€” the buyer's money refund
     // above only covers what they paid otherwise. Idempotent per cancel request.

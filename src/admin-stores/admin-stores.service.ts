@@ -9,6 +9,7 @@ import { ActivityLogService } from '../activity-log/activity-log.service';
 import { EmailService } from '../otp/services/email.service';
 import { brandedEmailHtml } from '../common/branded-email.util';
 import { CreateStoreForSellerDto } from './dto/create-store-for-seller.dto';
+import { ManagedStoresService } from '../managed-stores/managed-stores.service';
 
 export interface AdminActor { id: string; ip?: string; userAgent?: string }
 
@@ -23,6 +24,7 @@ export class AdminStoresService {
     private readonly stores: StoreService,
     private readonly auth: AuthService,
     private readonly activity: ActivityLogService,
+    private readonly managed: ManagedStoresService,
     @Optional() private readonly email?: EmailService,
   ) {}
 
@@ -116,6 +118,8 @@ export class AdminStoresService {
     const store: any = await storeModel.findById(storeId).select('name slug status sellerId isDelete').lean();
     if (!store || store.isDelete) throw new NotFoundException('Store not found');
     if (store.status === 'suspended' || store.status === 'rejected') throw new ForbiddenException(`This store is ${store.status}`);
+    // Team members run only the stores assigned to them; the owner admin may open any store.
+    await this.managed.assertMayOperate(admin.id, storeId);
     const seller: any = await sellerModel.findById(store.sellerId).select('email status isDelete tokenVersion').lean();
     this.assertUsableSeller(seller);
 

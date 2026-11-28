@@ -1,6 +1,7 @@
 /* eslint-disable prettier/prettier */
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
+import { actingStaffPlugin } from '../../common/acting-staff.context';
 
 export type MessageDocument = Message & Document;
 
@@ -9,6 +10,8 @@ export class Message {
   @Prop({ type: String, required: true }) conversationId: string;
   @Prop({ type: String, required: true }) senderId: string;
   @Prop({ type: String, enum: ['user', 'seller', 'admin'], required: true }) senderRole: string;
+  // The Edudeen team member who sent this as the store (manage-as-seller session). Buyers still see the store.
+  @Prop({ type: String, default: null, select: false }) actingStaffId: string | null;
 
   @Prop({
     type: String,
@@ -80,6 +83,8 @@ export class Message {
 }
 
 export const MessageSchema = SchemaFactory.createForClass(Message);
+MessageSchema.plugin(actingStaffPlugin, { createdField: 'actingStaffId' });
+MessageSchema.index({ actingStaffId: 1, createdAt: -1 }, { partialFilterExpression: { actingStaffId: { $type: 'string' } } });
 
 // Cursor-based pagination (newest first within a conversation)
 MessageSchema.index({ conversationId: 1, createdAt: -1 });

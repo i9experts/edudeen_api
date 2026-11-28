@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { managedCommissionRate } from '../managed-stores/managed-stores.util';
 import { Injectable, NotFoundException, BadRequestException, ConflictException, ServiceUnavailableException, Logger, Optional } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection, ClientSession, isValidObjectId } from 'mongoose';
@@ -448,10 +449,11 @@ export class FinanceService {
     const platformFeeText = dLabel && pLabel
       ? (dLabel === pLabel ? `${dLabel} per sale` : `${dLabel} digital, ${pLabel} physical`)
       : dLabel ? `${dLabel} digital` : pLabel ? `${pLabel} physical` : null;
+    const managedFee = commissionRate.source === 'managed_mou' ? `${Number((commissionRate.rate * 100).toFixed(2))}% per sale (Edudeen-managed store, per your MOU)` : null;
     const feeBreakdown = {
       marketplaceListingFee: 'Free',
-      transactionFee: platformFeeText ?? `${Number((commissionRate.rate * 100).toFixed(2))}% per sale`,
-      transactionFeeSource: platformFeeText ? 'platform_fees' : commissionRate.source,
+      transactionFee: managedFee ?? platformFeeText ?? `${Number((commissionRate.rate * 100).toFixed(2))}% per sale`,
+      transactionFeeSource: managedFee ? 'managed_mou' : platformFeeText ? 'platform_fees' : commissionRate.source,
       paymentProcessing: `${Number((PAYMENT_PROCESSING_RATE * 100).toFixed(2))}% + $${PAYMENT_PROCESSING_FIXED} (card payments only — not charged for COD or bank transfer)`,
       digitalDelivery: 'Included',
       aiCredits: '750 / month',
@@ -1285,7 +1287,7 @@ export class FinanceService {
       currency,
       // New names first; the old commission* names stay as aliases for existing clients.
       platformFeeRate: commissionRate.rate,
-      platformFeeText: await this.platformFeeText(),
+      platformFeeText: await this.platformFeeText(storeId),
       platformFee: s.commission,
       codPlatformFeeOwed: s.codCommissionOwed,
       commissionRate: commissionRate.rate,
@@ -2283,14 +2285,30 @@ export class FinanceService {
    *  override / category / default) — shared by `recordSale` and the COD
    *  commission debit so the two can never drift. */
   private async platformCommission(storeId: string, saleAmount: number, currency = 'USD', feeItems?: FeeItem[], fxSnapshots?: any[]) {
+    // Managed (MOU) store: the MOU commission on the item price REPLACES every other fee (per-type platform
+    // fees, Premium line fees, commission rules). `saleAmount` never includes shipping.
+    const mouRate = await this.managedMouRate(storeId);
+    if (mouRate !== null) return { rate: mouRate, source: 'managed_mou', platformFee: this.round(Math.max(0, saleAmount) * mouRate) };
     const perType = await this.perTypePlatformFee(saleAmount, currency, feeItems, fxSnapshots);
     if (perType) return perType;
     const { rate, source } = await this.commissionRulesService.resolveRate(storeId);
     return { rate, source, platformFee: this.round(saleAmount * rate) };
   }
 
-  /** Seller-facing text of the configured platform fees, e.g. "20% digital, 10% physical" (null when unset). */
-  private async platformFeeText(): Promise<string | null> {
+  /** MOU commission (fraction) of a managed store, or null for a self-managed store. */
+  private async managedMouRate(storeId: any): Promise<number | null> {
+    if (!storeId) return null;
+    let q: any = this.storeModel.findById(storeId);
+    if (typeof q?.select === 'function') q = q.select('managementType +mou');
+    if (typeof q?.lean === 'function') q = q.lean();
+    return managedCommissionRate(await q);
+  }
+
+  /** Seller-facing text of the configured platform fees, e.g. "20% digital, 10% physical" (null when unset).
+   *  A managed store sees its MOU commission instead. */
+  private async platformFeeText(storeId?: any): Promise<string | null> {
+    const mouRate = await this.managedMouRate(storeId);
+    if (mouRate !== null) return `${Number((mouRate * 100).toFixed(2))}% per sale (Edudeen-managed store, per your MOU)`;
     const fees: any = typeof this.adminConfigService?.getPlatformFees === 'function'
       ? await this.adminConfigService.getPlatformFees().catch(() => null) : null;
     const label = (r: any) => (r?.mode === 'percentage' ? `${Number(Number(r.value).toFixed(2))}%` : r?.mode === 'fixed' ? `$${Number(Number(r.value).toFixed(2))} per item` : null);
@@ -2302,6 +2320,8 @@ export class FinanceService {
   /** Single fee rate (0-1) shown in seller screens: the admin's Platform fees when digital and physical are
    *  the same percentage, otherwise the legacy commission rule. */
   private async displayFeeRate(storeId: any): Promise<{ rate: number; source: string }> {
+    const mouRate = await this.managedMouRate(storeId);
+    if (mouRate !== null) return { rate: mouRate, source: 'managed_mou' };
     const fees: any = typeof this.adminConfigService?.getPlatformFees === 'function'
       ? await this.adminConfigService.getPlatformFees().catch(() => null) : null;
     const d = fees?.digital; const p = fees?.physical;

@@ -8,7 +8,8 @@ describe('stores.manage permission', () => {
   });
   it('guards every /api/admin/stores route (reads and writes), also with odd casing', () => {
     expect(permissionForRequest('POST', '/api/admin/stores')).toBe('stores.manage');
-    expect(permissionForRequest('POST', '/api/admin/stores/abc/manage-session')).toBe('stores.manage');
+    // Operating a store as the seller is its own right (the service also checks the store is assigned).
+    expect(permissionForRequest('POST', '/api/admin/stores/abc/manage-session')).toBe('stores.operate');
     expect(permissionForRequest('GET', '/api/admin/stores')).toBe('stores.manage');
     expect(permissionForRequest('POST', '/api/admin/stores/abc/other')).not.toBe(DENY);
   });

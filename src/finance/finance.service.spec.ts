@@ -267,6 +267,24 @@ describe('FinanceService', () => {
       expect(feeOf('o-cod').amount).toBe(-20);
     });
 
+    it('managed (MOU) store: the MOU % of the item price replaces the configured platform fees and commission rules; shipping is not charged', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      fees({ digital: { mode: 'percentage', value: 10 }, physical: { mode: 'percentage', value: 5 } });
+      commissionRulesService.resolveRate = jest.fn().mockResolvedValue({ rate: 0.08, source: 'seller_override' });
+      storeModel.findById.mockResolvedValue({ _id: STORE_ID, managementType: 'managed', mou: { commissionRate: 0.3 } });
+      await service.recordSale(STORE_ID, SELLER_ID, 'o-mou', 100, 'd', 0, null, 'USD', 'manual_bank_transfer', 'seller', 15, [{ type: 'physical', totalPrice: 100, quantity: 1 }]);
+      expect(feeOf('o-mou').amount).toBeCloseTo(-30, 2);
+      expect(commissionRulesService.resolveRate).not.toHaveBeenCalled();
+    });
+
+    it('a self-managed store keeps the configured platform fees (MOU fields alone change nothing)', async () => {
+      balanceModel.findOne.mockResolvedValue(makeBalance());
+      fees({ physical: { mode: 'percentage', value: 5 } });
+      storeModel.findById.mockResolvedValue({ _id: STORE_ID, managementType: 'self', mou: { commissionRate: 0.3 } });
+      await service.recordSale(STORE_ID, SELLER_ID, 'o-self', 100, 'd', 0, null, 'USD', 'manual_bank_transfer', 'seller', 0, [{ type: 'physical', totalPrice: 100, quantity: 1 }]);
+      expect(feeOf('o-self').amount).toBeCloseTo(-5, 2);
+    });
+
     it('falls back to the legacy commission rules when platformFees is not configured', async () => {
       balanceModel.findOne.mockResolvedValue(makeBalance());
       fees(null);

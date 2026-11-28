@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { normalizeRequestPath } from '../common/request-path.util';
+import { runAsActingStaff } from '../common/acting-staff.context';
 
 /**
  * Admin "manage as seller" sessions are seller-role tokens locked to ONE store. Everything a seller can do
@@ -93,6 +94,10 @@ export function createActAsMiddleware(deps: Deps) {
           metadata: { actAsSeller: true, method: req.method, path },
         });
         if (!ok) return res.status(503).json({ statusCode: 503, code: 'AUDIT_UNAVAILABLE', message: 'Could not record this action. Try again.' });
+        // The rest of this write runs with the team member's id in context, so what it creates or changes
+        // (messages, products, order steps) is attributed to them (common/acting-staff.context.ts).
+        const staffId = String(payload.actAsAdminId ?? '');
+        if (staffId) return runAsActingStaff({ staffId, storeId }, () => next());
       }
       return next();
     } catch {

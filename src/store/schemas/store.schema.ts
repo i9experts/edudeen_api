@@ -308,6 +308,43 @@ export const SellerVerificationSchema = SchemaFactory.createForClass(SellerVerif
 // Required-document/field calculation lives in verification-requirements.config.ts
 // (centralized, country + businessType + level aware) — not here.
 
+// ── Managed sellers (MOU) ────────────────────────────────────────────────────
+// 'self'    = the seller runs the store; Edudeen only supports them.
+// 'managed' = the seller signed an MOU: Edudeen's team lists products and runs the store, and Edudeen's
+//             share of every completed sale is the MOU commission (replaces the normal platform fee).
+export const STORE_MANAGEMENT_TYPES = ['self', 'managed'] as const;
+export type StoreManagementType = (typeof STORE_MANAGEMENT_TYPES)[number];
+/** MOU commission bounds (fractions, like commission-rules): 20%–65%. */
+export const MOU_RATE_MIN = 0.2;
+export const MOU_RATE_MAX = 0.65;
+
+@Schema({ _id: false })
+export class StoreMouHistoryEntry {
+  @Prop({ required: true }) action: string; // 'set' | 'updated' | 'document_uploaded' | 'type_changed'
+  @Prop({ type: Object, default: null }) changes: Record<string, unknown> | null;
+  @Prop({ type: String, default: null }) actorId: string | null;
+  @Prop({ type: Date, default: () => new Date() }) at: Date;
+}
+export const StoreMouHistoryEntrySchema = SchemaFactory.createForClass(StoreMouHistoryEntry);
+
+@Schema({ _id: false })
+export class StoreMou {
+  /** Fraction 0.20–0.65 of the item price (shipping excluded). */
+  @Prop({ type: Number, default: null }) commissionRate: number | null;
+  @Prop({ type: Date, default: null }) startDate: Date | null;
+  /** null = open-ended. */
+  @Prop({ type: Date, default: null }) endDate: Date | null;
+  @Prop({ type: String, default: null }) notes: string | null;
+  // Signed MOU: private Cloudinary file, viewed only through a short-lived signed URL (admin only).
+  @Prop({ type: Object, default: null }) document: { publicId: string; resourceType: string; fileName: string; uploadedAt: Date } | null;
+  @Prop({ type: String, default: null }) updatedBy: string | null;
+  @Prop({ type: Date, default: null }) updatedAt: Date | null;
+  /** Last expiry notice sent ('expiring_soon' | 'expired' + endDate), so each notice goes out once. */
+  @Prop({ type: String, default: null }) lastNotice: string | null;
+  @Prop({ type: [StoreMouHistoryEntrySchema], default: [] }) history: StoreMouHistoryEntry[];
+}
+export const StoreMouSchema = SchemaFactory.createForClass(StoreMou);
+
 @Schema({ timestamps: true })
 export class Store {
   @Prop({ required: true })
@@ -495,6 +532,14 @@ export class Store {
   /** Set when an admin created this store on behalf of a seller (the seller still owns it). */
   @Prop({ type: Object, default: null })
   createdByAdmin?: { adminId: string; at: Date } | null;
+
+  @Prop({ type: String, enum: STORE_MANAGEMENT_TYPES, default: 'self', index: true })
+  managementType: StoreManagementType;
+
+  // Internal (notes, history, signed-document id): never in default store reads, so it cannot reach the seller or
+  // public store payloads. Read it with an explicit select ('+mou' / 'mou').
+  @Prop({ type: StoreMouSchema, default: null, select: false })
+  mou: StoreMou | null;
 
   // Persisted rollup from Rating docs (storeId-scoped) — recalculated by
   // RatingService.recalcStoreRating(), same pattern as Product.averageRating.

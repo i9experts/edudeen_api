@@ -1,5 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { actingStaffPlugin } from '../../common/acting-staff.context';
 import { Document } from 'mongoose';
 import { SeoMeta, SeoMetaSchema } from 'src/seo/schemas/seo-meta.schema';
 import { AUDIENCES, CURRICULA, PRODUCT_LANGUAGES, type Audience, type ProductLanguage } from 'src/common/edu-filters.const';
@@ -273,6 +274,17 @@ export class Product {
   @Prop({ type: String, enum: ['cover', 'contain'], default: 'cover' })
   imageFit: 'cover' | 'contain';
 
+  // Set when an Edudeen team member creates/edits this listing in a manage-as-seller session (acting-staff.context.ts).
+  // Internal (select: false): never sent to buyers/sellers; team KPI reports select them explicitly.
+  @Prop({ type: String, default: null, select: false })
+  createdByStaffId: string | null;
+
+  @Prop({ type: String, default: null, select: false })
+  lastEditedByStaffId: string | null;
+
+  @Prop({ type: Date, default: null, select: false })
+  lastEditedByStaffAt: Date | null;
+
   // Optional product video: { url, posterUrl, frontFirst }. Cards always show a picture; the product page gallery plays it.
   @Prop({ type: Object, default: null })
   video: { url: string; posterUrl: string | null; frontFirst: boolean } | null;
@@ -477,6 +489,8 @@ export class Product {
 }
 
 export const ProductSchema = SchemaFactory.createForClass(Product);
+ProductSchema.plugin(actingStaffPlugin, { createdField: 'createdByStaffId', editedField: 'lastEditedByStaffId', editedAtField: 'lastEditedByStaffAt' });
+ProductSchema.index({ createdByStaffId: 1 }, { partialFilterExpression: { createdByStaffId: { $type: 'string' } } });
 
 ProductSchema.index({ curricula: 1 });
 ProductSchema.index({ audiences: 1 });

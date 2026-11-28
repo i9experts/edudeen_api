@@ -16,7 +16,8 @@ const mkSvc = (over: any = {}) => {
   const auth: any = { issueManageSession: jest.fn().mockResolvedValue({ accessToken: 'tok', expiresInSeconds: 1800 }) };
   const activity: any = { log: jest.fn().mockResolvedValue(over.logOk ?? true) };
   const email: any = { sendMail: jest.fn().mockResolvedValue(true) };
-  return { svc: new AdminStoresService(db, stores, auth, activity, email), stores, auth, activity, email, storeModel, sellerModel };
+  const managed: any = { assertMayOperate: over.assertMayOperate ?? jest.fn().mockResolvedValue(undefined) };
+  return { svc: new AdminStoresService(db, stores, auth, activity, managed, email), stores, auth, activity, email, storeModel, sellerModel, managed };
 };
 const admin = { id: 'a1' };
 
@@ -31,6 +32,13 @@ describe('AdminStoresService.manageSession', () => {
   it('issues no token when the audit entry cannot be stored', async () => {
     const t = mkSvc({ logOk: false });
     await expect(t.svc.manageSession(admin, 'st1')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(t.auth.issueManageSession).not.toHaveBeenCalled();
+  });
+  it('refuses a team member the store is not assigned to (no audit entry, no token)', async () => {
+    const t = mkSvc({ assertMayOperate: jest.fn().mockRejectedValue(new ForbiddenException('not assigned')) });
+    await expect(t.svc.manageSession(admin, 'st1')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(t.managed.assertMayOperate).toHaveBeenCalledWith('a1', 'st1');
+    expect(t.activity.log).not.toHaveBeenCalled();
     expect(t.auth.issueManageSession).not.toHaveBeenCalled();
   });
   it('refuses suspended stores and suspended sellers', async () => {

@@ -384,6 +384,11 @@ export class SellerOrder {
   @Prop({ type: Date, default: null })
   shippedAt: Date | null;
 
+  // What Edudeen team members did on this package in manage-as-seller sessions (status changes, courier booking).
+  // Internal: never sent to buyers/sellers (select: false); team KPI reports select it explicitly.
+  @Prop({ type: [Object], default: [], select: false })
+  staffActions: { action: string; staffId: string; at: Date }[];
+
   @Prop({ type: Date, default: null })
   deliveredAt: Date | null;
 

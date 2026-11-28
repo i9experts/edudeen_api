@@ -1,4 +1,5 @@
 ﻿import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { actingStaffId } from '../common/acting-staff.context';
 import { courierDeliveryEnabled, DEFAULT_COURIER_SETTINGS, DELIVERY_COURIER_IDS } from 'src/checkout/courier-settings.util';
 import { ShippingRatesService } from 'src/checkout/shipping-rates.service';
 import { timingSafeEqual } from 'crypto';
@@ -155,7 +156,10 @@ export class CouriersService {
           [`sellerOrders.${idx}.shipment`]: { courier: adapter.id, trackingNumber: res.trackingNumber, labelUrl: res.labelUrl ?? null, bookedAt: new Date() },
           [`sellerOrders.${idx}.tracking`]: { carrier: adapter.label, trackingNumber: res.trackingNumber, trackingUrl },
         },
-        $push: { [`sellerOrders.${idx}.trackingEvents`]: { status: 'booked', description: `Booked with ${adapter.label}`, location: null, at: new Date(), source: 'seller' } },
+        $push: {
+          [`sellerOrders.${idx}.trackingEvents`]: { status: 'booked', description: `Booked with ${adapter.label}`, location: null, at: new Date(), source: 'seller' },
+          ...(actingStaffId() ? { [`sellerOrders.${idx}.staffActions`]: { action: 'courier_booked', staffId: actingStaffId(), at: new Date() } } : {}),
+        },
       },
     );
     return { success: true, data: { courier: adapter.id, carrier: adapter.label, trackingNumber: res.trackingNumber, trackingUrl, labelUrl: res.labelUrl ?? null, codAmount } };

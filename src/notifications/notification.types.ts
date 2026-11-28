@@ -73,6 +73,8 @@ export const NOTIFICATION_TYPES = {
   STORE_MEMBER_REMOVED: 'store_member_removed',
   KYC_APPROVED: 'kyc_approved',
   KYC_REJECTED: 'kyc_rejected',
+  MOU_EXPIRING: 'mou_expiring',
+  MOU_EXPIRED: 'mou_expired',
 } as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[keyof typeof NOTIFICATION_TYPES];
