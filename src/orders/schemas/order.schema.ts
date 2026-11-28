@@ -644,6 +644,23 @@ OrderSchema.index({ attributionSource: 1 });
 OrderSchema.index({ checkoutId: 1 });
 OrderSchema.index({ 'sellerOrders.sellerId': 1, 'sellerOrders.status': 1 });
 OrderSchema.index({ 'sellerOrders.storeId': 1 });
+// Courier webhooks and COD remittance matching look packages up by tracking number.
+OrderSchema.index(
+  { 'sellerOrders.shipment.trackingNumber': 1 },
+  {
+    partialFilterExpression: {
+      'sellerOrders.shipment.trackingNumber': { $type: 'string' },
+    },
+  },
+);
+OrderSchema.index(
+  { 'sellerOrders.tracking.trackingNumber': 1 },
+  {
+    partialFilterExpression: {
+      'sellerOrders.tracking.trackingNumber': { $type: 'string' },
+    },
+  },
+);
 // Team performance: package steps done by Edudeen team members in manage-as-seller sessions, by time.
 OrderSchema.index({ 'sellerOrders.staffActions.at': -1 });
 // Dashboard to-ship / overdue counts and the Needs-action tab: bound the scan to a store's WAITING packages (elemMatch on both fields).

@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import Stripe from 'stripe';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuthModule } from '../auth/auth.module';
 import { RedisModule } from '../redis/redis.module';
@@ -46,6 +48,20 @@ import { PostingService } from './posting/posting.service';
 import { AccountingController } from './accounting.controller';
 import { AccountingJobs } from './accounting.jobs';
 import { AccountingDashboardService } from './dashboard.service';
+import { SettlementsController } from './settlements.controller';
+import {
+  ACCT_STRIPE_READER,
+  StripeSettlementService,
+} from './stripe/stripe-settlement.service';
+import { CodRemittanceService } from './cod/cod-remittance.service';
+import {
+  CodRemittance,
+  CodRemittanceItem,
+  CodRemittanceItemSchema,
+  CodRemittanceSchema,
+  StripeBalanceTxn,
+  StripeBalanceTxnSchema,
+} from './schemas/settlement.schemas';
 
 @Module({
   imports: [
@@ -69,15 +85,33 @@ import { AccountingDashboardService } from './dashboard.service';
       { name: StaffAdvance.name, schema: StaffAdvanceSchema },
       { name: PayrollClaim.name, schema: PayrollClaimSchema },
       { name: TaxYearConfig.name, schema: TaxYearConfigSchema },
+      { name: StripeBalanceTxn.name, schema: StripeBalanceTxnSchema },
+      { name: CodRemittance.name, schema: CodRemittanceSchema },
+      { name: CodRemittanceItem.name, schema: CodRemittanceItemSchema },
     ]),
   ],
-  controllers: [AccountingController],
+  controllers: [AccountingController, SettlementsController],
   providers: [
     AccountingService,
     ReportsService,
     PostingService,
     AccountingDashboardService,
     AccountingJobs,
+    StripeSettlementService,
+    CodRemittanceService,
+    {
+      // Read-only Stripe client for the settlement sync (same key as checkout); null when Stripe isn't configured.
+      provide: ACCT_STRIPE_READER,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => {
+        const key = config.get<string>('STRIPE_SECRET_KEY')?.trim();
+        return key
+          ? new Stripe(key, {
+              apiVersion: '2025-04-30.basil',
+            } as unknown as ConstructorParameters<typeof Stripe>[1])
+          : null;
+      },
+    },
   ],
   // Phase B (payroll) posts salary journals through AccountingService.postJournal.
   exports: [AccountingService],

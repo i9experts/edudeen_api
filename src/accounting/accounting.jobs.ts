@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { AccountingService } from './accounting.service';
 import { PostingService } from './posting/posting.service';
 import { AccountingDashboardService } from './dashboard.service';
+import { StripeSettlementService } from './stripe/stripe-settlement.service';
 
 @Injectable()
 export class AccountingJobs {
@@ -11,7 +12,22 @@ export class AccountingJobs {
     private readonly posting: PostingService,
     private readonly ledger: AccountingService,
     private readonly dash: AccountingDashboardService,
+    private readonly stripe: StripeSettlementService,
   ) {}
+
+  // Daily: Stripe payouts, fees, disputes and Connect transfers of the platform account (read-only Stripe calls).
+  @Cron('41 2 * * *')
+  async stripeSettlements() {
+    try {
+      const res = await this.stripe.sync();
+      if ('posted' in res && (res.posted || res.errors))
+        this.logger.log(
+          `Stripe settlements: ${res.posted} posted, ${res.errors} error(s)`,
+        );
+    } catch (err: any) {
+      this.logger.error(`Stripe settlement sync failed: ${err?.message}`);
+    }
+  }
 
   // Every 15 minutes: post new marketplace/billing activity to the ledger. Redis lock inside; the unique
   // source index makes a second instance harmless anyway.

@@ -131,6 +131,88 @@ Bank transfer approved by an admin: Dr Bank — main / Cr Premium memberships (4
 
 Phase B calls `AccountingService.postJournal({ source: { type: 'payroll', id } , kind: 'auto', … })`.
 
+### 9. Stripe settlements (`stripe_btx`, `stripe_fees`)
+
+A daily job (02:41 UTC) and **Accounting → Stripe settlements → Sync now** read the **platform
+account's** Stripe balance transactions (read-only API calls) into `acct_stripe_btx`, then post them.
+Each balance transaction posts at most once (source `stripe_btx:<txn id>`); re-runs and the 2-day
+overlap of each read are harmless.
+
+**What is NOT posted again (already in the books from another source):** the gross of a card payment
+or refund for a marketplace order (seller ledger), a platform plan invoice, or an add-on. Those rows
+are marked `skipped` with the reason. Matching uses our own records: the PaymentIntent on
+`paymenttransactions`, `providerChargeId` on plan invoices / payment attempts / add-ons.
+
+| Balance transaction | Journal |
+|---|---|
+| `payout` (Stripe → bank) | Dr Stripe payout bank account (Accounting settings, default 1010) / Cr Stripe clearing (1100) |
+| `payout_failure`, `payout_cancel` | the reverse |
+| `charge` / `payment` of a **Connect destination charge** | Dr Stripe clearing (gross) / Cr Stripe Connect seller funds in transit (2030, seller party) / Cr commission (4000, or 4010 for a managed store) = application fee |
+| `transfer` (to the connected seller) | Dr 2030 / Cr Stripe clearing; `transfer_refund` / `_cancel` / `_failure` the reverse |
+| Connect `refund` | Dr 2030 (seller share) + Dr commission (fee share, pro rata) / Cr Stripe clearing |
+| `application_fee` / `_refund` | skipped when it belongs to a destination charge already split above; otherwise commission vs clearing |
+| `charge` with PaymentIntent metadata `promotionRequestId` | Dr clearing / Cr Promoted placements (4120); refunds reverse |
+| gift card purchase (`purpose: gift_card_purchase`) | Dr clearing / Cr **Suspense (1990)**: needs a manual reclassification (no gift card liability rule yet) |
+| any other card payment we can't match | Dr clearing / Cr **Suspense (1990)** |
+| `adjustment` with reporting category `dispute` | Dr Chargebacks & dispute losses (5130) / Cr clearing; `dispute_reversal` the reverse |
+| `stripe_fee`, `stripe_fx_fee`, `tax_fee` | Dr Payment gateway fees (5000) / Cr clearing |
+| `refund_failure` | Dr clearing / Cr Buyer refunds payable (2020) |
+| `topup` / `topup_reversal` | clearing vs the payout bank account |
+| `reserved_funds`, `reserve_transaction`, minimum-balance holds | skipped (money stays Edudeen's inside Stripe) |
+| anything else | clearing vs Suspense, flagged for review |
+
+**Fees:** the `fee` of every balance transaction (card payments, refunds, payouts) is summed per UTC
+day and currency into **one** journal once the day is over: Dr Payment gateway fees (5000) / Cr Stripe
+clearing (source `stripe_fees:<YYYY-MM-DD>:<CUR>`).
+
+**Currency:** lines are in the Stripe balance currency (usually USD) and converted to PKR at that day's
+rate like every other source.
+
+**Connect check (Phase A).** Orders settled through a seller's own Stripe account
+(`settledViaConnect`) never write seller-ledger transactions, so Phase A posted **nothing** for them —
+no gross was wrongly booked and no repair of earlier journals is needed. Their application fee was
+missing from income; it is now booked from the destination charge above. Connect direct charges are
+off unless `STRIPE_CONNECT_DIRECT_CHARGES=true`.
+
+**Reconciliation** (same screen) compares the Stripe clearing balance per original currency with
+Stripe's available + pending balance. Expected differences: card payments for orders not yet
+completed (Stripe has the money; the sale posts when the order completes), FX rounding between the
+sale date and the payout date, and items waiting in Suspense. The screen lists errors, unmatched and
+gift-card receipts, and adjustments to review.
+
+### 10. COD remittances (`cod_remittance`)
+
+**Accounting → COD remittances.** Finance uploads a courier statement (CSV or .xlsx; columns found by
+name with TCS / Leopards / PostEx presets and editable) or types parcels in. Each parcel is matched by
+tracking number (spaces and case ignored) to `sellerOrders.shipment.trackingNumber` /
+`tracking.trackingNumber`:
+
+| Status | Meaning |
+|---|---|
+| matched | our parcel, collected within Rs 1 of the booked COD amount |
+| short / over | our parcel, collected less / more than booked |
+| unknown | no Edudeen shipment with that number |
+| duplicate | already in another approved remittance, or twice in this statement (blocks approval) |
+
+The remittance is prepared, submitted and approved by someone else (owner exempt). Approval claims every
+known parcel in `acct_cod_items` (unique tracking number, so a parcel can never be remitted twice) and
+posts one journal dated the remittance date:
+
+- Dr bank / cash account chosen (net received)
+- Dr Courier & shipping expense (5010) = charges on the lines
+- Dr other deductions account (default Miscellaneous 6900)
+- Cr COD receivable from couriers (1110) per parcel = amount collected, **customer party**, so each
+  buyer's ledger shows their parcel cleared; a short parcel leaves the shortfall in 1110 for follow-up
+- Cr Suspense (1990) for unknown parcels
+- the difference between net received and (collected − charges − deductions) to Suspense
+
+**Outstanding COD** (Accounting → COD remittances, and on the finance dashboard when anything is older
+than 15 days): delivered or completed COD packages collected by Edudeen's courier
+(`codCollector = platform`, else `fulfillmentMode`) since the books start, not claimed by an approved
+remittance, aged 0–7 / 8–15 / 16–30 / 30+ days since delivery. Parcels whose last courier event is
+`returned` carry no cash and are left out. Amounts are the booked COD in PKR (converted at the order
+date for other currencies).
+
 ## Year-end close
 
 - **No closing entries.** Reports compute the year end:
@@ -142,12 +224,14 @@ Phase B calls `AccountingService.postJournal({ source: { type: 'payroll', id } ,
 
 ## Known gaps (post these by manual journal until automated)
 
-- **Stripe / gateway settlement to the bank, and Stripe's own fees.** Clearing accounts grow until a
-  journal moves them: Dr Bank, Dr Payment gateway fees (5000) / Cr Stripe clearing.
-- **Courier COD remittances:** Dr Bank / Cr COD receivable. Courier charges to 5010.
+- **Other gateways' settlements** (Payment gateway clearing 1120). Stripe and couriers are automated
+  (sections 9 and 10).
+- **Suspense (1990)** must be reviewed: unmatched card receipts, gift card sales, unknown COD parcels
+  and statement differences land there for a manual reclassification.
 - **Shipping income when Edudeen ships** (`fulfillmentMode = platform`). The shipping is still
   credited to the seller's balance today, as on the seller ledger.
-- **Gift cards and loyalty points:** no liability is booked for issued but unredeemed value.
+- **Gift cards and loyalty points:** no liability is booked for issued but unredeemed value (gift
+  card card payments go to Suspense, section 9).
 - **Recurring add-on renewals:** only the first add-on charge has a record. Renewals charged later
   have none.
 - **Stripe-billed Premium memberships** (`source: 'stripe'`): no payment rows exist to post from.

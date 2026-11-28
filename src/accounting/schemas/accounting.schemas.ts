@@ -183,6 +183,8 @@ export class AcctSettings {
   @Prop({ type: [String], default: [] }) financePackRecipients: string[];
   /** Last month a finance-pack notice went out for ('YYYY-MM'), so each month is sent once. */
   @Prop({ type: String, default: null }) financePackLastSent: string | null;
+  /** COA code Stripe payouts land in (Stripe settlement sync). null = Bank — main (1010). */
+  @Prop({ type: String, default: null }) stripePayoutBankAccount: string | null;
   @Prop({ type: String, default: null }) updatedBy: string | null;
 }
 export type AcctSettingsDocument = HydratedDocument<AcctSettings>;

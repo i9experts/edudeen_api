@@ -106,3 +106,33 @@ export class DisposeAssetDto {
 export class BackfillDto {
   @IsOptional() @Matches(DAY) from?: string;
 }
+
+// ── Settlements ─────────────────────────────────────────────────────────────────
+export class StripeSyncDto {
+  /** Re-read Stripe from this day (backfill); omitted = from the last sync. */
+  @IsOptional() @Matches(DAY) from?: string;
+}
+
+export class StripeSettingsDto {
+  @IsString() @Matches(/^\d{3,6}$/) payoutBankAccount: string;
+}
+
+export class CodLineDto {
+  @IsString() @MaxLength(60) trackingNumber: string;
+  @Type(() => Number) @IsNumber() @Min(-10_000_000) @Max(10_000_000) codCollected: number;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(10_000_000) charges?: number;
+}
+
+export class CodRemittanceUpdateDto {
+  @IsOptional() @IsIn(['tcs', 'leopards', 'postex', 'other']) courier?: string;
+  @IsOptional() @IsString() @MaxLength(80) statementRef?: string | null;
+  @IsOptional() @Matches(DAY) remittanceDate?: string;
+  @IsOptional() @IsString() @Matches(/^\d{3,6}$/) bankAccount?: string;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(100_000_000) otherDeductions?: number;
+  @IsOptional() @IsString() @Matches(/^\d{3,6}$/) otherDeductionsAccount?: string | null;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(1_000_000_000) netReceived?: number;
+  @IsOptional() @IsString() @MaxLength(500) notes?: string | null;
+  /** Add or replace parcels (by tracking number). */
+  @IsOptional() @IsArray() @ArrayMaxSize(500) @ValidateNested({ each: true }) @Type(() => CodLineDto) upsertLines?: CodLineDto[];
+  @IsOptional() @IsArray() @ArrayMaxSize(500) @IsString({ each: true }) @MaxLength(60, { each: true }) removeTrackings?: string[];
+}

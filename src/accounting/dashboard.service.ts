@@ -1,8 +1,10 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import archiver from 'archiver';
+import { CodRemittanceService } from './cod/cod-remittance.service';
+import { StripeSettlementService } from './stripe/stripe-settlement.service';
 import { PassThrough } from 'node:stream';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { DatabaseService } from '../database/databaseservice';
@@ -47,6 +49,8 @@ export class AccountingDashboardService {
     @InjectModel(StaffAdvance.name) private readonly advances: Model<StaffAdvance>,
     @InjectModel(PayrollClaim.name) private readonly claims: Model<PayrollClaim>,
     @InjectModel(TaxYearConfig.name) private readonly taxYears: Model<TaxYearConfig>,
+    @Optional() private readonly cod?: CodRemittanceService,
+    @Optional() private readonly stripe?: StripeSettlementService,
   ) {}
 
   // ── Dashboard ───────────────────────────────────────────────────────────────
@@ -149,6 +153,7 @@ export class AccountingDashboardService {
     const out: Record<string, unknown> = {
       journals: { count: journals, latest: latest.map((j: any) => ({ id: String(j._id), number: j.number ?? null, date: j.date, memo: j.memo, total: j.total ?? null })) },
     };
+    if (this.cod) out.codRemittances = (await this.cod.list({ status: 'submitted', limit: 1 })).total;
     if (withPayroll) {
       const [runs, advances, claims] = await Promise.all([
         this.runs.find({ status: 'submitted' }).select('month totals').lean(),
@@ -173,7 +178,20 @@ export class AccountingDashboardService {
       .sort((a, b) => new Date(a.endDate).getTime() - new Date(b.endDate).getTime())
       .slice(0, 10);
     const taxYears = withPayroll ? ((await this.taxYears.find({ needsVerification: true }).select('year').lean()) as any[]).map((t) => t.year) : [];
-    return { mou, unverifiedTaxYears: taxYears };
+    // Cash still with couriers more than 15 days after delivery, and Stripe items waiting for review.
+    let codOverdue: { amount: number; count: number } | null = null;
+    if (this.cod) {
+      try {
+        const o = await this.cod.outstanding({}, now);
+        const late = o.rows.filter((x: any) => x.days > 15);
+        if (late.length) codOverdue = { amount: o.agedOver15, count: late.length };
+      } catch (err: any) { this.logger.warn(`Outstanding COD alert failed: ${err?.message}`); }
+    }
+    let stripeReview = 0;
+    if (this.stripe) {
+      try { stripeReview = (await this.stripe.list({ status: 'error', limit: 1 })).total + (await this.stripe.list({ classification: 'unmatched', limit: 1 })).total; } catch { /* optional */ }
+    }
+    return { mou, unverifiedTaxYears: taxYears, codOverdue, stripeReview };
   }
 
   // ── Finance pack ────────────────────────────────────────────────────────────

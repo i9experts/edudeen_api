@@ -25,7 +25,7 @@ const LOCK_KEY = 'acct-posting-run';
 export interface RunStats { posted: number; skipped: number; errors: number; ms: number }
 
 /** Resolves "PKR per 1 unit of X" on a date from the append-only exchange_rates history (cached per run). */
-class FxResolver {
+export class FxResolver {
   private cache = new Map<string, { ratePerUsd: number; fallback: boolean } | null>();
   constructor(private readonly db: DatabaseService) {}
 

@@ -42,10 +42,12 @@ export const SEED_ACCOUNTS: SeedAccount[] = [
   { code: '1510', name: 'Furniture & fixtures', type: 'asset', subtype: 'fixed_asset' },
   { code: '1520', name: 'Vehicles', type: 'asset', subtype: 'fixed_asset' },
   { code: '1590', name: 'Accumulated depreciation', type: 'asset', subtype: 'accum_depreciation', description: 'Contra-asset (credit balance).' },
+  { code: '1990', name: 'Suspense / unreconciled', type: 'asset', subtype: 'other_current_asset', description: 'Money that arrived or left without an automatic rule (unmatched card receipts, unknown COD lines, bank differences). Reclassify with a manual journal; should be zero after review.' },
   // Liabilities
   { code: '2000', name: 'Seller payables', type: 'liability', subtype: 'payable', description: 'What Edudeen owes sellers (marketplace balances). A debit balance for a seller means the seller owes Edudeen.' },
   { code: '2010', name: 'Seller payouts in transit', type: 'liability', subtype: 'payable', description: 'Payouts requested/approved but not yet paid from the bank.' },
   { code: '2020', name: 'Buyer refunds payable', type: 'liability', subtype: 'payable' },
+  { code: '2030', name: 'Stripe Connect seller funds in transit', type: 'liability', subtype: 'payable', description: 'Destination charges for sellers paid through their own Stripe account: their share until Stripe transfers it.' },
   { code: '2100', name: 'Accounts payable — vendors', type: 'liability', subtype: 'payable' },
   { code: '2200', name: 'Sales tax payable', type: 'liability', subtype: 'tax_payable' },
   { code: '2210', name: 'Withholding tax payable', type: 'liability', subtype: 'tax_payable' },
@@ -65,6 +67,7 @@ export const SEED_ACCOUNTS: SeedAccount[] = [
   { code: '4020', name: 'Card processing fees charged to sellers', type: 'income', subtype: 'revenue' },
   { code: '4100', name: 'Platform plan subscriptions', type: 'income', subtype: 'revenue' },
   { code: '4110', name: 'Platform add-ons (AI credits, seats, placement)', type: 'income', subtype: 'revenue' },
+  { code: '4120', name: 'Promoted placements', type: 'income', subtype: 'revenue', description: 'Sellers paying by card to promote listings.' },
   { code: '4200', name: 'Premium memberships', type: 'income', subtype: 'revenue' },
   { code: '4300', name: 'Shipping income', type: 'income', subtype: 'revenue' },
   { code: '4800', name: 'Other income', type: 'income', subtype: 'other_income' },
@@ -75,6 +78,7 @@ export const SEED_ACCOUNTS: SeedAccount[] = [
   { code: '5100', name: 'Platform subsidies (sponsored discounts)', type: 'expense', subtype: 'cogs' },
   { code: '5110', name: 'Seller adjustments & goodwill', type: 'expense', subtype: 'cogs' },
   { code: '5120', name: 'Refund losses', type: 'expense', subtype: 'cogs' },
+  { code: '5130', name: 'Chargebacks & dispute losses', type: 'expense', subtype: 'cogs' },
   { code: '6000', name: 'Salaries & wages', type: 'expense', subtype: 'payroll' },
   { code: '6010', name: 'Allowances (petrol, lunch)', type: 'expense', subtype: 'payroll' },
   { code: '6020', name: 'Staff incentives & commissions', type: 'expense', subtype: 'payroll' },
@@ -107,6 +111,13 @@ export const POSTING_ACCOUNTS = {
   premiumIncome: '4200',
   subsidyExpense: '5100',
   sellerAdjustments: '5110',
+  promotionIncome: '4120',
+  buyerRefundsPayable: '2020',
+  connectInTransit: '2030',
+  suspense: '1990',
+  gatewayFees: '5000',
+  courierExpense: '5010',
+  chargebackLoss: '5130',
   depreciationExpense: '6400',
   accumulatedDepreciation: '1590',
   openingEquity: '3900',
@@ -124,6 +135,7 @@ export type JournalStatus = (typeof JOURNAL_STATUSES)[number];
 export const SOURCE_TYPES = [
   'seller_tx', 'payout_completed', 'platform_plan_invoice', 'platform_plan_refund', 'addon_purchase', 'premium_payment',
   'depreciation', 'asset_purchase', 'asset_disposal', 'opening_balance', 'reversal', 'payroll',
+  'stripe_btx', 'stripe_fees', 'cod_remittance',
 ] as const;
 export type SourceType = (typeof SOURCE_TYPES)[number];
 
