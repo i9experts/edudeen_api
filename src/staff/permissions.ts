@@ -113,7 +113,7 @@ const RULES: Rule[] = [
   { re: /^\/api\/admin\/finance\/payouts\/[^/]+\/(approve|reject|retry|destination)/i, read: 'finance.payouts', write: 'finance.payouts' },
   { re: /^\/api\/admin\/finance(\/|$)/i, read: 'finance.view', write: 'finance.manage' },
   { re: /^\/api\/admin\/commission-rules(\/|$)/i, read: 'finance.view', write: 'finance.manage' },
-  { re: /^\/api\/admin\/accounting\/(journals\/[^/]+\/(approve|reject|reverse)|periods\/|assets\/[^/]+\/dispose|posting\/backfill)/i, read: 'accounting.view', write: 'accounting.approve' },
+  { re: /^\/api\/admin\/accounting\/(journals\/[^/]+\/(approve|reject|reverse)|periods\/|assets\/[^/]+\/dispose|posting\/backfill|settings$)/i, read: 'accounting.view', write: 'accounting.approve' },
   { re: /^\/api\/admin\/accounting(\/|$)/i, read: 'accounting.view', write: 'accounting.prepare' },
   // Payroll: every staff member reaches their own self-service and the claims queue (the service decides who sees
   // and decides which claims: their manager, claims.approve, payroll.approve; payroll.view reads).

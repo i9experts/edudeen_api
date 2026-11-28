@@ -924,7 +924,8 @@ export class PayrollService implements OnModuleInit {
     const runs: any[] = await this.runs.find({ status: { $in: ['approved', 'paid'] }, 'lines.adminId': adminId }).sort({ month: -1 }).limit(36).lean();
     return runs.map((r) => {
       const l = (r.lines ?? []).find((x: any) => x.adminId === adminId && !x.excluded);
-      return l ? { runId: String(r._id), month: r.month, gross: l.gross, totalDeductions: l.totalDeductions, net: l.net, paid: !!l.paid, paidAt: l.paid?.at ?? null } : null;
+      const tax = l ? (l.deductions ?? []).filter((d: any) => d.kind === 'income_tax' || d.kind === 'withholding').reduce((t: number, d: any) => t + (d.amount ?? 0), 0) : 0;
+      return l ? { runId: String(r._id), month: r.month, gross: l.gross, totalDeductions: l.totalDeductions, net: l.net, tax: round2(tax), paid: !!l.paid, paidAt: l.paid?.at ?? null } : null;
     }).filter(Boolean);
   }
 

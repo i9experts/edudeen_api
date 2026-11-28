@@ -174,3 +174,16 @@ export class AcctPostingState {
 }
 export type AcctPostingStateDocument = HydratedDocument<AcctPostingState>;
 export const AcctPostingStateSchema = SchemaFactory.createForClass(AcctPostingState);
+
+/** Singleton (key 'default'): finance-team sharing settings. The monthly finance-pack e-mail is OFF by default. */
+@Schema({ timestamps: true, collection: 'accounting_settings' })
+export class AcctSettings {
+  @Prop({ type: String, required: true, unique: true, default: 'default' }) key: string;
+  @Prop({ type: Boolean, default: false }) financePackEmailEnabled: boolean;
+  @Prop({ type: [String], default: [] }) financePackRecipients: string[];
+  /** Last month a finance-pack notice went out for ('YYYY-MM'), so each month is sent once. */
+  @Prop({ type: String, default: null }) financePackLastSent: string | null;
+  @Prop({ type: String, default: null }) updatedBy: string | null;
+}
+export type AcctSettingsDocument = HydratedDocument<AcctSettings>;
+export const AcctSettingsSchema = SchemaFactory.createForClass(AcctSettings);

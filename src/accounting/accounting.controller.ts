@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, Res, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, Res, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -12,6 +12,7 @@ import { PostingService } from './posting/posting.service';
 import { BOOKS_START } from './accounting.constants';
 import { parseDay } from './accounting.util';
 import { EXPORT_FORMATS, exportTable, type ExportFormat } from './export.util';
+import { AccountingDashboardService } from './dashboard.service';
 import {
   BackfillDto, CreateAccountDto, CreateAssetDto, CreateJournalDto, DisposeAssetDto, ReasonDto, ReverseDto, UpdateAccountDto, UpdateAssetDto,
   UpdateJournalDto, VendorDto,
@@ -29,7 +30,12 @@ import {
 @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
 @Controller('api/admin/accounting')
 export class AccountingController {
-  constructor(private readonly ledger: AccountingService, private readonly reports: ReportsService, private readonly posting: PostingService) {}
+  constructor(
+    private readonly ledger: AccountingService,
+    private readonly reports: ReportsService,
+    private readonly posting: PostingService,
+    private readonly dash: AccountingDashboardService,
+  ) {}
 
   private actor(req: any): AcctActor {
     const perms: Set<string> | undefined = req.staffPermissions;
@@ -38,6 +44,30 @@ export class AccountingController {
 
   @Get('summary')
   async summary() { return { success: true, data: await this.reports.summary() }; }
+
+  /** Finance dashboard: KPIs, fiscal-year series, approvals and alerts (cached ~2 min; ?refresh=1 skips the cache). */
+  @Get('dashboard')
+  async dashboard(@Req() req: any, @Query('refresh') refresh?: string) {
+    return { success: true, data: await this.dash.dashboard(this.actor(req), refresh === '1' || refresh === 'true') };
+  }
+
+  /** One zip of the month's statements as Excel files (?month=YYYY-MM, default last month). */
+  @Get('finance-pack')
+  async financePack(@Req() req: any, @Query('month') month: string | undefined, @Res() res: Response) {
+    const { body, fileName } = await this.dash.financePack(this.actor(req), month);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(body);
+  }
+
+  @Get('settings')
+  async settings() { return { success: true, data: await this.dash.getSettings() }; }
+
+  @Put('settings')
+  async saveSettings(@Req() req: any, @Body() body: any) {
+    return { success: true, data: await this.dash.saveSettings(this.actor(req), { financePackEmailEnabled: body?.financePackEmailEnabled, financePackRecipients: body?.financePackRecipients }) };
+  }
 
   // Accounts
   @Get('accounts')

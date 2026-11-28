@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { AccountingService } from './accounting.service';
 import { PostingService } from './posting/posting.service';
+import { AccountingDashboardService } from './dashboard.service';
 
 @Injectable()
 export class AccountingJobs {
@@ -9,6 +10,7 @@ export class AccountingJobs {
   constructor(
     private readonly posting: PostingService,
     private readonly ledger: AccountingService,
+    private readonly dash: AccountingDashboardService,
   ) {}
 
   // Every 15 minutes: post new marketplace/billing activity to the ledger. Redis lock inside; the unique
@@ -38,6 +40,21 @@ export class AccountingJobs {
       if (posted) this.logger.log(`Depreciation entries posted: ${posted}`);
     } catch (err: any) {
       this.logger.error(`Depreciation failed: ${err?.message}`);
+    }
+  }
+
+  // 3rd of each month: tell the finance team last month's pack is ready (only when turned on in Accounting settings;
+  // sent once per month even with several instances).
+  @Cron('13 6 3 * *')
+  async financePackNotice() {
+    try {
+      const { sent, month } = await this.dash.sendMonthlyNotice();
+      if (sent)
+        this.logger.log(
+          `Finance pack notice for ${month} sent to ${sent} recipient(s)`,
+        );
+    } catch (err: any) {
+      this.logger.error(`Finance pack notice failed: ${err?.message}`);
     }
   }
 }

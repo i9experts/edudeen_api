@@ -11,8 +11,20 @@ import {
   PremiumPlanSchema,
 } from '../premium/premium.schemas';
 import {
+  PayrollClaim,
+  PayrollClaimSchema,
+  PayrollRun,
+  PayrollRunSchema,
+  StaffAdvance,
+  StaffAdvanceSchema,
+  TaxYearConfig,
+  TaxYearConfigSchema,
+} from '../payroll/schemas/payroll.schemas';
+import {
   Account,
   AccountSchema,
+  AcctSettings,
+  AcctSettingsSchema,
   AccountingPeriod,
   AccountingPeriodSchema,
   AcctCounter,
@@ -33,6 +45,7 @@ import { ReportsService } from './reports.service';
 import { PostingService } from './posting/posting.service';
 import { AccountingController } from './accounting.controller';
 import { AccountingJobs } from './accounting.jobs';
+import { AccountingDashboardService } from './dashboard.service';
 
 @Module({
   imports: [
@@ -50,6 +63,12 @@ import { AccountingJobs } from './accounting.jobs';
       { name: PremiumPayment.name, schema: PremiumPaymentSchema },
       { name: PremiumMembership.name, schema: PremiumMembershipSchema },
       { name: PremiumPlan.name, schema: PremiumPlanSchema },
+      { name: AcctSettings.name, schema: AcctSettingsSchema },
+      // Read-only here (dashboard queue counts / tax-year warning); the payroll module owns them.
+      { name: PayrollRun.name, schema: PayrollRunSchema },
+      { name: StaffAdvance.name, schema: StaffAdvanceSchema },
+      { name: PayrollClaim.name, schema: PayrollClaimSchema },
+      { name: TaxYearConfig.name, schema: TaxYearConfigSchema },
     ]),
   ],
   controllers: [AccountingController],
@@ -57,6 +76,7 @@ import { AccountingJobs } from './accounting.jobs';
     AccountingService,
     ReportsService,
     PostingService,
+    AccountingDashboardService,
     AccountingJobs,
   ],
   // Phase B (payroll) posts salary journals through AccountingService.postJournal.
