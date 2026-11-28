@@ -23,6 +23,7 @@ export const ACTIVITY_LOG_CATEGORIES = [
   'academy',
   'managed',
   'accounting',
+  'payroll',
 ] as const;
 
 export type ActivityLogCategory = (typeof ACTIVITY_LOG_CATEGORIES)[number];

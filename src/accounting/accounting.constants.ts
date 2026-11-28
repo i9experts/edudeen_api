@@ -80,6 +80,8 @@ export const SEED_ACCOUNTS: SeedAccount[] = [
   { code: '6020', name: 'Staff incentives & commissions', type: 'expense', subtype: 'payroll' },
   { code: '6030', name: 'Employer EOBI contribution', type: 'expense', subtype: 'payroll' },
   { code: '6040', name: 'Employer provident fund contribution', type: 'expense', subtype: 'payroll' },
+  { code: '6050', name: 'Contractor fees', type: 'expense', subtype: 'payroll', description: 'Pay to team members engaged as contractors (no salary tax).' },
+  { code: '6060', name: 'Staff claims & reimbursements', type: 'expense', subtype: 'payroll', description: 'Approved petrol, lunch, visit and travel claims paid through payroll.' },
   { code: '6100', name: 'Marketing & advertising', type: 'expense', subtype: 'opex' },
   { code: '6200', name: 'Hosting & software', type: 'expense', subtype: 'opex' },
   { code: '6300', name: 'Rent', type: 'expense', subtype: 'opex' },
