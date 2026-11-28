@@ -25,6 +25,7 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: 'stores.manage', label: 'Create stores for sellers', group: 'Marketplace', sensitive: true },
   { key: 'stores.operate', label: 'Run the stores assigned to them (as the seller)', group: 'Managed sellers', sensitive: true },
   { key: 'managed.manage', label: 'Managed sellers: MOU, commission, shipping mode and store assignments', group: 'Managed sellers', sensitive: true },
+  { key: 'operations.view', label: 'See every store in Seller operations (listings, replies, orders, shipments)', group: 'Managed sellers' },
   { key: 'moderation.view', label: 'View reports & flagged content', group: 'Moderation' },
   { key: 'moderation.manage', label: 'Resolve reports, remove reviews', group: 'Moderation' },
   { key: 'orders.view', label: 'View orders & refund requests', group: 'Orders' },
@@ -114,6 +115,9 @@ const RULES: Rule[] = [
   { re: /^\/api\/admin\/stores\/[^/]+\/manage-session$/i, read: 'stores.operate', write: 'stores.operate' },
   { re: /^\/api\/admin\/stores(\/|$)/i, read: 'stores.manage', write: 'stores.manage' },
   { re: /^\/api\/admin\/managed-stores\/mine$/i, read: 'stores.operate', write: DENY },
+  // Read-only. Any staff member reaches the controller, which shows all stores (operations.view) or only the
+  // stores assigned to them (stores.operate) and answers 403 to everyone else.
+  { re: /^\/api\/admin\/operations(\/|$)/i, read: null, write: DENY },
   { re: /^\/api\/admin\/managed-stores(\/|$)/i, read: 'managed.manage', write: 'managed.manage' },
   { re: /^\/api\/admin\/marketplace(\/|$)/i, read: 'marketplace.view', write: 'marketplace.manage' },
   { re: /^\/api\/admin\/moderation(\/|$)/i, read: 'moderation.view', write: 'moderation.manage' },

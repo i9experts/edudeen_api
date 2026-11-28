@@ -444,6 +444,11 @@ export class OrderShippingAddress {
 
   @Prop({ type: String, required: true })
   zipCode: string;
+
+  // ISO-3166 alpha-2 country of the buyer's address (Address.country), snapshotted at checkout. null on older
+  // orders and on addresses saved without a country. Lets admin operations tell domestic from cross-border parcels.
+  @Prop({ type: String, default: null })
+  country: string | null;
 }
 
 export const OrderShippingAddressSchema =

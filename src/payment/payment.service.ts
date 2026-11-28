@@ -2022,6 +2022,7 @@ export class PaymentService {
           city: address.city,
           state: address.state,
           zipCode: address.zipCode,
+          country: typeof address.country === 'string' && /^[A-Za-z]{2}$/.test(address.country) ? address.country.toUpperCase() : null,
         };
       }
     }
