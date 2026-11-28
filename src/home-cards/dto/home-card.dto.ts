@@ -3,7 +3,7 @@ import {
   ArrayMaxSize, IsArray, IsIn, IsNotEmpty, IsOptional, IsString, IsUrl, MaxLength, ValidateNested, IsInt, Min, ArrayMinSize, IsMongoId, ValidateIf,
 } from 'class-validator';
 import { IsLinkTarget } from '../../common/link-target.util';
-import { HOME_CARD_LAYOUTS, HOME_CARD_STATUSES, HomeCardLayout, HomeCardStatus } from '../schemas/home-card.schema';
+import { HOME_CARD_LAYOUTS, HOME_CARD_STATUSES, HOME_CARD_TINTS, HomeCardLayout, HomeCardStatus, HomeCardTint } from '../schemas/home-card.schema';
 
 const IMG = { require_protocol: true, protocols: ['https'] };
 // '' means "no picture" (a tile without one falls back to its category photo), so only check non-empty values.
@@ -39,6 +39,9 @@ export class CreateHomeCardDto {
   @IsOptional() @IsString() @MaxLength(30)
   ctaLabel?: string;
 
+  @IsOptional() @IsIn(HOME_CARD_TINTS as unknown as string[], { message: 'tint must be one of: ' + HOME_CARD_TINTS.join(', ') })
+  tint?: HomeCardTint;
+
   @IsOptional() @IsIn(HOME_CARD_STATUSES as unknown as string[])
   status?: HomeCardStatus;
 }
@@ -62,6 +65,9 @@ export class UpdateHomeCardDto {
 
   @IsOptional() @IsString() @MaxLength(30)
   ctaLabel?: string;
+
+  @IsOptional() @IsIn(HOME_CARD_TINTS as unknown as string[], { message: 'tint must be one of: ' + HOME_CARD_TINTS.join(', ') })
+  tint?: HomeCardTint;
 
   @IsOptional() @IsIn(HOME_CARD_STATUSES as unknown as string[])
   status?: HomeCardStatus;

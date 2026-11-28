@@ -5,6 +5,9 @@ export type HomeCardDocument = HydratedDocument<HomeCard>;
 
 export const HOME_CARD_LAYOUTS = ['grid4', 'single'] as const;
 export type HomeCardLayout = (typeof HOME_CARD_LAYOUTS)[number];
+// Light card background. 'white' = the original plain card; the rest match the web's --color-tint-* tokens.
+export const HOME_CARD_TINTS = ['white', 'sky', 'peach', 'mint', 'blossom', 'lilac', 'butter', 'seafoam', 'coral'] as const;
+export type HomeCardTint = (typeof HOME_CARD_TINTS)[number];
 export const HOME_CARD_STATUSES = ['active', 'draft'] as const;
 export type HomeCardStatus = (typeof HOME_CARD_STATUSES)[number];
 
@@ -47,6 +50,9 @@ export class HomeCard {
 
   @Prop({ type: String, default: '' })
   ctaLabel: string;
+
+  @Prop({ type: String, enum: HOME_CARD_TINTS, default: 'white' })
+  tint: HomeCardTint;
 
   @Prop({ type: String, enum: HOME_CARD_STATUSES, default: 'active' })
   status: HomeCardStatus;

@@ -58,6 +58,7 @@ export class HomeCardsService {
       imageUrl: cleanImage(dto.imageUrl),
       link: cleanLink(dto.link),
       ctaLabel: (dto.ctaLabel ?? '').trim(),
+      tint: dto.tint ?? 'white',
       status: dto.status ?? 'active',
       order: last ? (last.order ?? 0) + 1 : 0,
     });
@@ -72,6 +73,7 @@ export class HomeCardsService {
     if (dto.imageUrl !== undefined) set.imageUrl = cleanImage(dto.imageUrl);
     if (dto.link !== undefined) set.link = cleanLink(dto.link);
     if (dto.ctaLabel !== undefined) set.ctaLabel = dto.ctaLabel.trim();
+    if (dto.tint !== undefined) set.tint = dto.tint;
     if (dto.status !== undefined) set.status = dto.status;
     if (dto.order !== undefined) set.order = dto.order;
     const doc = await this.model.findByIdAndUpdate(id, { $set: set }, { new: true }).lean();

@@ -42,4 +42,14 @@ describe('home card DTO image URLs', () => {
       ).length,
     ).toBe(1);
   });
+
+  it('accepts a known tint and rejects an unknown one', async () => {
+    expect(
+      await errorsOf(CreateHomeCardDto, { title: 'x', tint: 'mint' }),
+    ).toEqual([]);
+    expect(await errorsOf(UpdateHomeCardDto, { tint: 'white' })).toEqual([]);
+    expect(
+      (await errorsOf(UpdateHomeCardDto, { tint: 'neon' })).join(),
+    ).toContain('tint must be one of');
+  });
 });
