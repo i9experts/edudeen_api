@@ -1,17 +1,19 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayMaxSize, IsArray, IsIn, IsNotEmpty, IsOptional, IsString, IsUrl, MaxLength, ValidateNested, IsInt, Min, ArrayMinSize, IsMongoId,
+  ArrayMaxSize, IsArray, IsIn, IsNotEmpty, IsOptional, IsString, IsUrl, MaxLength, ValidateNested, IsInt, Min, ArrayMinSize, IsMongoId, ValidateIf,
 } from 'class-validator';
 import { IsLinkTarget } from '../../common/link-target.util';
 import { HOME_CARD_LAYOUTS, HOME_CARD_STATUSES, HomeCardLayout, HomeCardStatus } from '../schemas/home-card.schema';
 
 const IMG = { require_protocol: true, protocols: ['https'] };
+// '' means "no picture" (a tile without one falls back to its category photo), so only check non-empty values.
+const hasValue = (_: unknown, v: unknown) => v !== undefined && v !== null && v !== '';
 
 export class HomeCardTileDto {
   @IsOptional() @IsString() @MaxLength(40)
   label?: string;
 
-  @IsOptional() @IsUrl(IMG, { message: 'imageUrl must be an https URL' }) @MaxLength(600)
+  @ValidateIf(hasValue) @IsUrl(IMG, { message: 'imageUrl must be an https URL' }) @MaxLength(600)
   imageUrl?: string;
 
   @IsOptional() @IsLinkTarget()
@@ -28,7 +30,7 @@ export class CreateHomeCardDto {
   @IsOptional() @IsArray() @ArrayMaxSize(4) @ValidateNested({ each: true }) @Type(() => HomeCardTileDto)
   tiles?: HomeCardTileDto[];
 
-  @IsOptional() @IsUrl(IMG, { message: 'imageUrl must be an https URL' }) @MaxLength(600)
+  @ValidateIf(hasValue) @IsUrl(IMG, { message: 'imageUrl must be an https URL' }) @MaxLength(600)
   imageUrl?: string;
 
   @IsOptional() @IsLinkTarget()
@@ -52,7 +54,7 @@ export class UpdateHomeCardDto {
   tiles?: HomeCardTileDto[];
 
   // '' clears the image.
-  @IsOptional() @IsString() @MaxLength(600)
+  @ValidateIf(hasValue) @IsUrl(IMG, { message: 'imageUrl must be an https URL' }) @MaxLength(600)
   imageUrl?: string;
 
   @IsOptional() @IsString() @MaxLength(500)
