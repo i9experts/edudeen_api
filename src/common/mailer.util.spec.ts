@@ -26,6 +26,47 @@ afterEach(() => {
 });
 
 describe('mailer.util sendMail — sender identity', () => {
+  it('finds PlatformConfig on a Nest-created connection (not the global mongoose models)', async () => {
+    process.env.BREVO_API_KEY = 'key123';
+    process.env.APP_NAME = 'Edudeen';
+    process.env.SMTP_USER = 'someone@gmail.com';
+    (mongoose as any).models = {};
+    const conn = {
+      models: {
+        PlatformConfig: {
+          findOne: () => ({
+            select: () => ({
+              lean: async () => ({
+                emailConfig: {
+                  fromName: 'EDUDEEN',
+                  fromEmail: 'marketing@edudeen.com',
+                },
+              }),
+            }),
+          }),
+        },
+      },
+    };
+    mongoose.connections.push(conn as any);
+    let sentBody: any;
+    global.fetch = jest.fn(async (_url: string, init: any) => {
+      sentBody = JSON.parse(init.body);
+      return fakeResponse({ messageId: 'c1' });
+    }) as any;
+
+    await sendMail({
+      to: 'buyer@example.com',
+      subject: 'Hi',
+      html: '<p>hi</p>',
+    });
+    mongoose.connections.splice(mongoose.connections.indexOf(conn as any), 1);
+
+    expect(sentBody.sender).toEqual({
+      name: 'EDUDEEN',
+      email: 'marketing@edudeen.com',
+    });
+  });
+
   it('uses the admin-configured PlatformConfig.emailConfig over env vars (Brevo path)', async () => {
     process.env.BREVO_API_KEY = 'key123';
     process.env.APP_NAME = 'Jami Raza'; // whatever the env happens to resolve to

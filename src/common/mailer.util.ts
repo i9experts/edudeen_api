@@ -23,6 +23,7 @@ export interface OutgoingMail {
 }
 
 let smtpTransport: nodemailer.Transporter | null = null;
+let warnedGmailRewrite = false;
 
 /** The admin's configured sender identity. Read directly off the shared mongoose connection instead of
  *  through Nest's DI (AdminConfigModule imports AuthModule, which imports OtpModule — injecting
@@ -35,7 +36,11 @@ async function configuredSender(): Promise<{
   replyTo?: string;
 }> {
   try {
-    const PlatformConfig = mongoose.models.PlatformConfig;
+    // @nestjs/mongoose registers models on its own connection (mongoose.createConnection), not on the
+    // global mongoose instance, so look on every open connection too.
+    const PlatformConfig: mongoose.Model<any> | undefined =
+      mongoose.models.PlatformConfig ??
+      mongoose.connections.map((c) => c.models?.PlatformConfig).find(Boolean);
     if (!PlatformConfig) return {};
     const config: any = await PlatformConfig.findOne({})
       .select('emailConfig')
@@ -114,6 +119,18 @@ export async function sendMail(mail: OutgoingMail): Promise<string> {
     return body.messageId ?? 'brevo';
   }
 
+  const smtpUser = process.env.SMTP_USER || '';
+  if (
+    !warnedGmailRewrite &&
+    /gmail\.com$/i.test(process.env.SMTP_HOST || 'smtp.gmail.com') &&
+    smtpUser &&
+    from.email.toLowerCase() !== smtpUser.toLowerCase()
+  ) {
+    warnedGmailRewrite = true;
+    console.warn(
+      `Mailer: sending through Gmail SMTP as ${smtpUser}; Gmail replaces the From address ${from.email} with it. Set BREVO_API_KEY to send from ${from.email}.`,
+    );
+  }
   const info = await getSmtpTransport().sendMail({
     from: `"${from.name}" <${from.email}>`,
     to: mail.to,
