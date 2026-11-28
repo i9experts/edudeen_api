@@ -93,6 +93,7 @@ export const SEED_ACCOUNTS: SeedAccount[] = [
   { code: '6400', name: 'Depreciation', type: 'expense', subtype: 'opex' },
   { code: '6500', name: 'Bank charges', type: 'expense', subtype: 'opex' },
   { code: '6900', name: 'Miscellaneous expenses', type: 'expense', subtype: 'other_expense' },
+  { code: '6910', name: 'Penalties & fines', type: 'expense', subtype: 'other_expense', description: 'Late-payment penalties and default surcharge on tax / EOBI payments.' },
 ];
 
 /** The ONE place auto-posting rules get their accounts from (codes from SEED_ACCOUNTS). */
@@ -135,7 +136,7 @@ export type JournalStatus = (typeof JOURNAL_STATUSES)[number];
 export const SOURCE_TYPES = [
   'seller_tx', 'payout_completed', 'platform_plan_invoice', 'platform_plan_refund', 'addon_purchase', 'premium_payment',
   'depreciation', 'asset_purchase', 'asset_disposal', 'opening_balance', 'reversal', 'payroll',
-  'stripe_btx', 'stripe_fees', 'cod_remittance',
+  'stripe_btx', 'stripe_fees', 'cod_remittance', 'statutory_payment',
 ] as const;
 export type SourceType = (typeof SOURCE_TYPES)[number];
 

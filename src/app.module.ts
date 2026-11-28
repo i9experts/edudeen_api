@@ -90,6 +90,7 @@ import { ManagedStoresModule } from './managed-stores/managed-stores.module';
 import { OperationsModule } from './operations/operations.module';
 import { AccountingModule } from './accounting/accounting.module';
 import { PayrollModule } from './payroll/payroll.module';
+import { StatutoryModule } from './statutory/statutory.module';
 
 @Module({
   imports: [
@@ -187,6 +188,7 @@ import { PayrollModule } from './payroll/payroll.module';
     OperationsModule,
     AccountingModule,
     PayrollModule,
+    StatutoryModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }, { provide: APP_INTERCEPTOR, useClass: NoOperatorKeysInterceptor }],

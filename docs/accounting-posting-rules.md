@@ -213,6 +213,31 @@ remittance, aged 0–7 / 8–15 / 16–30 / 30+ days since delivery. Parcels who
 `returned` carry no cash and are left out. Amounts are the booked COD in PKR (converted at the order
 date for other currencies).
 
+### 11. Tax & EOBI payments (`statutory_payment`)
+
+Edudeen cannot pay FBR or EOBI itself (no API): finance pays through the bank with a PSID or challan and records
+the CPR in Payroll → Tax & EOBI payments (`src/statutory/`).
+
+- **Statements are generated** for every approved payroll run, one per authority with something owed, from the
+  same payslip lines the accrual journal was built from:
+  - FBR income tax on salaries → 2220, per employee (taxable income, tax deducted);
+  - FBR withholding on contractors → 2210, per contractor (pay excluding claims, tax withheld);
+  - EOBI → 2230, per employee (employee + employer share, wage base);
+  - provident fund → 2240.
+
+  A job every 20 minutes (and opening the page) creates them; a unique index on run + authority makes it
+  idempotent. Each statement stores what the run's accrual journal credited to its account and shows any
+  difference.
+- **Manual statements** (e.g. tax withheld from vendors) can be added on any active liability account.
+- **Due date:** day N of the following month per authority (Accounting settings, default 15th). Defaults only:
+  finance checks current FBR / EOBI rules. Reminders to the finance-pack recipients 5 days before and when
+  overdue, each once per statement.
+- **Payment:** recorded with PSID, CPR / challan number, date, bank and the receipt, then approved by someone
+  else (owner exempt). Approval posts Dr liability / Cr bank, plus Dr Penalties & fines (6910) / Cr bank for
+  any late-payment penalty. Partial payments are allowed. Source id `statement:payment`.
+- **No party on these lines:** payroll accrues the liabilities as one total per run, so a per-employee party
+  on the payment would unbalance the employee ledgers. The statement keeps the per-person detail.
+
 ## Year-end close
 
 - **No closing entries.** Reports compute the year end:

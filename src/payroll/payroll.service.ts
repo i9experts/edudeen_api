@@ -230,6 +230,7 @@ export class PayrollService implements OnModuleInit {
     if (dto.designation !== undefined) set('designation', str(dto.designation, 80) || null);
     if (dto.active !== undefined) set('active', !!dto.active);
     if (dto.bankName !== undefined) set('bankName', str(dto.bankName, 80) || null);
+    if (dto.eobiNumber !== undefined) set('eobiNumber', str(dto.eobiNumber, 30) || null);
     if (dto.accountTitle !== undefined) set('accountTitle', str(dto.accountTitle, 120) || null);
     const secret = (key: 'cnic' | 'ntn' | 'bankAccount', raw: unknown) => {
       if (raw === undefined) return;

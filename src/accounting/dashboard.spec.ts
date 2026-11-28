@@ -100,7 +100,8 @@ describe('AccountingDashboardService', () => {
     const advances: any = { countDocuments: jest.fn(async () => 1) };
     const claims: any = { countDocuments: jest.fn(async () => 4) };
     const activity: any = { log: jest.fn(async () => true) };
-    const svc = new AccountingDashboardService({ repositories: {} } as any, reports, {} as any, activity, journals, settings, runs, advances, claims, {} as any);
+    const statutory: any = { countDocuments: jest.fn(async () => 2), find: jest.fn(() => ({ select: () => ({ lean: async () => [] }) })) };
+    const svc = new AccountingDashboardService({ repositories: {} } as any, reports, {} as any, activity, journals, settings, runs, advances, claims, {} as any, statutory);
     Object.assign(svc, over);
     return { svc, table, journals, settings, settingsStore, runs, activity };
   }

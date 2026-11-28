@@ -120,6 +120,8 @@ const RULES: Rule[] = [
   { re: /^\/api\/admin\/payroll\/(me|claims)(\/|$)/i, read: null, write: null },
   { re: /^\/api\/admin\/payroll\/(runs\/[^/]+\/(approve|reject|pay)|advances\/[^/]+\/(approve|reject)|tax-years\/[^/]+\/verify|profiles\/[^/]+\/identity)/i, read: 'payroll.approve', write: 'payroll.approve' },
   { re: /^\/api\/admin\/payroll(\/|$)/i, read: 'payroll.view', write: 'payroll.prepare' },
+  // Tax & EOBI payments: payroll OR accounting staff (view / prepare / approve are checked again in the service).
+  { re: /^\/api\/admin\/statutory(\/|$)/i, read: null, write: null },
   { re: /^\/api\/admin\/manual-payments(\/|$)/i, read: 'payments.view', write: 'payments.approve' },
   { re: /^\/api\/admin\/orders(\/|$)/i, read: 'orders.view', write: 'orders.manage' },
   { re: /^\/api\/orders\/(seller-orders|returns)/i, read: 'orders.view', write: 'orders.manage' },

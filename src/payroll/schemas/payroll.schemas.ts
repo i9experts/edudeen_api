@@ -47,6 +47,8 @@ export class CompensationProfile {
   @Prop({ type: String, default: null }) cnicLast4: string | null;
   @Prop({ type: String, default: null }) ntnLast4: string | null;
   @Prop({ type: String, default: null }) bankAccountLast4: string | null;
+  /** EOBI registration number (for the monthly contribution list). Not secret. */
+  @Prop({ type: String, default: null }) eobiNumber: string | null;
   @Prop({ type: String, default: null }) bankName: string | null;
   @Prop({ type: String, default: null }) accountTitle: string | null;
   @Prop({ type: [PayVersionSchema], default: [] }) versions: PayVersionDoc[];

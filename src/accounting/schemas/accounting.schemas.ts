@@ -185,6 +185,10 @@ export class AcctSettings {
   @Prop({ type: String, default: null }) financePackLastSent: string | null;
   /** COA code Stripe payouts land in (Stripe settlement sync). null = Bank — main (1010). */
   @Prop({ type: String, default: null }) stripePayoutBankAccount: string | null;
+  /** Day of the following month each statutory authority is due (statutory.util DEFAULT_DUE_DAYS when unset). */
+  @Prop({ type: Object, default: null }) statutoryDueDays: Record<string, number> | null;
+  /** E-mail the finance recipients 5 days before a tax / EOBI payment is due and when it becomes overdue. */
+  @Prop({ type: Boolean, default: true }) statutoryRemindersEnabled: boolean;
   @Prop({ type: String, default: null }) updatedBy: string | null;
 }
 export type AcctSettingsDocument = HydratedDocument<AcctSettings>;

@@ -18,6 +18,8 @@ import { ReportsService } from './reports.service';
 import { PostingService } from './posting/posting.service';
 import { toXlsx, type ReportTable } from './export.util';
 import { AcctSettings, JournalEntry } from './schemas/accounting.schemas';
+import { StatutoryPayment } from '../statutory/schemas/statutory.schemas';
+import { dueState, paymentTotals } from '../statutory/statutory.util';
 import {
   PAYROLL_EXPENSE_CODES, cleanRecipients, convertTotalsToPkr, expenseTotal, fiscalPeriodsUpTo, isCashLike, monthlySeries, packMonth, revenueMix,
   type PeriodAccountRow,
@@ -49,6 +51,7 @@ export class AccountingDashboardService {
     @InjectModel(StaffAdvance.name) private readonly advances: Model<StaffAdvance>,
     @InjectModel(PayrollClaim.name) private readonly claims: Model<PayrollClaim>,
     @InjectModel(TaxYearConfig.name) private readonly taxYears: Model<TaxYearConfig>,
+    @InjectModel(StatutoryPayment.name) private readonly statutory: Model<StatutoryPayment>,
     @Optional() private readonly cod?: CodRemittanceService,
     @Optional() private readonly stripe?: StripeSettlementService,
   ) {}
@@ -154,6 +157,8 @@ export class AccountingDashboardService {
       journals: { count: journals, latest: latest.map((j: any) => ({ id: String(j._id), number: j.number ?? null, date: j.date, memo: j.memo, total: j.total ?? null })) },
     };
     if (this.cod) out.codRemittances = (await this.cod.list({ status: 'submitted', limit: 1 })).total;
+    // Tax / EOBI payments recorded and waiting for an approver.
+    out.statutoryPayments = await this.statutory.countDocuments({ status: 'submitted' });
     if (withPayroll) {
       const [runs, advances, claims] = await Promise.all([
         this.runs.find({ status: 'submitted' }).select('month totals').lean(),
@@ -191,7 +196,17 @@ export class AccountingDashboardService {
     if (this.stripe) {
       try { stripeReview = (await this.stripe.list({ status: 'error', limit: 1 })).total + (await this.stripe.list({ classification: 'unmatched', limit: 1 })).total; } catch { /* optional */ }
     }
-    return { mou, unverifiedTaxYears: taxYears, codOverdue, stripeReview };
+    // Tax / EOBI / PF payments due within 5 days or overdue (amount still unpaid).
+    const statutory = { dueSoon: { count: 0, amount: 0 }, overdue: { count: 0, amount: 0 } };
+    const open: any[] = await this.statutory.find({ status: { $nin: ['paid', 'void'] } }).select('amount payments dueDate status').lean();
+    for (const st of open) {
+      const state = dueState(st, now);
+      if (state !== 'due_soon' && state !== 'overdue') continue;
+      const bucket = state === 'overdue' ? statutory.overdue : statutory.dueSoon;
+      bucket.count++;
+      bucket.amount = round2(bucket.amount + paymentTotals(st.amount, st.payments ?? []).remaining);
+    }
+    return { mou, unverifiedTaxYears: taxYears, codOverdue, stripeReview, statutory };
   }
 
   // ── Finance pack ────────────────────────────────────────────────────────────

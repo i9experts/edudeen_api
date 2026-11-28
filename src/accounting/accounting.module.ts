@@ -62,6 +62,10 @@ import {
   StripeBalanceTxn,
   StripeBalanceTxnSchema,
 } from './schemas/settlement.schemas';
+import {
+  StatutoryPayment,
+  StatutoryPaymentSchema,
+} from '../statutory/schemas/statutory.schemas';
 
 @Module({
   imports: [
@@ -88,6 +92,8 @@ import {
       { name: StripeBalanceTxn.name, schema: StripeBalanceTxnSchema },
       { name: CodRemittance.name, schema: CodRemittanceSchema },
       { name: CodRemittanceItem.name, schema: CodRemittanceItemSchema },
+      // Read-only here (dashboard alerts / approvals); the statutory module owns it.
+      { name: StatutoryPayment.name, schema: StatutoryPaymentSchema },
     ]),
   ],
   controllers: [AccountingController, SettlementsController],
