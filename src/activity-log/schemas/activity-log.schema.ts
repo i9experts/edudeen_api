@@ -22,6 +22,7 @@ export const ACTIVITY_LOG_CATEGORIES = [
   'promotions',
   'academy',
   'managed',
+  'accounting',
 ] as const;
 
 export type ActivityLogCategory = (typeof ACTIVITY_LOG_CATEGORIES)[number];

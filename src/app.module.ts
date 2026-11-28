@@ -88,6 +88,7 @@ import { PhoneVerificationModule } from './phone-verification/phone-verification
 import { AcademyModule } from './academy/academy.module';
 import { ManagedStoresModule } from './managed-stores/managed-stores.module';
 import { OperationsModule } from './operations/operations.module';
+import { AccountingModule } from './accounting/accounting.module';
 
 @Module({
   imports: [
@@ -183,6 +184,7 @@ import { OperationsModule } from './operations/operations.module';
     AcademyModule,
     ManagedStoresModule,
     OperationsModule,
+    AccountingModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }, { provide: APP_INTERCEPTOR, useClass: NoOperatorKeysInterceptor }],
