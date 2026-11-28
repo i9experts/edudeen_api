@@ -78,3 +78,5 @@ ActivityLogSchema.index({ storeId: 1, actorId: 1 });
 ActivityLogSchema.index({ storeId: 1, isSecurityAlert: 1 });
 // Platform-wide audit queries (admin activity log filters by category/action, newest first).
 ActivityLogSchema.index({ category: 1, action: 1, createdAt: -1 });
+// Team performance: one team member's manage-as-seller writes, newest first.
+ActivityLogSchema.index({ actorId: 1, action: 1, createdAt: -1 });

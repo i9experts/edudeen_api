@@ -120,7 +120,7 @@ export class OperationsService {
   }
 
   /** Every store in scope with its metrics, cached for 3 minutes per scope (filters/sort/paging run on the cached rows). */
-  private async cachedRows(scope: OpsScope, refresh: boolean, now: Date): Promise<OpsRow[]> {
+  async cachedRows(scope: OpsScope, refresh: boolean, now: Date): Promise<OpsRow[]> {
     const key = `ops:rows:${scope.all ? 'all' : `a:${scope.adminId}`}`;
     if (!refresh) {
       try {
@@ -454,6 +454,75 @@ export class OperationsService {
       missingPhotos: (missingPhotos as any[]).map((p) => ({ productId: String(p._id), name: p.name, status: p.status })),
       outOfStock: outOfStock.map((p) => ({ productId: String(p._id), name: p.name })),
     };
+  }
+
+  // ── My work queue (team member) ───────────────────────────────────────────
+
+  /**
+   * One combined to-do list across the stores assigned to this team member: buyers waiting (oldest first),
+   * parcels to ship, overdue parcels, stuck parcels and listings to fix. Always limited to their own assignments.
+   */
+  async myQueue(adminId: string, now = new Date()) {
+    const assignments: any[] = await this.assignmentModel.find({ adminId, active: true }).select('storeId role').lean();
+    const ids = [...new Set(assignments.map((a) => String(a.storeId)))];
+    const stores: any[] = ids.length ? await this.r.storeModel.find({ _id: { $in: ids }, isDelete: false }).select('name slug country managementType').lean() : [];
+    const storeIds = stores.map((s) => String(s._id));
+    const storeById = new Map(stores.map((s) => [String(s._id), s]));
+    const name = (id: string) => String(storeById.get(id)?.name ?? 'Store');
+    const empty = { stores: stores.map((s) => ({ id: String(s._id), name: s.name, managementType: s.managementType === 'managed' ? 'managed' : 'self' })), waiting: [], toShip: [], overdue: [], stuck: [], listings: [], generatedAt: now.toISOString() };
+    if (!storeIds.length) return empty;
+
+    const LIMIT = 200;
+    const [open, chats, rejected, missingPhotos, active] = await Promise.all([
+      this.openPackageRows(storeIds),
+      this.r.conversationModel
+        .find({ storeId: { $in: storeIds }, 'lastMessage.senderRole': 'user', deletedBySeller: { $ne: true }, isArchived: { $ne: true }, blockedBySeller: { $ne: true } })
+        .select('storeId buyerId lastMessage.sentAt contextOrderId contextProductId')
+        .sort({ 'lastMessage.sentAt': 1 })
+        .limit(LIMIT)
+        .lean(),
+      this.r.productModel.find({ storeId: { $in: storeIds }, isDelete: false, status: 'rejected' }).select('name storeId reviewNote').limit(LIMIT).lean(),
+      this.r.productModel.find({ storeId: { $in: storeIds }, isDelete: false, status: { $in: ['active', 'pending_review'] }, $or: [{ images: { $exists: false } }, { images: { $size: 0 } }] }).select('name storeId').limit(LIMIT).lean(),
+      this.r.productModel.find({ storeId: { $in: storeIds }, isDelete: false, type: 'physical', status: 'active' }).select('name storeId').lean(),
+    ]);
+
+    const buyerIds = [...new Set((chats as any[]).map((c) => String(c.buyerId)))];
+    const buyers: any[] = buyerIds.length ? await this.r.userModel.find({ _id: { $in: buyerIds } }).select('name').lean() : [];
+    const buyerName = new Map(buyers.map((b) => [String(b._id), b.name ?? null]));
+    const waiting = (chats as any[]).map((c) => ({
+      storeId: String(c.storeId), storeName: name(String(c.storeId)), conversationId: String(c._id),
+      buyer: (buyerName.get(String(c.buyerId)) ?? 'Buyer').split(' ')[0],
+      waitingSince: c.lastMessage?.sentAt ?? null,
+      hoursWaiting: c.lastMessage?.sentAt ? Math.floor((now.getTime() - new Date(c.lastMessage.sentAt).getTime()) / 3_600_000) : null,
+    }));
+
+    const pkgRow = (p: (typeof open)[number]) => {
+      const due = p.baseAt ? dispatchDueAt(p.baseAt as Date, p.dispatchDays) : null;
+      return {
+        storeId: p.storeId, storeName: name(p.storeId), orderId: p.orderId, orderNumber: p.orderNumber, status: p.status,
+        buyerCountry: p.buyerCountry, createdAt: p.createdAt, dueAt: due, hoursToDue: due ? Math.round((due.getTime() - now.getTime()) / 3_600_000) : null,
+        shippedBy: p.mode === 'platform' ? 'edudeen' : 'seller',
+      };
+    };
+    const overdue = open.filter((p) => isOverdue(p, now)).map(pkgRow).sort((a, b) => (a.hoursToDue ?? 0) - (b.hoursToDue ?? 0)).slice(0, LIMIT);
+    const toShip = open.filter((p) => isToShip(p) && !isOverdue(p, now)).map(pkgRow).sort((a, b) => (a.hoursToDue ?? 0) - (b.hoursToDue ?? 0)).slice(0, LIMIT);
+    const stuck = open
+      .filter((p) => p.status === 'shipped')
+      .map((p) => ({ p, kind: shipmentKind(storeCountry(storeById.get(p.storeId)?.country), p.buyerCountry) }))
+      .filter(({ p, kind }) => isStuck(p.shippedAt, kind, now))
+      .map(({ p, kind }) => ({ storeId: p.storeId, storeName: name(p.storeId), orderId: p.orderId, orderNumber: p.orderNumber, courier: p.courier, trackingNumber: p.trackingNumber, kind, days: Math.floor((now.getTime() - new Date(p.shippedAt as Date).getTime()) / DAY_MS) }))
+      .sort((a, b) => b.days - a.days)
+      .slice(0, LIMIT);
+
+    const stock = await this.variantStock((active as any[]).map((p) => String(p._id)));
+    const outOfStock = (active as any[]).filter((p) => { const v = stock.get(String(p._id)); return !(v?.unlimited || (v?.stock ?? 0) > 0); });
+    const listings = [
+      ...(rejected as any[]).map((p) => ({ storeId: String(p.storeId), storeName: name(String(p.storeId)), productId: String(p._id), name: p.name, issue: 'rejected' as const, note: p.reviewNote ? String(p.reviewNote).slice(0, 160) : null })),
+      ...(missingPhotos as any[]).map((p) => ({ storeId: String(p.storeId), storeName: name(String(p.storeId)), productId: String(p._id), name: p.name, issue: 'missing_photos' as const, note: null })),
+      ...outOfStock.map((p) => ({ storeId: String(p.storeId), storeName: name(String(p.storeId)), productId: String(p._id), name: p.name, issue: 'out_of_stock' as const, note: null })),
+    ].slice(0, LIMIT * 2);
+
+    return { ...empty, waiting, toShip, overdue, stuck, listings };
   }
 
   /** Team members (for the manager filter): everyone with at least one active store assignment. */

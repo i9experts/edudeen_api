@@ -644,6 +644,8 @@ OrderSchema.index({ attributionSource: 1 });
 OrderSchema.index({ checkoutId: 1 });
 OrderSchema.index({ 'sellerOrders.sellerId': 1, 'sellerOrders.status': 1 });
 OrderSchema.index({ 'sellerOrders.storeId': 1 });
+// Team performance: package steps done by Edudeen team members in manage-as-seller sessions, by time.
+OrderSchema.index({ 'sellerOrders.staffActions.at': -1 });
 // Dashboard to-ship / overdue counts and the Needs-action tab: bound the scan to a store's WAITING packages (elemMatch on both fields).
 OrderSchema.index({ 'sellerOrders.storeId': 1, 'sellerOrders.status': 1 });
 OrderSchema.index({ 'sellerOrders.items.status': 1 });

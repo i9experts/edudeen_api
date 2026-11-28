@@ -12,6 +12,8 @@ import {
 } from '../managed-stores/schemas/store-assignment.schema';
 import { OperationsController } from './operations.controller';
 import { OperationsService } from './operations.service';
+import { TeamService } from './team.service';
+import { StaffAudit, StaffAuditSchema } from '../staff/staff.schemas';
 
 @Module({
   imports: [
@@ -20,9 +22,10 @@ import { OperationsService } from './operations.service';
     MongooseModule.forFeature([
       { name: ProductQuestion.name, schema: ProductQuestionSchema },
       { name: StoreAssignment.name, schema: StoreAssignmentSchema },
+      { name: StaffAudit.name, schema: StaffAuditSchema },
     ]),
   ],
   controllers: [OperationsController],
-  providers: [OperationsService],
+  providers: [OperationsService, TeamService],
 })
 export class OperationsModule {}
