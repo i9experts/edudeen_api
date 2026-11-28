@@ -7,6 +7,7 @@ import { StoreService } from '../store/store.service';
 import { AuthService } from '../auth/auth.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { EmailService } from '../otp/services/email.service';
+import { brandedEmailHtml } from '../common/branded-email.util';
 import { CreateStoreForSellerDto } from './dto/create-store-for-seller.dto';
 
 export interface AdminActor { id: string; ip?: string; userAgent?: string }
@@ -89,8 +90,23 @@ export class AdminStoresService {
   private async sendInvite(to: string, name: string, storeName: string): Promise<boolean> {
     if (!this.email) return false;
     const base = (process.env.WEB_APP_URL || 'https://edudeen.com').replace(/\/+$/, '');
-    const link = `${base}/forgot-password`;
-    const html = `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;color:#141413"><h2 style="margin:0 0 12px">Your Edudeen store is ready</h2><p>Hi ${esc(name || 'there')},</p><p>The Edudeen team has set up your store <b>${esc(storeName)}</b>. To start using it, choose your own password:</p><ol><li>Open <a href="${link}">${link}</a></li><li>Select <b>Seller</b> and enter this e-mail address.</li><li>Type the code we send you and pick a password.</li></ol><p style="font-size:12px;color:#5d6570">If you were not expecting this e-mail, you can ignore it.</p></div>`;
+    const link = `${base}/forgot-password?email=${encodeURIComponent(to)}`;
+    const step = (n: number, text: string) =>
+      `<tr><td width="34" valign="top" style="padding:0 0 12px;"><div style="width:24px; height:24px; line-height:24px; border-radius:12px; background:#EAF2F8; color:#174771; font-size:13px; font-weight:bold; text-align:center;">${n}</div></td><td valign="top" style="padding:2px 0 12px; font-size:15px; line-height:1.5; color:#1F3A52;">${text}</td></tr>`;
+    const html = brandedEmailHtml({
+      title: 'Your Edudeen store is ready',
+      preheader: `${storeName} is set up. Choose your password to start selling.`,
+      bodyHtml:
+        `<p style="margin:0 0 14px;">Hi ${esc(name || 'there')},</p>` +
+        `<p style="margin:0 0 14px;">The Edudeen team has set up your store <strong style="color:#174771;">${esc(storeName)}</strong>. To start using it, choose your own password:</p>` +
+        `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:6px 0 0;">` +
+        step(1, 'Click <strong>Set my password</strong> below.') +
+        step(2, `Check that your e-mail address (<strong>${esc(to)}</strong>) is filled in, then click <strong>Send Reset Code</strong>.`) +
+        step(3, 'Type the code we e-mail you and choose a password.') +
+        `</table>`,
+      button: { label: 'Set my password', url: link },
+      note: 'If you were not expecting this e-mail, you can ignore it.',
+    });
     try { return await this.email.sendMail(to, 'Your Edudeen store is ready', html); } catch (e: any) { this.logger.warn(`seller invite e-mail failed: ${e?.message}`); return false; }
   }
 
